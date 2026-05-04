@@ -2,6 +2,10 @@ import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import type { Project, ProjectCategory, ProjectPriority } from "@/lib/projects";
 import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
 
+type SchedulerSyncError = Error | PostgrestError;
+
+const supabaseRequestTimeoutMs = 8000;
+
 type ProjectRow = {
   user_id: string;
   project_id: number;
@@ -24,6 +28,35 @@ type WeeklyPlanBlockRow = {
   planned_task: string;
   estimated_hours: number;
 };
+
+function createTimeoutError(operation: string) {
+  return new Error(
+    `${operation} timed out. Using the local scheduler cache for now.`,
+  );
+}
+
+async function withSupabaseTimeout<Result extends { error: SchedulerSyncError | null }>(
+  request: PromiseLike<Result>,
+  operation: string,
+) {
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      Promise.resolve(request),
+      new Promise<Result>((resolve) => {
+        timeoutId = globalThis.setTimeout(() => {
+          timeoutId = undefined;
+          resolve({ error: createTimeoutError(operation) } as Result);
+        }, supabaseRequestTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      globalThis.clearTimeout(timeoutId);
+    }
+  }
+}
 
 function mapProjectRowToProject(row: ProjectRow): Project {
   return {
@@ -83,13 +116,16 @@ export async function fetchProjectsForUser(
   supabase: SupabaseClient,
   userId: string,
 ) {
-  const result = await supabase
-    .from("projects")
-    .select(
-      "user_id, project_id, sort_index, name, category, priority, deadline, next_action, weekly_hours, completed",
-    )
-    .eq("user_id", userId)
-    .order("sort_index", { ascending: true });
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("projects")
+      .select(
+        "user_id, project_id, sort_index, name, category, priority, deadline, next_action, weekly_hours, completed",
+      )
+      .eq("user_id", userId)
+      .order("sort_index", { ascending: true }),
+    "Loading projects from Supabase",
+  );
 
   return {
     data: result.data?.map((row) => mapProjectRowToProject(row as ProjectRow)) ?? [],
@@ -102,22 +138,25 @@ export async function replaceProjectsForUser(
   userId: string,
   projects: Project[],
 ) {
-  const { error: deleteError } = await supabase
-    .from("projects")
-    .delete()
-    .eq("user_id", userId);
+  const { error: deleteError } = await withSupabaseTimeout(
+    supabase.from("projects").delete().eq("user_id", userId),
+    "Saving projects to Supabase",
+  );
 
   if (deleteError) {
     return { error: deleteError };
   }
 
   if (projects.length === 0) {
-    return { error: null as PostgrestError | null };
+    return { error: null as SchedulerSyncError | null };
   }
 
-  const { error } = await supabase
-    .from("projects")
-    .insert(projects.map((project, index) => mapProjectToRow(userId, project, index)));
+  const { error } = await withSupabaseTimeout(
+    supabase
+      .from("projects")
+      .insert(projects.map((project, index) => mapProjectToRow(userId, project, index))),
+    "Saving projects to Supabase",
+  );
 
   return { error };
 }
@@ -126,13 +165,16 @@ export async function fetchWeeklyPlanBlocksForUser(
   supabase: SupabaseClient,
   userId: string,
 ) {
-  const result = await supabase
-    .from("weekly_plan_blocks")
-    .select(
-      "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours",
-    )
-    .eq("user_id", userId)
-    .order("sort_index", { ascending: true });
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("weekly_plan_blocks")
+      .select(
+        "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours",
+      )
+      .eq("user_id", userId)
+      .order("sort_index", { ascending: true }),
+    "Loading weekly plan from Supabase",
+  );
 
   return {
     data:
@@ -147,23 +189,26 @@ export async function replaceWeeklyPlanBlocksForUser(
   userId: string,
   planBlocks: WeeklyPlanBlock[],
 ) {
-  const { error: deleteError } = await supabase
-    .from("weekly_plan_blocks")
-    .delete()
-    .eq("user_id", userId);
+  const { error: deleteError } = await withSupabaseTimeout(
+    supabase.from("weekly_plan_blocks").delete().eq("user_id", userId),
+    "Saving weekly plan to Supabase",
+  );
 
   if (deleteError) {
     return { error: deleteError };
   }
 
   if (planBlocks.length === 0) {
-    return { error: null as PostgrestError | null };
+    return { error: null as SchedulerSyncError | null };
   }
 
-  const { error } = await supabase.from("weekly_plan_blocks").insert(
-    planBlocks.map((block, index) =>
-      mapWeeklyPlanBlockToRow(userId, block, index),
+  const { error } = await withSupabaseTimeout(
+    supabase.from("weekly_plan_blocks").insert(
+      planBlocks.map((block, index) =>
+        mapWeeklyPlanBlockToRow(userId, block, index),
+      ),
     ),
+    "Saving weekly plan to Supabase",
   );
 
   return { error };
