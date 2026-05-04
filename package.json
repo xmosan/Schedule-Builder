@@ -2,6 +2,9 @@
   "name": "personal-project-scheduler",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "20.x || 22.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,6 +12,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

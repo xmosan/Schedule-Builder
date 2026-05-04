@@ -8,7 +8,13 @@ export const weekDays = [
   "Sunday",
 ] as const;
 
-export const weeklyPlanStorageKey = "project-schedule-dashboard:weekly-plan";
+export const weeklyPlanStorageKeyBase = "project-schedule-dashboard:weekly-plan";
+
+export function getWeeklyPlanStorageKey(userId?: string) {
+  return userId
+    ? `${weeklyPlanStorageKeyBase}:${userId}`
+    : weeklyPlanStorageKeyBase;
+}
 
 export type WeekDay = (typeof weekDays)[number];
 

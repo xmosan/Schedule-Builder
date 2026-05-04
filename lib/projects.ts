@@ -1,6 +1,10 @@
 export const projectCategories = ["Must-do", "Growth", "Maintenance"] as const;
 export const priorityLevels = ["High", "Medium", "Low"] as const;
-export const projectsStorageKey = "project-schedule-dashboard:projects";
+export const projectsStorageKeyBase = "project-schedule-dashboard:projects";
+
+export function getProjectsStorageKey(userId?: string) {
+  return userId ? `${projectsStorageKeyBase}:${userId}` : projectsStorageKeyBase;
+}
 
 export type ProjectCategory = (typeof projectCategories)[number];
 export type ProjectPriority = (typeof priorityLevels)[number];

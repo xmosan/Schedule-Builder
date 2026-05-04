@@ -12,14 +12,15 @@ import type { Project } from "@/lib/projects";
 import {
   createWeeklyPlanBlock,
   formatEstimatedHours,
-  parseStoredWeeklyPlan,
   weekDays,
-  weeklyPlanStorageKey,
   type WeekDay,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 
 type WeeklyPlanSectionProps = {
+  onAddBlock: (block: WeeklyPlanBlock) => void;
+  onRemoveBlock: (id: string) => void;
+  planBlocks: WeeklyPlanBlock[];
   projects: Project[];
 };
 
@@ -41,33 +42,16 @@ function getInitialDraft(projects: Project[]): WeeklyPlanDraftState {
   };
 }
 
-export function WeeklyPlanSection({ projects }: WeeklyPlanSectionProps) {
-  const [planBlocks, setPlanBlocks] = useState<WeeklyPlanBlock[]>([]);
+export function WeeklyPlanSection({
+  onAddBlock,
+  onRemoveBlock,
+  planBlocks,
+  projects,
+}: WeeklyPlanSectionProps) {
   const [draft, setDraft] = useState<WeeklyPlanDraftState>(() =>
     getInitialDraft(projects),
   );
   const [error, setError] = useState<string | null>(null);
-  const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
-
-  useEffect(() => {
-    const savedPlan = parseStoredWeeklyPlan(
-      window.localStorage.getItem(weeklyPlanStorageKey),
-    );
-
-    if (savedPlan) {
-      setPlanBlocks(savedPlan);
-    }
-
-    setHasLoadedPlan(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hasLoadedPlan) {
-      return;
-    }
-
-    window.localStorage.setItem(weeklyPlanStorageKey, JSON.stringify(planBlocks));
-  }, [hasLoadedPlan, planBlocks]);
 
   useEffect(() => {
     setDraft((current) => {
@@ -149,17 +133,13 @@ export function WeeklyPlanSection({ projects }: WeeklyPlanSectionProps) {
       return;
     }
 
-    setPlanBlocks((current) => [...current, planBlock]);
+    onAddBlock(planBlock);
     setDraft((current) => ({
       ...current,
       plannedTask: selectedProject.nextAction,
       estimatedHours: "1",
     }));
     setError(null);
-  }
-
-  function removeBlock(id: string) {
-    setPlanBlocks((current) => current.filter((block) => block.id !== id));
   }
 
   return (
@@ -358,7 +338,7 @@ export function WeeklyPlanSection({ projects }: WeeklyPlanSectionProps) {
                               variant="secondary"
                               size="sm"
                               className="w-full shrink-0 sm:w-auto"
-                              onClick={() => removeBlock(block.id)}
+                              onClick={() => onRemoveBlock(block.id)}
                             >
                               Remove
                             </Button>
