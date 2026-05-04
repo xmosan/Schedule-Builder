@@ -36,6 +36,23 @@ import {
 
 type AuthStatus = "loading" | "signed_in" | "signed_out";
 
+function getSchedulerErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return "Please try again shortly.";
+}
+
 export function ProjectDashboard() {
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
@@ -158,9 +175,15 @@ export function ProjectDashboard() {
       );
       setHasLoadedRemoteData(true);
 
-      if (projectsResult.error || weeklyPlanResult.error) {
+      const loadErrors = [projectsResult.error, weeklyPlanResult.error].filter(
+        Boolean,
+      );
+
+      if (loadErrors.length > 0) {
         setDataMessage(
-          "Supabase was unavailable, so the local backup is still in use.",
+          `Supabase sync had trouble loading your schedule: ${loadErrors
+            .map(getSchedulerErrorMessage)
+            .join(" ")} Local backup is still in use.`,
         );
         return;
       }
@@ -213,7 +236,7 @@ export function ProjectDashboard() {
       }
 
       setDataMessage(
-        "Saved locally. Supabase sync will retry after your next change.",
+        `Saved locally. Supabase sync will retry after your next change. ${getSchedulerErrorMessage(error)}`,
       );
       console.error("Failed to sync projects to Supabase:", error);
     }
@@ -263,7 +286,7 @@ export function ProjectDashboard() {
       }
 
       setDataMessage(
-        "Saved locally. Supabase sync will retry after your next change.",
+        `Saved locally. Supabase sync will retry after your next change. ${getSchedulerErrorMessage(error)}`,
       );
       console.error("Failed to sync weekly plan blocks to Supabase:", error);
     }

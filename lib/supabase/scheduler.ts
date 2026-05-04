@@ -138,27 +138,57 @@ export async function replaceProjectsForUser(
   userId: string,
   projects: Project[],
 ) {
-  const { error: deleteError } = await withSupabaseTimeout(
-    supabase.from("projects").delete().eq("user_id", userId),
-    "Saving projects to Supabase",
+  const existingResult = await withSupabaseTimeout(
+    supabase.from("projects").select("project_id").eq("user_id", userId),
+    "Checking existing projects in Supabase",
   );
 
-  if (deleteError) {
-    return { error: deleteError };
+  if (existingResult.error) {
+    return { error: existingResult.error };
   }
 
   if (projects.length === 0) {
-    return { error: null as SchedulerSyncError | null };
+    const { error } = await withSupabaseTimeout(
+      supabase.from("projects").delete().eq("user_id", userId),
+      "Deleting projects from Supabase",
+    );
+
+    return { error };
   }
 
-  const { error } = await withSupabaseTimeout(
+  const { error: upsertError } = await withSupabaseTimeout(
     supabase
       .from("projects")
-      .insert(projects.map((project, index) => mapProjectToRow(userId, project, index))),
+      .upsert(projects.map((project, index) => mapProjectToRow(userId, project, index)), {
+        onConflict: "user_id,project_id",
+      }),
     "Saving projects to Supabase",
   );
 
-  return { error };
+  if (upsertError) {
+    return { error: upsertError };
+  }
+
+  const currentProjectIds = new Set(projects.map((project) => project.id));
+  const staleProjectIds =
+    existingResult.data
+      ?.map((row) => Number((row as Pick<ProjectRow, "project_id">).project_id))
+      .filter((projectId) => !currentProjectIds.has(projectId)) ?? [];
+
+  if (staleProjectIds.length === 0) {
+    return { error: null as SchedulerSyncError | null };
+  }
+
+  const { error: deleteError } = await withSupabaseTimeout(
+    supabase
+      .from("projects")
+      .delete()
+      .eq("user_id", userId)
+      .in("project_id", staleProjectIds),
+    "Deleting removed projects from Supabase",
+  );
+
+  return { error: deleteError };
 }
 
 export async function fetchWeeklyPlanBlocksForUser(
@@ -189,27 +219,59 @@ export async function replaceWeeklyPlanBlocksForUser(
   userId: string,
   planBlocks: WeeklyPlanBlock[],
 ) {
-  const { error: deleteError } = await withSupabaseTimeout(
-    supabase.from("weekly_plan_blocks").delete().eq("user_id", userId),
-    "Saving weekly plan to Supabase",
+  const existingResult = await withSupabaseTimeout(
+    supabase
+      .from("weekly_plan_blocks")
+      .select("block_id")
+      .eq("user_id", userId),
+    "Checking existing weekly plan blocks in Supabase",
   );
 
-  if (deleteError) {
-    return { error: deleteError };
+  if (existingResult.error) {
+    return { error: existingResult.error };
   }
 
   if (planBlocks.length === 0) {
-    return { error: null as SchedulerSyncError | null };
+    const { error } = await withSupabaseTimeout(
+      supabase.from("weekly_plan_blocks").delete().eq("user_id", userId),
+      "Deleting weekly plan blocks from Supabase",
+    );
+
+    return { error };
   }
 
-  const { error } = await withSupabaseTimeout(
-    supabase.from("weekly_plan_blocks").insert(
+  const { error: upsertError } = await withSupabaseTimeout(
+    supabase.from("weekly_plan_blocks").upsert(
       planBlocks.map((block, index) =>
         mapWeeklyPlanBlockToRow(userId, block, index),
       ),
+      { onConflict: "user_id,block_id" },
     ),
     "Saving weekly plan to Supabase",
   );
 
-  return { error };
+  if (upsertError) {
+    return { error: upsertError };
+  }
+
+  const currentBlockIds = new Set(planBlocks.map((block) => block.id));
+  const staleBlockIds =
+    existingResult.data
+      ?.map((row) => String((row as Pick<WeeklyPlanBlockRow, "block_id">).block_id))
+      .filter((blockId) => !currentBlockIds.has(blockId)) ?? [];
+
+  if (staleBlockIds.length === 0) {
+    return { error: null as SchedulerSyncError | null };
+  }
+
+  const { error: deleteError } = await withSupabaseTimeout(
+    supabase
+      .from("weekly_plan_blocks")
+      .delete()
+      .eq("user_id", userId)
+      .in("block_id", staleBlockIds),
+    "Deleting removed weekly plan blocks from Supabase",
+  );
+
+  return { error: deleteError };
 }
