@@ -259,13 +259,6 @@ export function WeeklyPlanSection({
               />
             </div>
 
-            {projects.length === 0 ? (
-              <p className="text-sm text-brand-ink/60">
-                Add a project first, then you can place work blocks into the
-                week.
-              </p>
-            ) : null}
-
             {error ? (
               <p className="text-sm font-medium text-brand-coral">{error}</p>
             ) : null}
@@ -278,90 +271,69 @@ export function WeeklyPlanSection({
         </CardContent>
       </Card>
 
-      <div className="space-y-4 sm:space-y-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-brand-ink sm:text-2xl">
-              Weekly Schedule Map
-            </h2>
-            <p className="text-sm leading-6 text-brand-ink/60">
-              Use these blocks to decide what each day is for before the week
-              gets crowded.
-            </p>
-          </div>
-          <Badge variant="subtle">{planBlocks.length} blocks planned</Badge>
-        </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {weekDays.map((day) => {
+          const dayBlocks = blocksByDay[day];
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-          {weekDays.map((day) => {
-            const dayBlocks = blocksByDay[day];
-            const dayHours = dayBlocks.reduce(
-              (sum, block) => sum + block.estimatedHours,
-              0,
-            );
-
-            return (
-              <Card
-                key={day}
-                className="rounded-[24px] border-white/70 bg-white/80 sm:rounded-[28px]"
-              >
-                <CardContent className="p-4 sm:p-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-brand-ink sm:text-lg">
-                        {day}
-                      </h3>
-                      <p className="mt-1 text-sm text-brand-ink/55">
-                        {dayBlocks.length} {dayBlocks.length === 1 ? "block" : "blocks"}
-                      </p>
-                    </div>
-                    <Badge>{formatEstimatedHours(dayHours || 0)}</Badge>
+          return (
+            <Card
+              key={day}
+              className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]"
+            >
+              <CardContent className="p-4 sm:p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-brand-ink">{day}</h3>
+                    <p className="text-sm text-brand-ink/55">
+                      {dayBlocks.length} block{dayBlocks.length === 1 ? "" : "s"}
+                    </p>
                   </div>
+                  <Badge variant="subtle">
+                    {formatEstimatedHours(
+                      dayBlocks.reduce((sum, block) => sum + block.estimatedHours, 0),
+                    )}
+                  </Badge>
+                </div>
 
-                  <div className="mt-4 space-y-3">
-                    {dayBlocks.length > 0 ? (
-                      dayBlocks.map((block) => (
-                        <div
-                          key={block.id}
-                          className="rounded-[20px] border border-brand-ink/8 bg-white/92 p-3.5 sm:rounded-[22px] sm:p-4"
-                        >
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-brand-ink sm:text-base">
-                                {block.projectName}
-                              </p>
-                              <p className="mt-2 text-sm leading-6 text-brand-ink/65">
-                                {block.plannedTask}
-                              </p>
-                            </div>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              className="w-full shrink-0 sm:w-auto"
-                              onClick={() => onRemoveBlock(block.id)}
-                            >
-                              Remove
-                            </Button>
-                          </div>
-
-                          <div className="mt-3 flex items-center gap-2 text-sm text-brand-ink/55">
+                <div className="space-y-3">
+                  {dayBlocks.length > 0 ? (
+                    dayBlocks.map((block) => (
+                      <div
+                        key={block.id}
+                        className="rounded-[22px] border border-brand-ink/8 bg-white/78 p-4"
+                      >
+                        <p className="text-sm font-semibold text-brand-ink">
+                          {block.projectName}
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-brand-ink/66">
+                          {block.plannedTask}
+                        </p>
+                        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <span className="inline-flex items-center gap-2 text-sm text-brand-ink/55">
                             <ClockIcon className="h-4 w-4" />
                             {formatEstimatedHours(block.estimatedHours)}
-                          </div>
+                          </span>
+                          <Button
+                            className="w-full sm:w-auto"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => onRemoveBlock(block.id)}
+                          >
+                            Remove
+                          </Button>
                         </div>
-                      ))
-                    ) : (
-                      <div className="rounded-[20px] border border-dashed border-brand-ink/12 bg-white/65 p-4 text-sm leading-6 text-brand-ink/55 sm:rounded-[22px]">
-                        No blocks planned yet. Add one from the form to give{" "}
-                        {day} a clear purpose.
                       </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                    ))
+                  ) : (
+                    <p className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/55 p-4 text-sm leading-6 text-brand-ink/55">
+                      No planned blocks yet.
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
     </section>
   );

@@ -5,9 +5,6 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  experimental: {
-    webpackBuildWorker: false,
-  },
 };
 
 export default nextConfig;

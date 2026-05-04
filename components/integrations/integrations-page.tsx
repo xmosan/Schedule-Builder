@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { CalendarIcon } from "@/components/projects/icons";
+import { IntegrationCard } from "@/components/integrations/integration-card";
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { IntegrationCard } from "@/components/integrations/integration-card";
 import { integrations } from "@/lib/integrations";
 
 export function IntegrationsPage() {
