@@ -473,16 +473,16 @@ export function ProjectDashboard() {
   }
 
   return (
-    <div className="px-3 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-10">
-      <div className="app-shell flex flex-col gap-5 sm:gap-6">
+    <div className="px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-10">
+      <div className="app-shell flex flex-col gap-6">
         <SchedulerNav />
 
-        <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_320px] lg:items-end lg:gap-6">
+        <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_320px] lg:items-end lg:gap-6">
             <div className="max-w-3xl">
               <div className="eyebrow-chip">
                 <FolderStackIcon className="h-4 w-4" />
-                Personal Project Control Center
+                Personal Scheduler Dashboard
               </div>
 
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl lg:text-6xl">
@@ -545,12 +545,12 @@ export function ProjectDashboard() {
           </div>
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-[minmax(0,1.55fr)_360px] lg:gap-6">
+        <section className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_360px] lg:gap-6">
           <div className="order-2 lg:order-1">
             <ProjectList projects={projects} onToggleComplete={toggleComplete} />
           </div>
 
-          <div className="order-1 flex flex-col gap-5 sm:gap-6 lg:order-2">
+          <div className="order-1 flex flex-col gap-6 lg:order-2">
             <WeeklySummaryCard
               totalHours={totalHours}
               activeProjects={activeProjects}

@@ -143,7 +143,7 @@ export function WeeklyPlanSection({
   }
 
   return (
-    <section className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-6">
+    <section className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-6">
       <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
         <CardContent className="p-4 sm:p-6">
           <div className="flex items-center gap-3">
