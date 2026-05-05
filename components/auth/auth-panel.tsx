@@ -13,6 +13,7 @@ type AuthPanelProps = {
   isSubmitting: boolean;
   message: string | null;
   onSendMagicLink: (email: string) => Promise<void>;
+  onSignInWithGoogle: () => Promise<void>;
   onSignInWithPassword: (email: string, password: string) => Promise<void>;
   onSignUp: (email: string, password: string) => Promise<void>;
 };
@@ -23,6 +24,7 @@ export function AuthPanel({
   isSubmitting,
   message,
   onSendMagicLink,
+  onSignInWithGoogle,
   onSignInWithPassword,
   onSignUp,
 }: AuthPanelProps) {
@@ -61,7 +63,28 @@ export function AuthPanel({
                 </div>
               ) : null}
 
-              <div className="mt-6 grid grid-cols-2 gap-2 rounded-[22px] bg-brand-ink/5 p-1">
+              <Button
+                className="mt-6 w-full gap-3"
+                disabled={!isConfigured || isSubmitting}
+                type="button"
+                variant="outline"
+                onClick={() => void onSignInWithGoogle()}
+              >
+                <span className="grid h-6 w-6 place-items-center rounded-full border border-brand-ink/10 bg-white text-sm font-bold text-brand-ink shadow-sm">
+                  G
+                </span>
+                Continue with Google
+              </Button>
+
+              <div className="my-5 flex items-center gap-3">
+                <div className="h-px flex-1 bg-brand-ink/10" />
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/40">
+                  Or use email
+                </span>
+                <div className="h-px flex-1 bg-brand-ink/10" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 rounded-[22px] bg-brand-ink/5 p-1">
                 <button
                   type="button"
                   className={cn(

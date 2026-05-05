@@ -53,6 +53,20 @@ function getSchedulerErrorMessage(error: unknown) {
   return "Please try again shortly.";
 }
 
+function getAuthRedirectUrl() {
+  const currentOrigin = window.location.origin.replace(/\/$/, "");
+  const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
+
+  if (
+    currentOrigin.startsWith("http://localhost") ||
+    currentOrigin.startsWith("http://127.0.0.1")
+  ) {
+    return currentOrigin;
+  }
+
+  return configuredSiteUrl || currentOrigin;
+}
+
 export function ProjectDashboard() {
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
@@ -368,7 +382,7 @@ export function ProjectDashboard() {
       email,
       password,
       options: {
-        emailRedirectTo: window.location.origin,
+        emailRedirectTo: getAuthRedirectUrl(),
       },
     });
 
@@ -397,7 +411,7 @@ export function ProjectDashboard() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: window.location.origin,
+        emailRedirectTo: getAuthRedirectUrl(),
       },
     });
 
@@ -409,6 +423,30 @@ export function ProjectDashboard() {
 
     setAuthMessage("Magic link sent. Open the email on this device to sign in.");
     setIsAuthSubmitting(false);
+  }
+
+  async function signInWithGoogle() {
+    if (!supabase) {
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    setAuthError(null);
+    setAuthMessage("Redirecting to Google...");
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: getAuthRedirectUrl(),
+        scopes: "openid email profile",
+      },
+    });
+
+    if (error) {
+      setAuthError(error.message);
+      setAuthMessage(null);
+      setIsAuthSubmitting(false);
+    }
   }
 
   async function signOut() {
@@ -428,6 +466,7 @@ export function ProjectDashboard() {
         isSubmitting={false}
         message={authMessage}
         onSendMagicLink={sendMagicLink}
+        onSignInWithGoogle={signInWithGoogle}
         onSignInWithPassword={signInWithPassword}
         onSignUp={signUp}
       />
@@ -466,6 +505,7 @@ export function ProjectDashboard() {
         isSubmitting={isAuthSubmitting}
         message={authMessage}
         onSendMagicLink={sendMagicLink}
+        onSignInWithGoogle={signInWithGoogle}
         onSignInWithPassword={signInWithPassword}
         onSignUp={signUp}
       />
