@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 const description =
-  "A clean personal project scheduling app for priorities, deadlines, weekly hours, and today's top three tasks.";
+  "A clean project scheduling app for priorities, deadlines, weekly capacity, and today's Top 3 tasks.";
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const siteName = "Project Schedule Dashboard";
+const siteName = "Schedule Builder";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   },
   keywords: [
     "project scheduler",
-    "personal dashboard",
+    "schedule builder",
     "task prioritization",
     "weekly planning",
     "next.js app router",

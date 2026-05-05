@@ -4,7 +4,7 @@ import { IntegrationsPage } from "@/components/integrations/integrations-page";
 export const metadata: Metadata = {
   title: "Integrations",
   description:
-    "Prepare calendar integrations for the personal project scheduler, including Apple, Outlook, D2L, Google Calendar, and ICS import.",
+    "Prepare calendar integrations for Schedule Builder, including Apple, Outlook, D2L, Google Calendar, and ICS import.",
 };
 
 export default function IntegrationsRoute() {

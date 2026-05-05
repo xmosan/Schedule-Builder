@@ -20,10 +20,10 @@ export function ProjectList({ onToggleComplete, projects }: ProjectListProps) {
             </div>
             <div>
               <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
-                Master Project List
+                Project List
               </h2>
               <p className="text-sm text-brand-ink/60">
-                Every project needs a clear next action.
+                Keep every commitment tied to a clear next action.
               </p>
             </div>
           </div>

@@ -67,7 +67,7 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
           <div>
             <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">Add Project</h2>
             <p className="text-sm text-brand-ink/60">
-              Keep each project small enough to move with one next action.
+              Capture any goal, initiative, course, client, or team effort.
             </p>
           </div>
         </div>
@@ -79,7 +79,7 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
             </label>
             <Input
               id="project-name"
-              placeholder="Launch landing page refresh"
+              placeholder="Launch campaign, finish course, or plan event"
               value={draft.name}
               onChange={(event) => updateField("name", event.target.value)}
             />
@@ -91,7 +91,7 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
             </label>
             <Input
               id="project-next-action"
-              placeholder="Write the hero copy draft"
+              placeholder="Draft the next deliverable"
               value={draft.nextAction}
               onChange={(event) =>
                 updateField("nextAction", event.target.value)
@@ -168,8 +168,7 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
           </div>
 
           <p className="text-sm leading-6 text-brand-ink/60">
-            Every project must include a next action so the dashboard always
-            answers, &quot;What do I do next?&quot;
+            A next action keeps the project specific enough to schedule.
           </p>
 
           {error ? <p className="text-sm font-medium text-brand-coral">{error}</p> : null}

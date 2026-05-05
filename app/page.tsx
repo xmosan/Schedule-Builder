@@ -3,7 +3,7 @@ import { ProjectDashboard } from "@/components/projects/project-dashboard";
 
 export const metadata: Metadata = {
   description:
-    "Plan your week across multiple projects with priorities, deadlines, next actions, and a daily top-three focus list.",
+    "Plan project-based work with priorities, deadlines, next actions, weekly capacity, and a daily Top 3 focus list.",
 };
 
 export default function HomePage() {

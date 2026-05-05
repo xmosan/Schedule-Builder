@@ -641,17 +641,16 @@ export function ProjectDashboard() {
             <div className="max-w-3xl">
               <div className="eyebrow-chip">
                 <FolderStackIcon className="h-4 w-4" />
-                Personal Scheduler Dashboard
+                Project Schedule Dashboard
               </div>
 
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl lg:text-6xl">
-                Schedule your projects without wasting attention.
+                Plan focused work across every project.
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Track active projects, define the next action, protect your
-                weekly capacity, and let the dashboard surface the Top 3 tasks
-                that deserve today&apos;s focus.
+                Track priorities, deadlines, next actions, and weekly capacity
+                in one clear workspace built for project-based work.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2.5">
@@ -672,8 +671,8 @@ export function ProjectDashboard() {
                       Focus Rule
                     </p>
                     <p className="mt-1 text-sm leading-6 text-brand-ink/70">
-                      Incomplete projects rise by priority first, then by weekly
-                      time commitment.
+                      Incomplete projects are ranked by priority first, then by
+                      planned weekly effort.
                     </p>
                   </div>
                 </div>

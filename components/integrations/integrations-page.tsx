@@ -21,20 +21,19 @@ export function IntegrationsPage() {
               </div>
 
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                Prepare your schedule for calendar connections.
+                Prepare Schedule Builder for calendar connections.
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                These integrations are the next layer for the scheduler. The
-                page is ready for connection settings, but OAuth, imports, and
-                automatic email-based workflows are intentionally not enabled
-                yet.
+                These placeholders show where calendar and import workflows can
+                connect later. OAuth, imports, and email-based automation are
+                intentionally not enabled yet.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2.5">
                 <Badge>5 planned integrations</Badge>
                 <Badge variant="subtle">UI placeholders only</Badge>
-                <Badge variant="subtle">Dashboard stays focused</Badge>
+                <Badge variant="subtle">Planner stays focused</Badge>
               </div>
             </div>
 
@@ -49,8 +48,8 @@ export function IntegrationsPage() {
                       No accounts are connected yet
                     </p>
                     <p className="mt-2 text-sm leading-6 text-brand-ink/65">
-                      This page is preparing the UI and information architecture
-                      first so real calendar flows can plug in cleanly later.
+                      This page keeps integration settings separate so the main
+                      planning workspace stays simple.
                     </p>
                   </div>
 
@@ -58,7 +57,7 @@ export function IntegrationsPage() {
                     href="/"
                     className="inline-flex h-12 w-full items-center justify-center rounded-2xl border border-brand-ink/10 bg-white/75 px-4 text-sm font-semibold text-brand-ink hover:-translate-y-0.5 hover:border-brand-ink/20 hover:bg-white"
                   >
-                    Back to dashboard
+                    Back to planner
                   </Link>
                 </div>
               </CardContent>
@@ -82,7 +81,7 @@ export function IntegrationsPage() {
 
             <p className="mt-4 text-sm leading-6 text-brand-ink/70 sm:text-base">
               The next implementation phase can focus on real connection flows
-              without changing the dashboard layout. Until then, this page keeps
+              without changing the planning layout. Until then, this page keeps
               the integration surface visible and easy to extend.
             </p>
           </CardContent>

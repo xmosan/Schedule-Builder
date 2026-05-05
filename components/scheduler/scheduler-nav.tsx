@@ -38,10 +38,10 @@ export function SchedulerNav() {
         </div>
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-            Personal Scheduler
+            Schedule Builder
           </p>
           <p className="truncate text-sm font-semibold text-brand-ink sm:text-base">
-            Projects, weekly plan, and upcoming integrations
+            Projects, weekly planning, and integrations
           </p>
         </div>
       </Link>

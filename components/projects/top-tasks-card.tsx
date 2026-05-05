@@ -19,7 +19,7 @@ export function TopTasksCard({ projects }: TopTasksCardProps) {
               Today&apos;s Top 3
             </h2>
             <p className="text-sm text-brand-ink/60">
-              Priority first, weekly hours second.
+              Ranked by priority, then planned weekly effort.
             </p>
           </div>
         </div>
@@ -44,7 +44,7 @@ export function TopTasksCard({ projects }: TopTasksCardProps) {
             ))
           ) : (
             <p className="rounded-[24px] border border-brand-ink/8 bg-white/78 p-4 text-sm leading-6 text-brand-ink/65">
-              No active projects right now.
+              No active projects yet. Add a project to generate your Top 3.
             </p>
           )}
         </div>

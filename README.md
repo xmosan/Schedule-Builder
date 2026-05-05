@@ -1,6 +1,6 @@
-# Personal Project Scheduler
+# Schedule Builder
 
-A lightweight personal scheduling dashboard built with Next.js App Router, TypeScript, Tailwind CSS, and Supabase. It lets each user sign in, keep projects synced across devices, surface a daily Top 3, and map specific work blocks across the week.
+A lightweight project scheduling app built with Next.js App Router, TypeScript, Tailwind CSS, and Supabase. It helps students, professionals, creators, and organization leaders keep projects synced across devices, surface a daily Top 3, and map work blocks across the week.
 
 ## Run locally
 
@@ -75,7 +75,7 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
 - `app/` contains the App Router layout, homepage, and metadata routes.
 - `components/auth/` contains the authentication entry UI.
 - `components/projects/` contains the scheduler feature components, including the weekly planner.
-- `components/ui/` contains lightweight reusable UI primitives used by the dashboard.
+- `components/ui/` contains lightweight reusable UI primitives used by the app.
 - `lib/projects.ts` holds project types, storage helpers, and ranking helpers for the Top 3 logic.
 - `lib/weekly-plan.ts` holds weekly plan types, storage helpers, and planner utilities.
 - `lib/supabase/` contains the Supabase browser client and scheduler sync helpers.

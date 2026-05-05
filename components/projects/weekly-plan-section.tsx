@@ -117,7 +117,7 @@ export function WeeklyPlanSection({
     );
 
     if (!selectedProject) {
-      setError("Add a project first, then assign a block to the week.");
+      setError("Add a project first, then schedule a weekly work block.");
       return;
     }
 
@@ -155,7 +155,7 @@ export function WeeklyPlanSection({
                 Weekly Plan
               </h2>
               <p className="text-sm text-brand-ink/60">
-                Assign concrete work blocks from Monday through Sunday.
+                Turn project priorities into concrete work blocks for the week.
               </p>
             </div>
           </div>
@@ -227,7 +227,7 @@ export function WeeklyPlanSection({
               </label>
               <Input
                 id="plan-task"
-                placeholder="Finish the highest-deadline assignment"
+                placeholder="Draft the next deliverable"
                 value={draft.plannedTask}
                 onChange={(event) =>
                   setDraft((current) => ({
@@ -326,7 +326,7 @@ export function WeeklyPlanSection({
                     ))
                   ) : (
                     <p className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/55 p-4 text-sm leading-6 text-brand-ink/55">
-                      No planned blocks yet.
+                      No planned work blocks yet.
                     </p>
                   )}
                 </div>

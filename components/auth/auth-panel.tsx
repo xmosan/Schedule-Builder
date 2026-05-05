@@ -42,24 +42,24 @@ export function AuthPanel({
           <Card className="rounded-[30px] border-white/75 bg-white/90">
             <CardContent className="p-5 sm:p-7">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge>Supabase Auth</Badge>
+                <Badge>Account sync</Badge>
                 <Badge variant="subtle">Cross-device sync</Badge>
               </div>
 
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-4xl">
-                Sign in to sync your schedule everywhere.
+                Sign in to keep your schedule in sync.
               </h1>
 
               <p className="mt-3 text-sm leading-6 text-brand-ink/65 sm:text-base">
-                Your projects and weekly plan will stay tied to your account so
-                the same schedule follows you across devices.
+                Keep projects, weekly plans, priorities, and next actions
+                available wherever you work.
               </p>
 
               {!isConfigured ? (
                 <div className="mt-5 rounded-[24px] border border-brand-coral/15 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-ink/70">
                   Add `NEXT_PUBLIC_SUPABASE_URL` and
                   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to start using
-                  authentication and cloud sync.
+                  account sync.
                 </div>
               ) : null}
 
@@ -154,8 +154,8 @@ export function AuthPanel({
                   </div>
                 ) : (
                   <div className="rounded-[22px] border border-brand-ocean/12 bg-brand-ocean/8 p-4 text-sm leading-6 text-brand-ink/65">
-                    Supabase will email you a secure sign-in link. Open it on
-                    the device where you want the schedule to sync.
+                    We&apos;ll email you a secure sign-in link. Open it on the
+                    device where you want to continue planning.
                   </div>
                 )}
 
