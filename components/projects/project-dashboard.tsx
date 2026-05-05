@@ -54,17 +54,9 @@ function getSchedulerErrorMessage(error: unknown) {
 }
 
 function getAuthRedirectUrl() {
-  const currentOrigin = window.location.origin.replace(/\/$/, "");
   const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
 
-  if (
-    currentOrigin.startsWith("http://localhost") ||
-    currentOrigin.startsWith("http://127.0.0.1")
-  ) {
-    return currentOrigin;
-  }
-
-  return configuredSiteUrl || currentOrigin;
+  return configuredSiteUrl || window.location.origin.replace(/\/$/, "");
 }
 
 export function ProjectDashboard() {
@@ -427,6 +419,7 @@ export function ProjectDashboard() {
 
   async function signInWithGoogle() {
     if (!supabase) {
+      setAuthError("Supabase Auth is not configured yet.");
       return;
     }
 
@@ -438,7 +431,6 @@ export function ProjectDashboard() {
       provider: "google",
       options: {
         redirectTo: getAuthRedirectUrl(),
-        scopes: "openid email profile",
       },
     });
 

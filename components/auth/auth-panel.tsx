@@ -64,7 +64,8 @@ export function AuthPanel({
               ) : null}
 
               <Button
-                className="mt-6 w-full gap-3"
+                aria-label="Continue with Google"
+                className="mt-6 w-full border-brand-ink/15 bg-white text-brand-ink shadow-[0_16px_36px_rgba(18,32,47,0.08)] hover:border-brand-ink/25 hover:bg-white"
                 disabled={!isConfigured || isSubmitting}
                 type="button"
                 variant="outline"
