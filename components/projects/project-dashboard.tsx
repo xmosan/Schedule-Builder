@@ -59,6 +59,43 @@ function getAuthRedirectUrl() {
   return configuredSiteUrl || window.location.origin.replace(/\/$/, "");
 }
 
+function getAuthUrlErrorMessage() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(
+    window.location.hash.startsWith("#")
+      ? window.location.hash.slice(1)
+      : window.location.hash,
+  );
+  const errorDescription =
+    searchParams.get("error_description") ??
+    hashParams.get("error_description");
+  const errorCode = searchParams.get("error") ?? hashParams.get("error");
+
+  if (!errorDescription && !errorCode) {
+    return null;
+  }
+
+  return errorDescription ?? `Authentication failed: ${errorCode}`;
+}
+
+function clearAuthUrlError() {
+  const url = new URL(window.location.href);
+  const searchParams = new URLSearchParams(url.search);
+  const hashParams = new URLSearchParams(
+    url.hash.startsWith("#") ? url.hash.slice(1) : url.hash,
+  );
+  const authErrorKeys = ["error", "error_code", "error_description"];
+
+  authErrorKeys.forEach((key) => {
+    searchParams.delete(key);
+    hashParams.delete(key);
+  });
+
+  url.search = searchParams.toString();
+  url.hash = hashParams.toString();
+  window.history.replaceState(null, "", url.toString());
+}
+
 export function ProjectDashboard() {
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
@@ -78,34 +115,65 @@ export function ProjectDashboard() {
       return;
     }
 
-    const client = getSupabaseBrowserClient();
+    let client: SupabaseClient;
+
+    try {
+      client = getSupabaseBrowserClient();
+    } catch (error) {
+      setAuthError(getSchedulerErrorMessage(error));
+      setAuthStatus("signed_out");
+      return;
+    }
+
     setSupabase(client);
 
     let isActive = true;
 
     async function loadSession() {
-      const {
-        data: { session },
-      } = await client.auth.getSession();
+      try {
+        const urlAuthError = getAuthUrlErrorMessage();
 
-      if (!isActive) {
-        return;
+        if (urlAuthError) {
+          setAuthError(urlAuthError);
+          clearAuthUrlError();
+        }
+
+        const { data, error } = await client.auth.getSession();
+
+        if (!isActive) {
+          return;
+        }
+
+        if (error) {
+          setAuthError(error.message);
+        }
+
+        const nextUser = data.session?.user ?? null;
+        setUser(nextUser);
+        setAuthStatus(nextUser ? "signed_in" : "signed_out");
+      } catch (error) {
+        if (!isActive) {
+          return;
+        }
+
+        setAuthError(getSchedulerErrorMessage(error));
+        setAuthStatus("signed_out");
       }
-
-      const nextUser = session?.user ?? null;
-      setUser(nextUser);
-      setAuthStatus(nextUser ? "signed_in" : "signed_out");
     }
 
     void loadSession();
 
     const {
       data: { subscription },
-    } = client.auth.onAuthStateChange((_event, session: Session | null) => {
+    } = client.auth.onAuthStateChange((event, session: Session | null) => {
       const nextUser = session?.user ?? null;
       setUser(nextUser);
       setAuthStatus(nextUser ? "signed_in" : "signed_out");
-      setAuthError(null);
+      setIsAuthSubmitting(false);
+
+      if (nextUser || event === "SIGNED_OUT") {
+        setAuthError(null);
+      }
 
       if (!nextUser) {
         setProjects(starterProjects);
@@ -150,51 +218,64 @@ export function ProjectDashboard() {
     setDataMessage("Loading your schedule from Supabase...");
 
     async function loadRemoteScheduler() {
-      const [projectsResult, weeklyPlanResult] = await Promise.all([
-        fetchProjectsForUser(activeSupabase, activeUser.id),
-        fetchWeeklyPlanBlocksForUser(activeSupabase, activeUser.id),
-      ]);
+      try {
+        const [projectsResult, weeklyPlanResult] = await Promise.all([
+          fetchProjectsForUser(activeSupabase, activeUser.id),
+          fetchWeeklyPlanBlocksForUser(activeSupabase, activeUser.id),
+        ]);
 
-      if (!isActive) {
-        return;
-      }
+        if (!isActive) {
+          return;
+        }
 
-      const nextProjects =
-        projectsResult.error == null
-          ? projectsResult.data.length > 0
-            ? projectsResult.data
-            : migratedProjects
-          : migratedProjects;
-      const nextPlanBlocks =
-        weeklyPlanResult.error == null
-          ? weeklyPlanResult.data.length > 0
-            ? weeklyPlanResult.data
-            : migratedPlanBlocks
-          : migratedPlanBlocks;
+        const nextProjects =
+          projectsResult.error == null
+            ? projectsResult.data.length > 0
+              ? projectsResult.data
+              : migratedProjects
+            : migratedProjects;
+        const nextPlanBlocks =
+          weeklyPlanResult.error == null
+            ? weeklyPlanResult.data.length > 0
+              ? weeklyPlanResult.data
+              : migratedPlanBlocks
+            : migratedPlanBlocks;
 
-      setProjects(nextProjects);
-      setPlanBlocks(nextPlanBlocks);
-      window.localStorage.setItem(projectStorageKey, JSON.stringify(nextProjects));
-      window.localStorage.setItem(
-        weeklyPlanStorageKey,
-        JSON.stringify(nextPlanBlocks),
-      );
-      setHasLoadedRemoteData(true);
-
-      const loadErrors = [projectsResult.error, weeklyPlanResult.error].filter(
-        Boolean,
-      );
-
-      if (loadErrors.length > 0) {
-        setDataMessage(
-          `Supabase sync had trouble loading your schedule: ${loadErrors
-            .map(getSchedulerErrorMessage)
-            .join(" ")} Local backup is still in use.`,
+        setProjects(nextProjects);
+        setPlanBlocks(nextPlanBlocks);
+        window.localStorage.setItem(projectStorageKey, JSON.stringify(nextProjects));
+        window.localStorage.setItem(
+          weeklyPlanStorageKey,
+          JSON.stringify(nextPlanBlocks),
         );
-        return;
-      }
+        setHasLoadedRemoteData(true);
 
-      setDataMessage(null);
+        const loadErrors = [projectsResult.error, weeklyPlanResult.error].filter(
+          Boolean,
+        );
+
+        if (loadErrors.length > 0) {
+          setDataMessage(
+            `Supabase sync had trouble loading your schedule: ${loadErrors
+              .map(getSchedulerErrorMessage)
+              .join(" ")} Local backup is still in use.`,
+          );
+          return;
+        }
+
+        setDataMessage(null);
+      } catch (error) {
+        if (!isActive) {
+          return;
+        }
+
+        setProjects(migratedProjects);
+        setPlanBlocks(migratedPlanBlocks);
+        setHasLoadedRemoteData(true);
+        setDataMessage(
+          `Supabase sync had trouble loading your schedule: ${getSchedulerErrorMessage(error)} Local backup is still in use.`,
+        );
+      }
     }
 
     void loadRemoteScheduler();
@@ -223,11 +304,18 @@ export function ProjectDashboard() {
     let isActive = true;
 
     async function syncProjects() {
-      const { error } = await replaceProjectsForUser(
-        activeSupabase,
-        activeUser.id,
-        projects,
-      );
+      let error: unknown = null;
+
+      try {
+        const result = await replaceProjectsForUser(
+          activeSupabase,
+          activeUser.id,
+          projects,
+        );
+        error = result.error;
+      } catch (syncError) {
+        error = syncError;
+      }
 
       if (!isActive || !error) {
         if (isActive && !error) {
@@ -273,11 +361,18 @@ export function ProjectDashboard() {
     let isActive = true;
 
     async function syncWeeklyPlan() {
-      const { error } = await replaceWeeklyPlanBlocksForUser(
-        activeSupabase,
-        activeUser.id,
-        planBlocks,
-      );
+      let error: unknown = null;
+
+      try {
+        const result = await replaceWeeklyPlanBlocksForUser(
+          activeSupabase,
+          activeUser.id,
+          planBlocks,
+        );
+        error = result.error;
+      } catch (syncError) {
+        error = syncError;
+      }
 
       if (!isActive || !error) {
         if (isActive && !error) {
@@ -345,6 +440,7 @@ export function ProjectDashboard() {
 
   async function signInWithPassword(email: string, password: string) {
     if (!supabase) {
+      setAuthError("Supabase Auth is not configured yet.");
       return;
     }
 
@@ -352,17 +448,22 @@ export function ProjectDashboard() {
     setAuthError(null);
     setAuthMessage(null);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
 
-    if (error) {
-      setAuthError(error.message);
+      if (error) {
+        setAuthError(error.message);
+      }
+    } catch (error) {
+      setAuthError(getSchedulerErrorMessage(error));
+    } finally {
+      setIsAuthSubmitting(false);
     }
-
-    setIsAuthSubmitting(false);
   }
 
   async function signUp(email: string, password: string) {
     if (!supabase) {
+      setAuthError("Supabase Auth is not configured yet.");
       return;
     }
 
@@ -370,29 +471,33 @@ export function ProjectDashboard() {
     setAuthError(null);
     setAuthMessage(null);
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: getAuthRedirectUrl(),
-      },
-    });
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: getAuthRedirectUrl(),
+        },
+      });
 
-    if (error) {
-      setAuthError(error.message);
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+
+      if (!data.session) {
+        setAuthMessage("Check your email to confirm your account, then sign in.");
+      }
+    } catch (error) {
+      setAuthError(getSchedulerErrorMessage(error));
+    } finally {
       setIsAuthSubmitting(false);
-      return;
     }
-
-    if (!data.session) {
-      setAuthMessage("Check your email to confirm your account, then sign in.");
-    }
-
-    setIsAuthSubmitting(false);
   }
 
   async function sendMagicLink(email: string) {
     if (!supabase) {
+      setAuthError("Supabase Auth is not configured yet.");
       return;
     }
 
@@ -400,21 +505,25 @@ export function ProjectDashboard() {
     setAuthError(null);
     setAuthMessage(null);
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: getAuthRedirectUrl(),
-      },
-    });
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: getAuthRedirectUrl(),
+        },
+      });
 
-    if (error) {
-      setAuthError(error.message);
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+
+      setAuthMessage("Magic link sent. Open the email on this device to sign in.");
+    } catch (error) {
+      setAuthError(getSchedulerErrorMessage(error));
+    } finally {
       setIsAuthSubmitting(false);
-      return;
     }
-
-    setAuthMessage("Magic link sent. Open the email on this device to sign in.");
-    setIsAuthSubmitting(false);
   }
 
   async function signInWithGoogle() {
@@ -427,27 +536,45 @@ export function ProjectDashboard() {
     setAuthError(null);
     setAuthMessage("Redirecting to Google...");
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: getAuthRedirectUrl(),
-      },
-    });
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: getAuthRedirectUrl(),
+        },
+      });
 
-    if (error) {
+      if (!error) {
+        return;
+      }
+
       setAuthError(error.message);
       setAuthMessage(null);
+    } catch (error) {
+      setAuthError(getSchedulerErrorMessage(error));
+      setAuthMessage(null);
+    } finally {
       setIsAuthSubmitting(false);
     }
   }
 
   async function signOut() {
     if (!supabase) {
+      setAuthError("Supabase Auth is not configured yet.");
       return;
     }
 
     setDataMessage(null);
-    await supabase.auth.signOut();
+
+    try {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        setDataMessage(`Sign out failed: ${error.message}`);
+      }
+    } catch (error) {
+      setDataMessage(`Sign out failed: ${getSchedulerErrorMessage(error)}`);
+    }
   }
 
   if (!isSupabaseConfigured()) {
