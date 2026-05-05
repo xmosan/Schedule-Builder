@@ -1,6 +1,7 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import type { Project, ProjectCategory, ProjectPriority } from "@/lib/projects";
 import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
+import type { PlannerProfile, UserRole, PlanningInterest, ScheduleIntensity } from "@/lib/onboarding";
 
 type SchedulerSyncError = Error | PostgrestError;
 
@@ -27,6 +28,14 @@ type WeeklyPlanBlockRow = {
   project_name: string;
   planned_task: string;
   estimated_hours: number;
+};
+
+type PlannerProfileRow = {
+  user_id: string;
+  role: UserRole;
+  interests: PlanningInterest[];
+  intensity: ScheduleIntensity;
+  onboarding_completed: boolean;
 };
 
 function createTimeoutError(operation: string) {
@@ -109,6 +118,25 @@ function mapWeeklyPlanBlockToRow(
     project_name: block.projectName,
     planned_task: block.plannedTask,
     estimated_hours: block.estimatedHours,
+  };
+}
+
+function mapProfileRowToProfile(row: PlannerProfileRow): PlannerProfile {
+  return {
+    role: row.role,
+    interests: row.interests,
+    intensity: row.intensity,
+    onboardingCompleted: row.onboarding_completed,
+  };
+}
+
+function mapProfileToRow(userId: string, profile: PlannerProfile): PlannerProfileRow {
+  return {
+    user_id: userId,
+    role: profile.role,
+    interests: profile.interests,
+    intensity: profile.intensity,
+    onboarding_completed: profile.onboardingCompleted,
   };
 }
 
@@ -274,4 +302,40 @@ export async function replaceWeeklyPlanBlocksForUser(
   );
 
   return { error: deleteError };
+}
+
+export async function fetchPlannerProfile(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("planner_profiles")
+      .select("user_id, role, interests, intensity, onboarding_completed")
+      .eq("user_id", userId)
+      .maybeSingle(),
+    "Loading profile from Supabase",
+  );
+
+  return {
+    data: result.data ? mapProfileRowToProfile(result.data as PlannerProfileRow) : null,
+    error: result.error,
+  };
+}
+
+export async function upsertPlannerProfile(
+  supabase: SupabaseClient,
+  userId: string,
+  profile: PlannerProfile,
+) {
+  const { error } = await withSupabaseTimeout(
+    supabase
+      .from("planner_profiles")
+      .upsert(mapProfileToRow(userId, profile), {
+        onConflict: "user_id",
+      }),
+    "Saving profile to Supabase",
+  );
+
+  return { error };
 }

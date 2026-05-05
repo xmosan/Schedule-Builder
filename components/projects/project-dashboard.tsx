@@ -3,6 +3,7 @@
 import type { Session, SupabaseClient, User } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import { AuthPanel } from "@/components/auth/auth-panel";
+import { OnboardingFlow } from "@/components/auth/onboarding-flow";
 import { FolderStackIcon, TargetIcon } from "@/components/projects/icons";
 import { AddProjectForm } from "@/components/projects/add-project-form";
 import { ProjectList } from "@/components/projects/project-list";
@@ -25,14 +26,17 @@ import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/c
 import {
   fetchProjectsForUser,
   fetchWeeklyPlanBlocksForUser,
+  fetchPlannerProfile,
   replaceProjectsForUser,
   replaceWeeklyPlanBlocksForUser,
+  upsertPlannerProfile,
 } from "@/lib/supabase/scheduler";
 import {
   getWeeklyPlanStorageKey,
   parseStoredWeeklyPlan,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
+import { getStarterProjectsForRole, type PlannerProfile } from "@/lib/onboarding";
 
 type AuthStatus = "loading" | "signed_in" | "signed_out";
 
@@ -109,6 +113,8 @@ export function ProjectDashboard() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [dataMessage, setDataMessage] = useState<string | null>(null);
+  const [profile, setProfile] = useState<PlannerProfile | null>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(true);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -218,64 +224,55 @@ export function ProjectDashboard() {
     setDataMessage("Loading your schedule from Supabase...");
 
     async function loadRemoteScheduler() {
-      try {
-        const [projectsResult, weeklyPlanResult] = await Promise.all([
-          fetchProjectsForUser(activeSupabase, activeUser.id),
-          fetchWeeklyPlanBlocksForUser(activeSupabase, activeUser.id),
-        ]);
+      setIsProfileLoading(true);
+      const [projectsResult, weeklyPlanResult, profileResult] = await Promise.all([
+        fetchProjectsForUser(activeSupabase, activeUser.id),
+        fetchWeeklyPlanBlocksForUser(activeSupabase, activeUser.id),
+        fetchPlannerProfile(activeSupabase, activeUser.id),
+      ]);
 
-        if (!isActive) {
-          return;
-        }
-
-        const nextProjects =
-          projectsResult.error == null
-            ? projectsResult.data.length > 0
-              ? projectsResult.data
-              : migratedProjects
-            : migratedProjects;
-        const nextPlanBlocks =
-          weeklyPlanResult.error == null
-            ? weeklyPlanResult.data.length > 0
-              ? weeklyPlanResult.data
-              : migratedPlanBlocks
-            : migratedPlanBlocks;
-
-        setProjects(nextProjects);
-        setPlanBlocks(nextPlanBlocks);
-        window.localStorage.setItem(projectStorageKey, JSON.stringify(nextProjects));
-        window.localStorage.setItem(
-          weeklyPlanStorageKey,
-          JSON.stringify(nextPlanBlocks),
-        );
-        setHasLoadedRemoteData(true);
-
-        const loadErrors = [projectsResult.error, weeklyPlanResult.error].filter(
-          Boolean,
-        );
-
-        if (loadErrors.length > 0) {
-          setDataMessage(
-            `Supabase sync had trouble loading your schedule: ${loadErrors
-              .map(getSchedulerErrorMessage)
-              .join(" ")} Local backup is still in use.`,
-          );
-          return;
-        }
-
-        setDataMessage(null);
-      } catch (error) {
-        if (!isActive) {
-          return;
-        }
-
-        setProjects(migratedProjects);
-        setPlanBlocks(migratedPlanBlocks);
-        setHasLoadedRemoteData(true);
-        setDataMessage(
-          `Supabase sync had trouble loading your schedule: ${getSchedulerErrorMessage(error)} Local backup is still in use.`,
-        );
+      if (!isActive) {
+        return;
       }
+
+      const nextProjects =
+        projectsResult.error == null
+          ? projectsResult.data.length > 0
+            ? projectsResult.data
+            : migratedProjects
+          : migratedProjects;
+      const nextPlanBlocks =
+        weeklyPlanResult.error == null
+          ? weeklyPlanResult.data.length > 0
+            ? weeklyPlanResult.data
+            : migratedPlanBlocks
+          : migratedPlanBlocks;
+
+      setProjects(nextProjects);
+      setPlanBlocks(nextPlanBlocks);
+      window.localStorage.setItem(projectStorageKey, JSON.stringify(nextProjects));
+      window.localStorage.setItem(
+        weeklyPlanStorageKey,
+        JSON.stringify(nextPlanBlocks),
+      );
+      setProfile(profileResult.data);
+      setIsProfileLoading(false);
+      setHasLoadedRemoteData(true);
+
+      const loadErrors = [projectsResult.error, weeklyPlanResult.error].filter(
+        Boolean,
+      );
+
+      if (loadErrors.length > 0) {
+        setDataMessage(
+          `Supabase sync had trouble loading your schedule: ${loadErrors
+            .map(getSchedulerErrorMessage)
+            .join(" ")} Local backup is still in use.`,
+        );
+        return;
+      }
+
+      setDataMessage(null);
     }
 
     void loadRemoteScheduler();
@@ -577,6 +574,20 @@ export function ProjectDashboard() {
     }
   }
 
+  async function handleOnboardingComplete(nextProfile: PlannerProfile) {
+    if (!supabase || !user) return;
+
+    setProfile(nextProfile);
+    await upsertPlannerProfile(supabase, user.id, nextProfile);
+
+    // If the user has no projects (or only starter ones that we might want to replace),
+    // seed them with the role-specific starter projects.
+    if (projects.length === 0 || JSON.stringify(projects) === JSON.stringify(starterProjects)) {
+      const roleStarterProjects = getStarterProjectsForRole(nextProfile.role);
+      setProjects(roleStarterProjects);
+    }
+  }
+
   if (!isSupabaseConfigured()) {
     return (
       <AuthPanel
@@ -592,7 +603,7 @@ export function ProjectDashboard() {
     );
   }
 
-  if (authStatus === "loading" || (authStatus === "signed_in" && !hasLoadedRemoteData)) {
+  if (authStatus === "loading" || (authStatus === "signed_in" && (!hasLoadedRemoteData || isProfileLoading))) {
     return (
       <div className="px-3 py-6 sm:px-6 sm:py-10 lg:px-8 lg:py-14">
         <div className="app-shell">
@@ -603,10 +614,10 @@ export function ProjectDashboard() {
                   Loading
                 </p>
                 <h1 className="mt-3 text-2xl font-semibold text-brand-ink sm:text-3xl">
-                  Preparing your synced scheduler...
+                  Preparing your planning workspace...
                 </h1>
                 <p className="mt-3 text-sm leading-6 text-brand-ink/65">
-                  {dataMessage ?? "Checking your session and loading your latest schedule."}
+                  {dataMessage ?? "Checking your session and loading your latest planning data."}
                 </p>
               </CardContent>
             </Card>
@@ -631,6 +642,10 @@ export function ProjectDashboard() {
     );
   }
 
+  if (authStatus === "signed_in" && !profile?.onboardingCompleted) {
+    return <OnboardingFlow onComplete={handleOnboardingComplete} />;
+  }
+
   return (
     <div className="px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-10">
       <div className="app-shell flex flex-col gap-6">
@@ -641,16 +656,17 @@ export function ProjectDashboard() {
             <div className="max-w-3xl">
               <div className="eyebrow-chip">
                 <FolderStackIcon className="h-4 w-4" />
-                Project Schedule Dashboard
+                Your Planning Dashboard
               </div>
 
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl lg:text-6xl">
-                Plan focused work across every project.
+                Plan your work, deadlines, and commitments in one focused place.
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Track priorities, deadlines, next actions, and weekly capacity
-                in one clear workspace built for project-based work.
+                Track projects, manage deadlines, protect your
+                weekly capacity, and let the dashboard surface the Top 3 
+                priorities for today.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2.5">
@@ -668,11 +684,11 @@ export function ProjectDashboard() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-                      Focus Rule
+                      Focus System
                     </p>
                     <p className="mt-1 text-sm leading-6 text-brand-ink/70">
-                      Incomplete projects are ranked by priority first, then by
-                      planned weekly effort.
+                      Your planning priorities rise by urgency first, then by weekly
+                      time commitment.
                     </p>
                   </div>
                 </div>
