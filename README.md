@@ -85,18 +85,41 @@ Weekly Plan blocks can be exported as an `.ics` file for Apple Calendar, Google 
 
 Each block becomes a calendar event using the project name as the title, the planned task as the description, and the estimated hours as the event duration. Blocks start at 9:00 AM on each selected day and stack in the order shown.
 
+## Install as an app
+
+Schedule Builder includes PWA metadata, install icons, and a lightweight service worker so it can be added to a phone home screen.
+
+### iPhone or iPad
+
+1. Open Schedule Builder in Safari.
+2. Tap the Share button.
+3. Tap **Add to Home Screen**.
+4. Confirm the name, then tap **Add**.
+
+### Android
+
+1. Open Schedule Builder in Chrome.
+2. Tap the menu button.
+3. Tap **Install app** or **Add to Home screen**.
+4. Confirm the install.
+
+For local testing, run `npm run dev` and open `http://localhost:3000`. For production testing, use the Vercel URL over HTTPS.
+
 ## What’s inside
 
 - `app/` contains the App Router layout, homepage, and metadata routes.
+- `app/manifest.ts` defines the PWA install manifest.
 - `components/auth/` contains the authentication entry UI.
 - `components/onboarding/` contains the first-run setup questionnaire.
 - `components/projects/` contains the scheduler feature components, including the weekly planner.
+- `components/pwa/` contains the browser service worker registration.
 - `components/ui/` contains lightweight reusable UI primitives used by the app.
 - `lib/calendar-export.ts` generates downloadable calendar files for Weekly Plan exports.
 - `lib/projects.ts` holds project types, storage helpers, and ranking helpers for the Top 3 logic.
 - `lib/onboarding.ts` holds onboarding types, answer options, and use-case starter projects.
 - `lib/weekly-plan.ts` holds weekly plan types, storage helpers, and planner utilities.
 - `lib/supabase/` contains the Supabase browser client and scheduler sync helpers.
+- `public/` contains PWA icons and the lightweight service worker.
 - `supabase/schema.sql` contains the database tables and RLS policies required for sync.
 
 ## Notes

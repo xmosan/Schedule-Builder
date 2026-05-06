@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Schedule Builder">
+  <rect width="512" height="512" rx="112" fill="#12202f" />
+  <path d="M144 176c0-30.9 25.1-56 56-56h44l32 32h76c30.9 0 56 25.1 56 56v128c0 30.9-25.1 56-56 56H200c-30.9 0-56-25.1-56-56V176z" fill="#f5f2ea" />
+  <path d="M200 244h144M200 300h104" stroke="#0f766e" stroke-width="32" stroke-linecap="round" />
+</svg>
