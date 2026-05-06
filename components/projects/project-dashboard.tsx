@@ -245,8 +245,7 @@ export function ProjectDashboard() {
 
         const profileLoadFailed = Boolean(profileResult.error);
         const nextProfile = profileResult.error == null ? profileResult.data : null;
-        const hasCompletedOnboarding =
-          profileLoadFailed || Boolean(nextProfile?.onboardingCompleted);
+        const hasCompletedOnboarding = Boolean(nextProfile?.onboardingCompleted);
         const nextProjects =
           projectsResult.error == null
             ? projectsResult.data.length > 0
@@ -265,6 +264,11 @@ export function ProjectDashboard() {
             : migratedPlanBlocks;
 
         setOnboardingStatus(hasCompletedOnboarding ? "completed" : "required");
+        setOnboardingError(
+          profileLoadFailed
+            ? `We could not check your onboarding profile: ${getSchedulerErrorMessage(profileResult.error)} Run the latest Supabase onboarding SQL if this keeps happening.`
+            : null,
+        );
         setProjects(nextProjects);
         setPlanBlocks(nextPlanBlocks);
         window.localStorage.setItem(projectStorageKey, JSON.stringify(nextProjects));
