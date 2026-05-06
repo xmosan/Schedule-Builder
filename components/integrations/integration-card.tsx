@@ -5,12 +5,14 @@ import type { IntegrationCardData } from "@/lib/integrations";
 type IntegrationCardProps = {
   integration: IntegrationCardData;
   isRecommended?: boolean;
+  recommendationLabel?: string;
   recommendationReason?: string;
 };
 
 export function IntegrationCard({
   integration,
   isRecommended = false,
+  recommendationLabel = "Recommended for you",
   recommendationReason,
 }: IntegrationCardProps) {
   return (
@@ -31,7 +33,7 @@ export function IntegrationCard({
           <div className="flex flex-col items-end gap-2">
             {isRecommended ? (
               <Badge className="border-brand-teal/20 bg-brand-teal/10 text-brand-teal">
-                Recommended for you
+                {recommendationLabel}
               </Badge>
             ) : null}
             <Badge variant="subtle">Placeholder</Badge>

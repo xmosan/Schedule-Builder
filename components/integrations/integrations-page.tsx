@@ -28,7 +28,11 @@ const defaultRecommendationsByPlannerType: Record<
     "Outlook Calendar",
     "Apple Calendar",
   ],
-  "Creator / entrepreneur": ["Google Calendar", "ICS import/export"],
+  "Creator / entrepreneur": [
+    "Google Calendar",
+    "Apple Calendar",
+    "ICS import/export",
+  ],
   "General planning": ["Google Calendar", "Apple Calendar", "ICS import/export"],
 };
 
@@ -198,14 +202,33 @@ export function IntegrationsPage() {
     };
   }, []);
 
-  const recommendedIntegrations = useMemo(() => {
-    const selectedRecommendations =
-      desiredIntegrations.length > 0
-        ? desiredIntegrations
-        : defaultRecommendationsByPlannerType[plannerType];
+  const selectedIntegrations = useMemo(() => {
+    return new Set<DesiredIntegration>(desiredIntegrations);
+  }, [desiredIntegrations]);
 
-    return new Set<DesiredIntegration>(selectedRecommendations);
-  }, [desiredIntegrations, plannerType]);
+  const workflowRecommendedIntegrations = useMemo(() => {
+    return new Set<DesiredIntegration>(
+      defaultRecommendationsByPlannerType[plannerType],
+    );
+  }, [plannerType]);
+
+  const visibleIntegrations = useMemo(() => {
+    return [...integrations].sort((first, second) => {
+      const firstSelected = selectedIntegrations.has(first.onboardingName);
+      const secondSelected = selectedIntegrations.has(second.onboardingName);
+      const firstWorkflowRecommended = workflowRecommendedIntegrations.has(
+        first.onboardingName,
+      );
+      const secondWorkflowRecommended = workflowRecommendedIntegrations.has(
+        second.onboardingName,
+      );
+      const firstScore = (firstSelected ? 2 : 0) + (firstWorkflowRecommended ? 1 : 0);
+      const secondScore =
+        (secondSelected ? 2 : 0) + (secondWorkflowRecommended ? 1 : 0);
+
+      return secondScore - firstScore;
+    });
+  }, [selectedIntegrations, workflowRecommendedIntegrations]);
 
   const recommendationSource =
     desiredIntegrations.length > 0
@@ -273,16 +296,25 @@ export function IntegrationsPage() {
         </section>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-6 xl:grid-cols-3">
-          {integrations.map((integration) => {
-            const isRecommended = recommendedIntegrations.has(
+          {visibleIntegrations.map((integration) => {
+            const wasSelectedDuringSetup = selectedIntegrations.has(
               integration.onboardingName,
             );
+            const isUsefulForWorkflow = workflowRecommendedIntegrations.has(
+              integration.onboardingName,
+            );
+            const isRecommended =
+              wasSelectedDuringSetup || isUsefulForWorkflow;
+            const recommendationLabel = wasSelectedDuringSetup
+              ? "Selected during setup"
+              : "Useful for your workflow";
 
             return (
               <IntegrationCard
                 key={integration.id}
                 integration={integration}
                 isRecommended={isRecommended}
+                recommendationLabel={recommendationLabel}
                 recommendationReason={
                   isRecommended
                     ? recommendationReasons[plannerType][integration.onboardingName]
