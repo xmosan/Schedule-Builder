@@ -271,7 +271,7 @@ export function WeeklyPlanSection({
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
         {weekDays.map((day) => {
           const dayBlocks = blocksByDay[day];
 

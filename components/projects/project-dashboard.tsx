@@ -759,37 +759,93 @@ export function ProjectDashboard() {
   }
 
   return (
-    <div className="px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-10">
+    <div className="py-5 sm:py-6 lg:py-10">
       <div className="app-shell flex flex-col gap-6">
         <SchedulerNav />
 
         <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_320px] lg:items-end lg:gap-6">
-            <div className="max-w-3xl">
-              <div className="eyebrow-chip">
-                <FolderStackIcon className="h-4 w-4" />
-                Project Schedule Dashboard
-              </div>
-
-              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl lg:text-6xl">
-                Plan focused work across every project.
-              </h1>
-
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Track priorities, deadlines, next actions, and weekly capacity
-                in one clear workspace built for project-based work.
-              </p>
-
-              <div className="mt-5 flex flex-wrap gap-2.5">
-                <Badge>{activeProjects} active projects</Badge>
-                <Badge variant="subtle">{completedProjects} completed</Badge>
-                <Badge variant="subtle">{totalHours} hrs planned</Badge>
-              </div>
+          <div className="max-w-4xl">
+            <div className="eyebrow-chip">
+              <FolderStackIcon className="h-4 w-4" />
+              Project Schedule Dashboard
             </div>
 
-            <Card className="rounded-[26px] border-white/70 bg-white/88 sm:rounded-[30px]">
-              <CardContent className="p-4 sm:p-5">
-                <div className="flex items-center gap-3">
+            <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl lg:text-6xl">
+              Plan focused work across every project.
+            </h1>
+
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
+              Track priorities, deadlines, next actions, and weekly capacity in
+              one clear workspace built for project-based work.
+            </p>
+
+            <div className="mt-5 flex flex-wrap gap-2.5">
+              <Badge>{activeProjects} active projects</Badge>
+              <Badge variant="subtle">{completedProjects} completed</Badge>
+              <Badge variant="subtle">{totalHours} hrs planned</Badge>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="order-2 flex min-w-0 flex-col gap-6 xl:order-1">
+            <ProjectList projects={projects} onToggleComplete={toggleComplete} />
+
+            <AddProjectForm onAddProject={addProject} />
+
+            <WeeklyPlanSection
+              onAddBlock={addWeeklyPlanBlock}
+              onRemoveBlock={removeWeeklyPlanBlock}
+              planBlocks={planBlocks}
+              projects={projects}
+            />
+          </div>
+
+          <aside className="order-1 flex min-w-0 flex-col gap-4 sm:gap-6 xl:sticky xl:top-6 xl:order-2">
+            <Card className="order-3 rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px] xl:order-1">
+              <CardContent className="p-4 sm:p-6">
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+                  Signed in as
+                </p>
+                <p className="mt-2 truncate text-sm font-semibold text-brand-ink sm:text-base">
+                  {user?.email}
+                </p>
+                {dataMessage ? (
+                  <p className="mt-3 text-sm leading-6 text-brand-ink/60">
+                    {dataMessage}
+                  </p>
+                ) : (
+                  <p className="mt-3 text-sm leading-6 text-brand-ink/60">
+                    Your schedule is connected to Supabase for cross-device
+                    planning.
+                  </p>
+                )}
+                <Button
+                  className="mt-4 w-full"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void signOut()}
+                >
+                  Sign out
+                </Button>
+              </CardContent>
+            </Card>
+
+            <div className="order-1 xl:order-2">
+              <WeeklySummaryCard
+                totalHours={totalHours}
+                activeProjects={activeProjects}
+                completedProjects={completedProjects}
+              />
+            </div>
+
+            <div className="order-2 xl:order-3">
+              <TopTasksCard projects={topThree} />
+            </div>
+
+            <Card className="order-4 rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+              <CardContent className="p-4 sm:p-6">
+                <div className="flex items-start gap-3">
                   <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
                     <TargetIcon className="h-5 w-5" />
                   </div>
@@ -797,61 +853,16 @@ export function ProjectDashboard() {
                     <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
                       Focus Rule
                     </p>
-                    <p className="mt-1 text-sm leading-6 text-brand-ink/70">
+                    <p className="mt-2 text-sm leading-6 text-brand-ink/70">
                       Incomplete projects are ranked by priority first, then by
                       planned weekly effort.
                     </p>
                   </div>
                 </div>
-
-                <div className="mt-4 rounded-[22px] border border-brand-ink/8 bg-white/70 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-                    Signed in as
-                  </p>
-                  <p className="mt-2 truncate text-sm font-semibold text-brand-ink">
-                    {user?.email}
-                  </p>
-                  {dataMessage ? (
-                    <p className="mt-2 text-sm leading-6 text-brand-ink/60">
-                      {dataMessage}
-                    </p>
-                  ) : null}
-                  <Button
-                    className="mt-4 w-full"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void signOut()}
-                  >
-                    Sign out
-                  </Button>
-                </div>
               </CardContent>
             </Card>
-          </div>
+          </aside>
         </section>
-
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_360px] lg:gap-6">
-          <div className="order-2 lg:order-1">
-            <ProjectList projects={projects} onToggleComplete={toggleComplete} />
-          </div>
-
-          <div className="order-1 flex flex-col gap-6 lg:order-2">
-            <WeeklySummaryCard
-              totalHours={totalHours}
-              activeProjects={activeProjects}
-              completedProjects={completedProjects}
-            />
-            <TopTasksCard projects={topThree} />
-            <AddProjectForm onAddProject={addProject} />
-          </div>
-        </section>
-
-        <WeeklyPlanSection
-          onAddBlock={addWeeklyPlanBlock}
-          onRemoveBlock={removeWeeklyPlanBlock}
-          planBlocks={planBlocks}
-          projects={projects}
-        />
       </div>
     </div>
   );
