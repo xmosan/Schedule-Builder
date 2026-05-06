@@ -8,6 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import {
+  generateWeeklyPlanIcs,
+  getCurrentWeekMondayInputValue,
+} from "@/lib/calendar-export";
 import type { Project } from "@/lib/projects";
 import {
   createWeeklyPlanBlock,
@@ -52,6 +56,9 @@ export function WeeklyPlanSection({
     getInitialDraft(projects),
   );
   const [error, setError] = useState<string | null>(null);
+  const [exportWeekStart, setExportWeekStart] = useState("");
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft((current) => {
@@ -70,6 +77,10 @@ export function WeeklyPlanSection({
       };
     });
   }, [projects]);
+
+  useEffect(() => {
+    setExportWeekStart(getCurrentWeekMondayInputValue());
+  }, []);
 
   const totalPlannedHours = useMemo(() => {
     return planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0);
@@ -142,6 +153,48 @@ export function WeeklyPlanSection({
     setError(null);
   }
 
+  function handleCalendarExport() {
+    setExportError(null);
+    setExportMessage(null);
+
+    if (planBlocks.length === 0) {
+      setExportError("Add at least one weekly plan block before exporting.");
+      return;
+    }
+
+    const result = generateWeeklyPlanIcs(planBlocks, exportWeekStart);
+
+    if (result.exportedCount === 0) {
+      setExportError(
+        result.warnings[0] ?? "No valid weekly plan blocks were available to export.",
+      );
+      return;
+    }
+
+    const blob = new Blob([result.content], {
+      type: "text/calendar;charset=utf-8",
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "schedule-builder-weekly-plan.ics";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+
+    const warningText =
+      result.warnings.length > 0
+        ? ` ${result.warnings.join(" ")}`
+        : result.skippedCount > 0
+          ? ` ${result.skippedCount} block${result.skippedCount === 1 ? "" : "s"} skipped.`
+          : "";
+
+    setExportMessage(
+      `Exported ${result.exportedCount} calendar event${result.exportedCount === 1 ? "" : "s"}.${warningText}`,
+    );
+  }
+
   return (
     <section className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-6">
       <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
@@ -173,6 +226,63 @@ export function WeeklyPlanSection({
                 {filledDays}
               </p>
             </div>
+          </div>
+
+          <div className="mt-6 rounded-[24px] border border-brand-ink/8 bg-white/70 p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
+                <CalendarIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-brand-ink">
+                  Export to Calendar
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-brand-ink/60">
+                  Import this file into Apple Calendar, Google Calendar, or
+                  Outlook.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <label className="field-label" htmlFor="export-week-start">
+                Week start date
+              </label>
+              <Input
+                id="export-week-start"
+                type="date"
+                value={exportWeekStart}
+                onChange={(event) => {
+                  setExportWeekStart(event.target.value);
+                  setExportError(null);
+                  setExportMessage(null);
+                }}
+              />
+              <p className="mt-2 text-sm leading-6 text-brand-ink/55">
+                Choose the Monday for this weekly plan. Blocks are exported
+                from 9:00 AM in the order shown for each day.
+              </p>
+            </div>
+
+            {exportError ? (
+              <p className="mt-3 text-sm font-medium leading-6 text-brand-coral">
+                {exportError}
+              </p>
+            ) : null}
+
+            {exportMessage ? (
+              <p className="mt-3 text-sm font-medium leading-6 text-brand-teal">
+                {exportMessage}
+              </p>
+            ) : null}
+
+            <Button
+              className="mt-4 w-full"
+              type="button"
+              onClick={handleCalendarExport}
+            >
+              Export to Calendar
+            </Button>
           </div>
 
           <form className="mt-5 space-y-4 sm:space-y-5" onSubmit={handleSubmit}>

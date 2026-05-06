@@ -74,6 +74,17 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
 - Projects and weekly plan blocks are scoped to the signed-in user in Supabase through Row Level Security policies.
 - Local storage is still kept as a per-user fallback cache in case Supabase is temporarily unavailable.
 
+## Calendar export
+
+Weekly Plan blocks can be exported as an `.ics` file for Apple Calendar, Google Calendar, or Outlook.
+
+1. Add one or more Weekly Plan blocks.
+2. In the Weekly Plan section, choose the Monday for the week you want to export.
+3. Click **Export to Calendar**.
+4. Import `schedule-builder-weekly-plan.ics` into your calendar app.
+
+Each block becomes a calendar event using the project name as the title, the planned task as the description, and the estimated hours as the event duration. Blocks start at 9:00 AM on each selected day and stack in the order shown.
+
 ## What’s inside
 
 - `app/` contains the App Router layout, homepage, and metadata routes.
@@ -81,6 +92,7 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
 - `components/onboarding/` contains the first-run setup questionnaire.
 - `components/projects/` contains the scheduler feature components, including the weekly planner.
 - `components/ui/` contains lightweight reusable UI primitives used by the app.
+- `lib/calendar-export.ts` generates downloadable calendar files for Weekly Plan exports.
 - `lib/projects.ts` holds project types, storage helpers, and ranking helpers for the Top 3 logic.
 - `lib/onboarding.ts` holds onboarding types, answer options, and use-case starter projects.
 - `lib/weekly-plan.ts` holds weekly plan types, storage helpers, and planner utilities.
