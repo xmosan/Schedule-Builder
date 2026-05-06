@@ -136,6 +136,8 @@ export function ProjectDashboard() {
   const [onboardingStatus, setOnboardingStatus] =
     useState<OnboardingStatus>("loading");
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
+  const [canSyncProjects, setCanSyncProjects] = useState(false);
+  const [canSyncWeeklyPlan, setCanSyncWeeklyPlan] = useState(false);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [isOnboardingSubmitting, setIsOnboardingSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -213,6 +215,8 @@ export function ProjectDashboard() {
         setPlanBlocks([]);
         setOnboardingStatus("loading");
         setHasLoadedRemoteData(false);
+        setCanSyncProjects(false);
+        setCanSyncWeeklyPlan(false);
         setOnboardingError(null);
         setDataMessage(null);
       }
@@ -234,21 +238,27 @@ export function ProjectDashboard() {
     let isActive = true;
     const projectStorageKey = getProjectsStorageKey(activeUser.id);
     const weeklyPlanStorageKey = getWeeklyPlanStorageKey(activeUser.id);
-    const storedProjects =
-      parseStoredProjects(window.localStorage.getItem(projectStorageKey)) ??
-      parseStoredProjects(window.localStorage.getItem(getProjectsStorageKey()));
-    const fallbackProjects = storedProjects ?? starterProjects;
-    const migratedPlanBlocks =
-      parseStoredWeeklyPlan(window.localStorage.getItem(weeklyPlanStorageKey)) ??
-      parseStoredWeeklyPlan(
-        window.localStorage.getItem(getWeeklyPlanStorageKey()),
-      ) ??
-      [];
+    const userStoredProjects = parseStoredProjects(
+      window.localStorage.getItem(projectStorageKey),
+    );
+    const legacyStoredProjects = parseStoredProjects(
+      window.localStorage.getItem(getProjectsStorageKey()),
+    );
+    const storedProjects = userStoredProjects ?? legacyStoredProjects;
+    const userStoredPlanBlocks = parseStoredWeeklyPlan(
+      window.localStorage.getItem(weeklyPlanStorageKey),
+    );
+    const legacyStoredPlanBlocks = parseStoredWeeklyPlan(
+      window.localStorage.getItem(getWeeklyPlanStorageKey()),
+    );
+    const migratedPlanBlocks = userStoredPlanBlocks ?? legacyStoredPlanBlocks ?? [];
 
     setProjects(storedProjects ?? []);
     setPlanBlocks(migratedPlanBlocks);
     setOnboardingStatus("loading");
     setHasLoadedRemoteData(false);
+    setCanSyncProjects(false);
+    setCanSyncWeeklyPlan(false);
     setOnboardingError(null);
     setDataMessage("Loading your schedule from Supabase...");
 
@@ -267,16 +277,19 @@ export function ProjectDashboard() {
         const profileLoadFailed = Boolean(profileResult.error);
         const nextProfile = profileResult.error == null ? profileResult.data : null;
         const hasCompletedOnboarding = Boolean(nextProfile?.onboardingCompleted);
+        const hasExistingSchedulerData =
+          (projectsResult.error == null && projectsResult.data.length > 0) ||
+          (weeklyPlanResult.error == null && weeklyPlanResult.data.length > 0) ||
+          Boolean(userStoredProjects?.length) ||
+          Boolean(userStoredPlanBlocks?.length);
+        const shouldShowOnboarding =
+          !hasCompletedOnboarding && !hasExistingSchedulerData;
         const nextProjects =
           projectsResult.error == null
             ? projectsResult.data.length > 0
               ? projectsResult.data
-              : hasCompletedOnboarding
-                ? fallbackProjects
-                : storedProjects ?? []
-            : hasCompletedOnboarding
-              ? fallbackProjects
-              : storedProjects ?? [];
+              : storedProjects ?? []
+            : storedProjects ?? [];
         const nextPlanBlocks =
           weeklyPlanResult.error == null
             ? weeklyPlanResult.data.length > 0
@@ -284,9 +297,9 @@ export function ProjectDashboard() {
               : migratedPlanBlocks
             : migratedPlanBlocks;
 
-        setOnboardingStatus(hasCompletedOnboarding ? "completed" : "required");
+        setOnboardingStatus(shouldShowOnboarding ? "required" : "completed");
         setOnboardingError(
-          profileLoadFailed
+          profileLoadFailed && shouldShowOnboarding
             ? `We could not check your onboarding profile: ${getOnboardingProfileErrorMessage(profileResult.error)}`
             : null,
         );
@@ -298,6 +311,8 @@ export function ProjectDashboard() {
           JSON.stringify(nextPlanBlocks),
         );
         setHasLoadedRemoteData(true);
+        setCanSyncProjects(projectsResult.error == null);
+        setCanSyncWeeklyPlan(weeklyPlanResult.error == null);
 
         const loadErrors = [
           profileResult.error,
@@ -320,10 +335,12 @@ export function ProjectDashboard() {
           return;
         }
 
-        setProjects(fallbackProjects);
+        setProjects(storedProjects ?? []);
         setPlanBlocks(migratedPlanBlocks);
         setOnboardingStatus("completed");
         setHasLoadedRemoteData(true);
+        setCanSyncProjects(false);
+        setCanSyncWeeklyPlan(false);
         setDataMessage(
           `Supabase sync had trouble loading your schedule: ${getSchedulerErrorMessage(error)} Local backup is still in use.`,
         );
@@ -348,7 +365,7 @@ export function ProjectDashboard() {
       JSON.stringify(projects),
     );
 
-    if (!supabase || !hasLoadedRemoteData) {
+    if (!supabase || !hasLoadedRemoteData || !canSyncProjects) {
       return;
     }
 
@@ -392,7 +409,7 @@ export function ProjectDashboard() {
     return () => {
       isActive = false;
     };
-  }, [hasLoadedRemoteData, projects, supabase, user]);
+  }, [canSyncProjects, hasLoadedRemoteData, projects, supabase, user]);
 
   useEffect(() => {
     if (!user) {
@@ -405,7 +422,7 @@ export function ProjectDashboard() {
       JSON.stringify(planBlocks),
     );
 
-    if (!supabase || !hasLoadedRemoteData) {
+    if (!supabase || !hasLoadedRemoteData || !canSyncWeeklyPlan) {
       return;
     }
 
@@ -449,7 +466,7 @@ export function ProjectDashboard() {
     return () => {
       isActive = false;
     };
-  }, [hasLoadedRemoteData, planBlocks, supabase, user]);
+  }, [canSyncWeeklyPlan, hasLoadedRemoteData, planBlocks, supabase, user]);
 
   const activeProjects = useMemo(
     () => projects.filter((project) => !project.completed).length,
