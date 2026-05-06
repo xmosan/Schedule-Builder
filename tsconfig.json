@@ -28,6 +28,7 @@
     "app/**/*.ts",
     "app/**/*.tsx",
     "components/auth/**/*.tsx",
+    "components/onboarding/**/*.tsx",
     "components/integrations/**/*.tsx",
     "components/projects/**/*.tsx",
     "components/scheduler/**/*.tsx",

@@ -1,4 +1,14 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
+import {
+  normalizeDesiredIntegrations,
+  normalizePlannerType,
+  normalizePlanningGoals,
+  normalizeScheduleIntensity,
+  type OnboardingAnswers,
+  type PlannerProfile,
+  type PlannerType,
+  type ScheduleIntensity,
+} from "@/lib/onboarding";
 import type { Project, ProjectCategory, ProjectPriority } from "@/lib/projects";
 import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
 
@@ -27,6 +37,15 @@ type WeeklyPlanBlockRow = {
   project_name: string;
   planned_task: string;
   estimated_hours: number;
+};
+
+type PlannerProfileRow = {
+  user_id: string;
+  planner_type: PlannerType;
+  planning_goals: string[] | null;
+  desired_integrations: string[] | null;
+  schedule_intensity: ScheduleIntensity;
+  onboarding_completed: boolean;
 };
 
 function createTimeoutError(operation: string) {
@@ -109,6 +128,79 @@ function mapWeeklyPlanBlockToRow(
     project_name: block.projectName,
     planned_task: block.plannedTask,
     estimated_hours: block.estimatedHours,
+  };
+}
+
+function mapPlannerProfileRowToProfile(row: PlannerProfileRow): PlannerProfile {
+  return {
+    userId: row.user_id,
+    plannerType: normalizePlannerType(row.planner_type),
+    planningGoals: normalizePlanningGoals(row.planning_goals),
+    desiredIntegrations: normalizeDesiredIntegrations(row.desired_integrations),
+    scheduleIntensity: normalizeScheduleIntensity(row.schedule_intensity),
+    onboardingCompleted: row.onboarding_completed,
+  };
+}
+
+function mapOnboardingAnswersToRow(
+  userId: string,
+  answers: OnboardingAnswers,
+): PlannerProfileRow {
+  return {
+    user_id: userId,
+    planner_type: answers.plannerType,
+    planning_goals: answers.planningGoals,
+    desired_integrations: answers.desiredIntegrations,
+    schedule_intensity: answers.scheduleIntensity,
+    onboarding_completed: true,
+  };
+}
+
+export async function fetchPlannerProfileForUser(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("planner_profiles")
+      .select(
+        "user_id, planner_type, planning_goals, desired_integrations, schedule_intensity, onboarding_completed",
+      )
+      .eq("user_id", userId)
+      .maybeSingle(),
+    "Loading onboarding profile from Supabase",
+  );
+
+  return {
+    data: result.data
+      ? mapPlannerProfileRowToProfile(result.data as PlannerProfileRow)
+      : null,
+    error: result.error,
+  };
+}
+
+export async function savePlannerProfileForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  answers: OnboardingAnswers,
+) {
+  const profileRow = mapOnboardingAnswersToRow(userId, answers);
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("planner_profiles")
+      .upsert(profileRow, { onConflict: "user_id" })
+      .select(
+        "user_id, planner_type, planning_goals, desired_integrations, schedule_intensity, onboarding_completed",
+      )
+      .single(),
+    "Saving onboarding profile to Supabase",
+  );
+
+  return {
+    data: result.data
+      ? mapPlannerProfileRowToProfile(result.data as PlannerProfileRow)
+      : null,
+    error: result.error,
   };
 }
 

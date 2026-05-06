@@ -3,6 +3,7 @@
 import type { Session, SupabaseClient, User } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import { AuthPanel } from "@/components/auth/auth-panel";
+import { OnboardingPanel } from "@/components/onboarding/onboarding-panel";
 import { FolderStackIcon, TargetIcon } from "@/components/projects/icons";
 import { AddProjectForm } from "@/components/projects/add-project-form";
 import { ProjectList } from "@/components/projects/project-list";
@@ -14,6 +15,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  createStarterProjectsForPlannerType,
+  type OnboardingAnswers,
+} from "@/lib/onboarding";
+import {
   getPlannedHours,
   getProjectsStorageKey,
   parseStoredProjects,
@@ -23,8 +28,10 @@ import {
 } from "@/lib/projects";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import {
+  fetchPlannerProfileForUser,
   fetchProjectsForUser,
   fetchWeeklyPlanBlocksForUser,
+  savePlannerProfileForUser,
   replaceProjectsForUser,
   replaceWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
@@ -35,6 +42,7 @@ import {
 } from "@/lib/weekly-plan";
 
 type AuthStatus = "loading" | "signed_in" | "signed_out";
+type OnboardingStatus = "loading" | "required" | "completed";
 
 function getSchedulerErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -104,10 +112,14 @@ export function ProjectDashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<Project[]>(starterProjects);
   const [planBlocks, setPlanBlocks] = useState<WeeklyPlanBlock[]>([]);
+  const [onboardingStatus, setOnboardingStatus] =
+    useState<OnboardingStatus>("loading");
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [isOnboardingSubmitting, setIsOnboardingSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [dataMessage, setDataMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -178,7 +190,9 @@ export function ProjectDashboard() {
       if (!nextUser) {
         setProjects(starterProjects);
         setPlanBlocks([]);
+        setOnboardingStatus("loading");
         setHasLoadedRemoteData(false);
+        setOnboardingError(null);
         setDataMessage(null);
       }
     });
@@ -199,12 +213,10 @@ export function ProjectDashboard() {
     let isActive = true;
     const projectStorageKey = getProjectsStorageKey(activeUser.id);
     const weeklyPlanStorageKey = getWeeklyPlanStorageKey(activeUser.id);
-    const migratedProjects =
+    const storedProjects =
       parseStoredProjects(window.localStorage.getItem(projectStorageKey)) ??
-      parseStoredProjects(
-        window.localStorage.getItem(getProjectsStorageKey()),
-      ) ??
-      starterProjects;
+      parseStoredProjects(window.localStorage.getItem(getProjectsStorageKey()));
+    const fallbackProjects = storedProjects ?? starterProjects;
     const migratedPlanBlocks =
       parseStoredWeeklyPlan(window.localStorage.getItem(weeklyPlanStorageKey)) ??
       parseStoredWeeklyPlan(
@@ -212,14 +224,17 @@ export function ProjectDashboard() {
       ) ??
       [];
 
-    setProjects(migratedProjects);
+    setProjects(storedProjects ?? []);
     setPlanBlocks(migratedPlanBlocks);
+    setOnboardingStatus("loading");
     setHasLoadedRemoteData(false);
+    setOnboardingError(null);
     setDataMessage("Loading your schedule from Supabase...");
 
     async function loadRemoteScheduler() {
       try {
-        const [projectsResult, weeklyPlanResult] = await Promise.all([
+        const [profileResult, projectsResult, weeklyPlanResult] = await Promise.all([
+          fetchPlannerProfileForUser(activeSupabase, activeUser.id),
           fetchProjectsForUser(activeSupabase, activeUser.id),
           fetchWeeklyPlanBlocksForUser(activeSupabase, activeUser.id),
         ]);
@@ -228,12 +243,20 @@ export function ProjectDashboard() {
           return;
         }
 
+        const profileLoadFailed = Boolean(profileResult.error);
+        const nextProfile = profileResult.error == null ? profileResult.data : null;
+        const hasCompletedOnboarding =
+          profileLoadFailed || Boolean(nextProfile?.onboardingCompleted);
         const nextProjects =
           projectsResult.error == null
             ? projectsResult.data.length > 0
               ? projectsResult.data
-              : migratedProjects
-            : migratedProjects;
+              : hasCompletedOnboarding
+                ? fallbackProjects
+                : storedProjects ?? []
+            : hasCompletedOnboarding
+              ? fallbackProjects
+              : storedProjects ?? [];
         const nextPlanBlocks =
           weeklyPlanResult.error == null
             ? weeklyPlanResult.data.length > 0
@@ -241,6 +264,7 @@ export function ProjectDashboard() {
               : migratedPlanBlocks
             : migratedPlanBlocks;
 
+        setOnboardingStatus(hasCompletedOnboarding ? "completed" : "required");
         setProjects(nextProjects);
         setPlanBlocks(nextPlanBlocks);
         window.localStorage.setItem(projectStorageKey, JSON.stringify(nextProjects));
@@ -250,15 +274,17 @@ export function ProjectDashboard() {
         );
         setHasLoadedRemoteData(true);
 
-        const loadErrors = [projectsResult.error, weeklyPlanResult.error].filter(
-          Boolean,
-        );
+        const loadErrors = [
+          profileResult.error,
+          projectsResult.error,
+          weeklyPlanResult.error,
+        ].filter(Boolean);
 
         if (loadErrors.length > 0) {
           setDataMessage(
             `Supabase sync had trouble loading your schedule: ${loadErrors
               .map(getSchedulerErrorMessage)
-              .join(" ")} Local backup is still in use.`,
+              .join(" ")} Local backup is still in use. If onboarding does not appear, run the latest Supabase SQL.`,
           );
           return;
         }
@@ -269,8 +295,9 @@ export function ProjectDashboard() {
           return;
         }
 
-        setProjects(migratedProjects);
+        setProjects(fallbackProjects);
         setPlanBlocks(migratedPlanBlocks);
+        setOnboardingStatus("completed");
         setHasLoadedRemoteData(true);
         setDataMessage(
           `Supabase sync had trouble loading your schedule: ${getSchedulerErrorMessage(error)} Local backup is still in use.`,
@@ -577,6 +604,49 @@ export function ProjectDashboard() {
     }
   }
 
+  async function completeOnboarding(answers: OnboardingAnswers) {
+    if (!supabase || !user) {
+      setOnboardingError("Sign in before saving onboarding.");
+      return;
+    }
+
+    setIsOnboardingSubmitting(true);
+    setOnboardingError(null);
+
+    try {
+      const result = await savePlannerProfileForUser(supabase, user.id, answers);
+
+      if (result.error) {
+        setOnboardingError(
+          `Onboarding could not be saved: ${getSchedulerErrorMessage(result.error)}`,
+        );
+        return;
+      }
+
+      setOnboardingStatus("completed");
+      setDataMessage(null);
+
+      if (projects.length === 0) {
+        setProjects(createStarterProjectsForPlannerType(answers.plannerType));
+      }
+    } catch (error) {
+      setOnboardingError(
+        `Onboarding could not be saved: ${getSchedulerErrorMessage(error)}`,
+      );
+    } finally {
+      setIsOnboardingSubmitting(false);
+    }
+  }
+
+  async function skipOnboarding() {
+    await completeOnboarding({
+      plannerType: "General planning",
+      planningGoals: [],
+      desiredIntegrations: [],
+      scheduleIntensity: "Moderate",
+    });
+  }
+
   if (!isSupabaseConfigured()) {
     return (
       <AuthPanel
@@ -592,7 +662,11 @@ export function ProjectDashboard() {
     );
   }
 
-  if (authStatus === "loading" || (authStatus === "signed_in" && !hasLoadedRemoteData)) {
+  if (
+    authStatus === "loading" ||
+    (authStatus === "signed_in" &&
+      (!hasLoadedRemoteData || onboardingStatus === "loading"))
+  ) {
     return (
       <div className="px-3 py-6 sm:px-6 sm:py-10 lg:px-8 lg:py-14">
         <div className="app-shell">
@@ -627,6 +701,17 @@ export function ProjectDashboard() {
         onSignInWithGoogle={signInWithGoogle}
         onSignInWithPassword={signInWithPassword}
         onSignUp={signUp}
+      />
+    );
+  }
+
+  if (onboardingStatus === "required") {
+    return (
+      <OnboardingPanel
+        error={onboardingError}
+        isSubmitting={isOnboardingSubmitting}
+        onComplete={completeOnboarding}
+        onSkip={skipOnboarding}
       />
     );
   }

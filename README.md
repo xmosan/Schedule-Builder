@@ -28,6 +28,9 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `https://schedule-builder-ruddy.vercel.app`
    - Any Vercel preview URLs you want to test
 7. In Supabase SQL Editor, run the SQL in `supabase/schema.sql`.
+   - This creates `projects`, `weekly_plan_blocks`, and `planner_profiles`.
+   - `planner_profiles` stores onboarding answers and uses Row Level Security so each user only sees their own setup.
+   - If your existing Supabase project already has the scheduler tables, you can run only `supabase/onboarding.sql` to add onboarding.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.
    - Magic link sign-in also uses the Email provider.
@@ -67,6 +70,7 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
 - Users can create an account with email/password.
 - Users can also request a magic link.
 - Users can continue with Google through Supabase Auth.
+- First-time signed-in users complete a short onboarding questionnaire. Their answers are saved to `planner_profiles`.
 - Projects and weekly plan blocks are scoped to the signed-in user in Supabase through Row Level Security policies.
 - Local storage is still kept as a per-user fallback cache in case Supabase is temporarily unavailable.
 
@@ -74,9 +78,11 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
 
 - `app/` contains the App Router layout, homepage, and metadata routes.
 - `components/auth/` contains the authentication entry UI.
+- `components/onboarding/` contains the first-run setup questionnaire.
 - `components/projects/` contains the scheduler feature components, including the weekly planner.
 - `components/ui/` contains lightweight reusable UI primitives used by the app.
 - `lib/projects.ts` holds project types, storage helpers, and ranking helpers for the Top 3 logic.
+- `lib/onboarding.ts` holds onboarding types, answer options, and use-case starter projects.
 - `lib/weekly-plan.ts` holds weekly plan types, storage helpers, and planner utilities.
 - `lib/supabase/` contains the Supabase browser client and scheduler sync helpers.
 - `supabase/schema.sql` contains the database tables and RLS policies required for sync.
