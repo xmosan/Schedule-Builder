@@ -61,6 +61,27 @@ function getSchedulerErrorMessage(error: unknown) {
   return "Please try again shortly.";
 }
 
+function isMissingPlannerProfilesTable(error: unknown) {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === "PGRST205" &&
+    typeof candidate.message === "string" &&
+    candidate.message.includes("planner_profiles")
+  );
+}
+
+function getOnboardingProfileErrorMessage(error: unknown) {
+  if (isMissingPlannerProfilesTable(error)) {
+    return "The onboarding table is missing in Supabase. Run supabase/onboarding.sql in the Supabase project connected to this app, then try again.";
+  }
+
+  return getSchedulerErrorMessage(error);
+}
+
 function getAuthRedirectUrl() {
   const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
 
@@ -266,7 +287,7 @@ export function ProjectDashboard() {
         setOnboardingStatus(hasCompletedOnboarding ? "completed" : "required");
         setOnboardingError(
           profileLoadFailed
-            ? `We could not check your onboarding profile: ${getSchedulerErrorMessage(profileResult.error)} Run the latest Supabase onboarding SQL if this keeps happening.`
+            ? `We could not check your onboarding profile: ${getOnboardingProfileErrorMessage(profileResult.error)}`
             : null,
         );
         setProjects(nextProjects);
@@ -622,7 +643,7 @@ export function ProjectDashboard() {
 
       if (result.error) {
         setOnboardingError(
-          `Onboarding could not be saved: ${getSchedulerErrorMessage(result.error)}`,
+          `Onboarding could not be saved: ${getOnboardingProfileErrorMessage(result.error)}`,
         );
         return;
       }
@@ -635,7 +656,7 @@ export function ProjectDashboard() {
       }
     } catch (error) {
       setOnboardingError(
-        `Onboarding could not be saved: ${getSchedulerErrorMessage(error)}`,
+        `Onboarding could not be saved: ${getOnboardingProfileErrorMessage(error)}`,
       );
     } finally {
       setIsOnboardingSubmitting(false);
