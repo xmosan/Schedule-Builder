@@ -29,8 +29,29 @@ alter table public.planner_profiles
   add column if not exists updated_at timestamptz not null default timezone('utc', now());
 
 update public.planner_profiles
-set desired_integrations = array_remove(desired_integrations, 'AI planning assistant')
-where desired_integrations @> array['AI planning assistant']::text[];
+set desired_integrations = coalesce(
+  (
+    select array_agg(integration)
+    from unnest(desired_integrations) as integration
+    where integration = any(
+      array[
+        'Google Calendar',
+        'Apple Calendar',
+        'Outlook Calendar',
+        'D2L / Brightspace',
+        'ICS import/export'
+      ]::text[]
+    )
+  ),
+  '{}'::text[]
+)
+where not desired_integrations <@ array[
+  'Google Calendar',
+  'Apple Calendar',
+  'Outlook Calendar',
+  'D2L / Brightspace',
+  'ICS import/export'
+]::text[];
 
 alter table public.planner_profiles
   drop constraint if exists planner_profiles_planner_type_check,

@@ -232,7 +232,7 @@ export function IntegrationsPage() {
 
   const recommendationSource =
     desiredIntegrations.length > 0
-      ? "Based on your onboarding selections"
+      ? "Recommended for you"
       : `Recommended for ${plannerType.toLowerCase()}`;
 
   return (
