@@ -1,3 +1,5 @@
+import type { DesiredIntegration } from "@/lib/onboarding";
+
 export type IntegrationCardData = {
   accentClassName: string;
   category: string;
@@ -5,6 +7,7 @@ export type IntegrationCardData = {
   id: string;
   monogram: string;
   name: string;
+  onboardingName: DesiredIntegration;
   plannedBehavior: string;
   value: string;
 };
@@ -13,6 +16,7 @@ export const integrations: IntegrationCardData[] = [
   {
     id: "apple-calendar",
     name: "Apple Calendar",
+    onboardingName: "Apple Calendar",
     monogram: "A",
     category: "Native calendar sync",
     description:
@@ -27,6 +31,7 @@ export const integrations: IntegrationCardData[] = [
   {
     id: "outlook-calendar",
     name: "Outlook Calendar",
+    onboardingName: "Outlook Calendar",
     monogram: "O",
     category: "Work and organization planning",
     description:
@@ -41,6 +46,7 @@ export const integrations: IntegrationCardData[] = [
   {
     id: "d2l-brightspace-calendar",
     name: "D2L / Brightspace Calendar",
+    onboardingName: "D2L / Brightspace",
     monogram: "D2L",
     category: "Course deadline import",
     description:
@@ -55,6 +61,7 @@ export const integrations: IntegrationCardData[] = [
   {
     id: "google-calendar",
     name: "Google Calendar",
+    onboardingName: "Google Calendar",
     monogram: "G",
     category: "Cross-device calendar sync",
     description:
@@ -69,6 +76,7 @@ export const integrations: IntegrationCardData[] = [
   {
     id: "ics-upload-import",
     name: "ICS Upload / Import",
+    onboardingName: "ICS import/export",
     monogram: "ICS",
     category: "File-based import",
     description:

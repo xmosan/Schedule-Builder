@@ -4,11 +4,23 @@ import type { IntegrationCardData } from "@/lib/integrations";
 
 type IntegrationCardProps = {
   integration: IntegrationCardData;
+  isRecommended?: boolean;
+  recommendationReason?: string;
 };
 
-export function IntegrationCard({ integration }: IntegrationCardProps) {
+export function IntegrationCard({
+  integration,
+  isRecommended = false,
+  recommendationReason,
+}: IntegrationCardProps) {
   return (
-    <Card className="rounded-[28px] border-white/70 bg-white/86 sm:rounded-[32px]">
+    <Card
+      className={`rounded-[28px] bg-white/86 sm:rounded-[32px] ${
+        isRecommended
+          ? "border-brand-teal/25 shadow-[0_22px_55px_rgba(15,118,110,0.12)]"
+          : "border-white/70"
+      }`}
+    >
       <CardContent className="flex h-full flex-col p-5 sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div
@@ -16,7 +28,14 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
           >
             {integration.monogram}
           </div>
-          <Badge variant="subtle">Placeholder</Badge>
+          <div className="flex flex-col items-end gap-2">
+            {isRecommended ? (
+              <Badge className="border-brand-teal/20 bg-brand-teal/10 text-brand-teal">
+                Recommended for you
+              </Badge>
+            ) : null}
+            <Badge variant="subtle">Placeholder</Badge>
+          </div>
         </div>
 
         <div className="mt-5">
@@ -32,6 +51,17 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
         </div>
 
         <div className="mt-5 space-y-3">
+          {isRecommended && recommendationReason ? (
+            <div className="rounded-[22px] border border-brand-teal/15 bg-brand-teal/8 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-teal">
+                Why this fits
+              </p>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/70">
+                {recommendationReason}
+              </p>
+            </div>
+          ) : null}
+
           <div className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
               What it will do
