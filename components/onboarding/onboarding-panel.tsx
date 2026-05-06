@@ -161,7 +161,7 @@ export function OnboardingPanel({
                       Which integrations might you want later?
                     </h2>
                     <p className="mt-1 text-sm text-brand-ink/55">
-                      We will not connect calendars or AI yet.
+                      We will not connect calendars or platforms yet.
                     </p>
                   </div>
 

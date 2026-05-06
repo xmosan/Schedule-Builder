@@ -66,8 +66,7 @@ create table if not exists public.planner_profiles (
       'Apple Calendar',
       'Outlook Calendar',
       'D2L / Brightspace',
-      'ICS import/export',
-      'AI planning assistant'
+      'ICS import/export'
     ]::text[]
   ),
   schedule_intensity text not null default 'Moderate' check (
@@ -174,3 +173,5 @@ create policy "Users can delete their own planner profile"
 on public.planner_profiles
 for delete
 using ((select auth.uid()) = user_id);
+
+notify pgrst, 'reload schema';

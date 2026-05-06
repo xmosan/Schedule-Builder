@@ -10,7 +10,31 @@ $$;
 
 create table if not exists public.planner_profiles (
   user_id uuid primary key references auth.users (id) on delete cascade,
-  planner_type text not null default 'General planning' check (
+  planner_type text not null default 'General planning',
+  planning_goals text[] not null default '{}'::text[],
+  desired_integrations text[] not null default '{}'::text[],
+  schedule_intensity text not null default 'Moderate',
+  onboarding_completed boolean not null default false,
+  inserted_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+alter table public.planner_profiles
+  add column if not exists planner_type text not null default 'General planning',
+  add column if not exists planning_goals text[] not null default '{}'::text[],
+  add column if not exists desired_integrations text[] not null default '{}'::text[],
+  add column if not exists schedule_intensity text not null default 'Moderate',
+  add column if not exists onboarding_completed boolean not null default false,
+  add column if not exists inserted_at timestamptz not null default timezone('utc', now()),
+  add column if not exists updated_at timestamptz not null default timezone('utc', now());
+
+update public.planner_profiles
+set desired_integrations = array_remove(desired_integrations, 'AI planning assistant')
+where desired_integrations @> array['AI planning assistant']::text[];
+
+alter table public.planner_profiles
+  drop constraint if exists planner_profiles_planner_type_check,
+  add constraint planner_profiles_planner_type_check check (
     planner_type in (
       'Student',
       'Professional',
@@ -18,8 +42,11 @@ create table if not exists public.planner_profiles (
       'Creator / entrepreneur',
       'General planning'
     )
-  ),
-  planning_goals text[] not null default '{}'::text[] check (
+  );
+
+alter table public.planner_profiles
+  drop constraint if exists planner_profiles_planning_goals_check,
+  add constraint planner_profiles_planning_goals_check check (
     planning_goals <@ array[
       'Classes and assignments',
       'Projects and deadlines',
@@ -28,24 +55,25 @@ create table if not exists public.planner_profiles (
       'Content or business work',
       'Personal goals'
     ]::text[]
-  ),
-  desired_integrations text[] not null default '{}'::text[] check (
+  );
+
+alter table public.planner_profiles
+  drop constraint if exists planner_profiles_desired_integrations_check,
+  add constraint planner_profiles_desired_integrations_check check (
     desired_integrations <@ array[
       'Google Calendar',
       'Apple Calendar',
       'Outlook Calendar',
       'D2L / Brightspace',
-      'ICS import/export',
-      'AI planning assistant'
+      'ICS import/export'
     ]::text[]
-  ),
-  schedule_intensity text not null default 'Moderate' check (
+  );
+
+alter table public.planner_profiles
+  drop constraint if exists planner_profiles_schedule_intensity_check,
+  add constraint planner_profiles_schedule_intensity_check check (
     schedule_intensity in ('Light', 'Moderate', 'Heavy')
-  ),
-  onboarding_completed boolean not null default false,
-  inserted_at timestamptz not null default timezone('utc', now()),
-  updated_at timestamptz not null default timezone('utc', now())
-);
+  );
 
 drop trigger if exists set_planner_profiles_updated_at on public.planner_profiles;
 create trigger set_planner_profiles_updated_at
@@ -79,3 +107,5 @@ create policy "Users can delete their own planner profile"
 on public.planner_profiles
 for delete
 using ((select auth.uid()) = user_id);
+
+notify pgrst, 'reload schema';
