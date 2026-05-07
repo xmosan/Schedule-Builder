@@ -236,7 +236,7 @@ export function IntegrationsPage() {
       : `Recommended for ${plannerType.toLowerCase()}`;
 
   return (
-    <div className="px-3 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-10">
+    <div className="px-3 pb-28 pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
       <div className="app-shell flex flex-col gap-5 sm:gap-6">
         <SchedulerNav />
 
@@ -287,7 +287,7 @@ export function IntegrationsPage() {
                     href="/"
                     className="inline-flex h-12 w-full items-center justify-center rounded-2xl border border-brand-ink/10 bg-white/75 px-4 text-sm font-semibold text-brand-ink hover:-translate-y-0.5 hover:border-brand-ink/20 hover:bg-white"
                   >
-                    Back to planner
+                    Back to dashboard
                   </Link>
                 </div>
               </CardContent>

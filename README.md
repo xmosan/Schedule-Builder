@@ -85,6 +85,14 @@ Weekly Plan blocks can be exported as an `.ics` file for Apple Calendar, Google 
 
 Each block becomes a calendar event using the project name as the title, the planned task as the description, and the estimated hours as the event duration. Blocks start at 9:00 AM on each selected day and stack in the order shown.
 
+## App sections
+
+- `/` is the focused dashboard with Today's Top 3, weekly summary, focus rule, and quick links.
+- `/projects` contains the project list and add-project form.
+- `/plan` contains Weekly Plan blocks, the add-block form, and calendar export.
+- `/integrations` contains personalized integration recommendations.
+- `/settings` contains account and sync status.
+
 ## Install as an app
 
 Schedule Builder includes PWA metadata, install icons, and a lightweight service worker so it can be added to a phone home screen.
