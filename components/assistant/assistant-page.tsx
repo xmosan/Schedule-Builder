@@ -279,41 +279,60 @@ function ActionCard({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button
-          className="h-8 px-4 text-xs"
-          disabled={!canApply || isFinished || actionState.status === "applying"}
-          size="sm"
-          onClick={onApply}
-        >
-          {actionState.status === "applying" ? "Applying..." : "Apply"}
-        </Button>
-        {isEditableSuggestion(suggestion) && (
-          <Button
-            className="h-8 px-3 text-xs"
-            disabled={isFinished || actionState.status === "applying"}
-            size="sm"
-            variant="outline"
-            onClick={onToggleEdit}
-          >
-            {isEditing ? "Done" : "Edit"}
-          </Button>
+        {isActionableSuggestion(suggestion) ? (
+          <>
+            <Button
+              className="h-8 px-4 text-xs"
+              disabled={!canApply || isFinished || actionState.status === "applying"}
+              size="sm"
+              onClick={onApply}
+            >
+              {actionState.status === "applying" ? "Applying..." : "Apply"}
+            </Button>
+            {isEditableSuggestion(suggestion) && (
+              <Button
+                className="h-8 px-3 text-xs"
+                disabled={isFinished || actionState.status === "applying"}
+                size="sm"
+                variant="outline"
+                onClick={onToggleEdit}
+              >
+                {isEditing ? "Done" : "Edit"}
+              </Button>
+            )}
+            <Button
+              className="h-8 px-3 text-xs text-brand-ink/60 hover:text-brand-ink"
+              disabled={isFinished || actionState.status === "applying"}
+              size="sm"
+              variant="secondary"
+              onClick={onIgnore}
+            >
+              Ignore
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              className="h-8 px-4 text-xs"
+              disabled={isFinished}
+              size="sm"
+              variant="secondary"
+              onClick={onIgnore}
+            >
+              Got it
+            </Button>
+            <Button
+              className="h-8 px-3 text-xs text-brand-ink/60 hover:text-brand-ink"
+              disabled={isFinished}
+              size="sm"
+              variant="outline"
+              onClick={onIgnore}
+            >
+              Dismiss
+            </Button>
+          </>
         )}
-        <Button
-          className="h-8 px-3 text-xs text-brand-ink/60 hover:text-brand-ink"
-          disabled={isFinished || actionState.status === "applying"}
-          size="sm"
-          variant="secondary"
-          onClick={onIgnore}
-        >
-          Ignore
-        </Button>
       </div>
-      
-      {!canApply && (
-        <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-brand-ink/40">
-          Guidance only. Nothing saved.
-        </p>
-      )}
     </article>
   );
 }
@@ -375,8 +394,8 @@ function ChatBubble({
                 </>
               )}
             </div>
-            <p className="mt-1.5 text-xs text-brand-ink/40">
-              Review suggestions before applying. Rejected suggestions are ignored.
+            <p className="mt-1.5 text-xs text-brand-ink/50">
+              Nothing changes unless you apply a suggestion.
             </p>
           </div>
           <div className="grid gap-3">
@@ -748,13 +767,13 @@ export function AssistantPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col pb-[120px] sm:pb-24">
+    <div className="flex h-[100dvh] flex-col overflow-hidden pb-[60px] sm:pb-0 bg-brand-background">
       <SchedulerNav />
 
-      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-4 pt-6 sm:px-6 md:gap-8 md:pt-10">
+      <main className="mx-auto flex w-full max-w-4xl flex-1 min-h-0 flex-col gap-4 px-4 pt-4 pb-4 sm:px-6 sm:py-8 md:gap-6">
         
         {/* Assistant Header Card */}
-        <section className="panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <section className="panel shrink-0 flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div>
             <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink sm:text-2xl">
               Planning Assistant
@@ -769,12 +788,12 @@ export function AssistantPage() {
         </section>
 
         {/* Main Chat Card */}
-        <section className="panel-strong flex flex-1 flex-col overflow-hidden">
+        <section className="panel-strong flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* Chat Flow Container */}
-          <div className="flex flex-1 flex-col p-4 sm:p-6 lg:p-8">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
             <div className="flex flex-col gap-6">
               {!hasMessages ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center sm:py-16">
+                <div className="flex flex-col items-center justify-center py-6 text-center sm:py-16">
                   <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-teal/10">
                     <TargetIcon className="h-6 w-6 text-brand-teal" />
                   </div>
@@ -815,7 +834,7 @@ export function AssistantPage() {
 
               {isSubmitting ? (
                 <div className="flex justify-start">
-                  <div className="flex h-[44px] items-center rounded-2xl border border-white/60 bg-white/70 px-4 shadow-sm">
+                  <div className="flex h-[44px] items-center rounded-2xl border border-white/60 bg-white/84 px-4 shadow-sm">
                     <div className="flex gap-1.5">
                       <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40"></div>
                       <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]"></div>
@@ -836,7 +855,7 @@ export function AssistantPage() {
           </div>
 
           {/* Chat Composer */}
-          <div className="border-t border-brand-ink/5 bg-brand-background/30 p-4 sm:p-6">
+          <div className="shrink-0 border-t border-brand-ink/5 bg-brand-background/30 p-4 sm:p-6">
             {status === "signed_out" ? (
               <div className="text-center">
                 <p className="text-sm font-semibold text-brand-ink">
