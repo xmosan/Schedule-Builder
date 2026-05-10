@@ -50,9 +50,9 @@ const examplePrompts = [
 ];
 
 const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
-  suggested_weekly_block: "Suggested weekly block",
-  suggested_next_action: "Suggested next action",
-  workload_warning: "Workload note",
+  suggested_weekly_block: "Suggested action",
+  suggested_next_action: "Next action idea",
+  workload_warning: "Workload warning",
   missing_deadline_warning: "Missing deadline",
   unclear_project_warning: "Clarify project",
 };
@@ -119,62 +119,19 @@ function normalizeResponseForChat(
   };
 }
 
-function ContextMetric({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="rounded-2xl border border-brand-ink/5 bg-white/40 p-2.5 sm:p-3">
-      <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-brand-ink/40">
-        {label}
-      </p>
-      <p className="mt-0.5 text-xs font-semibold text-brand-ink sm:text-sm">{value}</p>
-    </div>
-  );
-}
-
 function AssistantContextDetails({
   context,
 }: {
   context?: AssistantContextSummary;
 }) {
+  if (!context) return null;
+
   return (
-    <div className="rounded-[22px] border border-white/60 bg-white/64 p-4 shadow-sm sm:p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <FolderStackIcon className="h-4 w-4 text-brand-ink/40" />
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-brand-ink/50">
-          Planning context
-        </h3>
-      </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-6">
-        <ContextMetric
-          label="Projects"
-          value={context?.activeProjectsCount ?? "--"}
-        />
-        <ContextMetric
-          label="Planned"
-          value={context ? `${context.plannedWeeklyHours}h` : "--"}
-        />
-        <ContextMetric
-          label="Blocks"
-          value={context?.weeklyBlocksCount ?? "--"}
-        />
-        <ContextMetric
-          label="Shifts"
-          value={context?.workShiftsCount ?? "--"}
-        />
-        <ContextMetric
-          label="Type"
-          value={context?.plannerType ?? "--"}
-        />
-        <ContextMetric
-          label="Work"
-          value={context ? `${context.workScheduleHours}h` : "--"}
-        />
-      </div>
+    <div className="mx-auto flex w-fit items-center gap-2 rounded-full border border-brand-ink/5 bg-white/60 px-4 py-2 text-xs font-medium text-brand-ink/60 shadow-sm backdrop-blur-sm">
+      <FolderStackIcon className="h-3.5 w-3.5 text-brand-teal/60" />
+      <span>
+        Using your schedule context: {context.activeProjectsCount} projects • {context.plannedWeeklyHours}h planned • {context.weeklyBlocksCount} blocks
+      </span>
     </div>
   );
 }
@@ -791,146 +748,141 @@ export function AssistantPage() {
   }
 
   return (
-    <div className="px-3 pb-[160px] pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pt-10">
-      <div className="app-shell flex flex-col gap-6 sm:gap-8">
-        <SchedulerNav />
+    <div className="flex min-h-screen flex-col">
+      <SchedulerNav />
 
-        {/* Simple Hero Section */}
-        <header className="max-w-3xl">
-          <div className="eyebrow-chip mb-4">
-            <TargetIcon className="h-3.5 w-3.5" />
-            Assistant
-          </div>
-          <h1 className="text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-[160px] pt-6 sm:px-6 sm:pb-40 md:pt-10">
+        
+        {/* Minimal Header */}
+        <header className="mb-6 text-center sm:mb-8">
+          <h1 className="text-2xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-4xl">
             Planning Assistant
           </h1>
-          <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
-            Ask for help planning your week, balancing projects, or turning work into schedule blocks.
+          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-brand-ink/60 sm:text-base">
+            Ask naturally. Review suggested changes before anything is added.
           </p>
-          <div className="mt-4 flex items-center gap-2 text-xs font-medium text-brand-ink/45">
-            <CheckCircleIcon className="h-3.5 w-3.5 text-brand-teal/60" />
-            <span>You stay in control. Nothing changes unless you approve it.</span>
-          </div>
         </header>
 
-        {/* Workspace Layout */}
-        <div className="grid items-start gap-6 lg:grid-cols-[1fr_300px]">
-          
-          {/* Main Column: Chat Flow */}
-          <main className="flex min-w-0 flex-col gap-6">
-            <div className="flex flex-col gap-4">
-              {!hasMessages ? (
-                <div className="flex justify-start">
-                  <div className="max-w-[92%] rounded-2xl border border-white/60 bg-white/70 px-4 py-3.5 text-sm leading-6 text-brand-ink shadow-sm sm:max-w-[85%] sm:px-5">
-                    Ask me to help plan your week, balance your workload, or turn projects into work blocks.
-                  </div>
-                </div>
-              ) : null}
-
-              {messages.map((message) => (
-                <ChatBubble
-                  key={message.id}
-                  actionStates={actionStates}
-                  message={message}
-                  onApply={(suggestion) => void applySuggestion(suggestion)}
-                  onIgnore={ignoreSuggestion}
-                  onToggleEdit={toggleEdit}
-                  onUpdateSuggestion={updateSuggestion}
-                />
-              ))}
-
-              {isSubmitting ? (
-                <div className="flex justify-start">
-                  <div className="max-w-[92%] rounded-2xl border border-white/60 bg-white/70 px-4 py-3 text-sm leading-6 text-brand-ink/60 shadow-sm sm:max-w-[85%] sm:px-5">
-                    Thinking through your plan...
-                  </div>
-                </div>
-              ) : null}
-
-              {error ? (
-                <div className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
-                  {error}
-                </div>
-              ) : null}
-
-              <div ref={chatEndRef} />
-            </div>
-
-            {status === "signed_out" ? (
-              <Card className="rounded-[24px] border-white/70 bg-white/88 max-w-md">
-                <CardContent className="p-5">
-                  <p className="text-base font-semibold text-brand-ink">
-                    Sign in to use Planning Assistant.
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                    The assistant reviews only your signed-in schedule.
-                  </p>
-                  <Link
-                    href="/"
-                    className="mt-4 inline-flex h-11 items-center justify-center rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white"
-                  >
-                    Go to sign in
-                  </Link>
-                </CardContent>
-              </Card>
-            ) : (
-              <section className="panel-strong mt-2 p-3 sm:p-4">
-                {/* Suggested Prompt Chips */}
-                <div 
-                  className="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible"
-                  style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-                >
-                  {examplePrompts.map((example) => (
-                    <button
-                      key={example}
-                      className="shrink-0 rounded-full border border-brand-ink/8 bg-white/60 px-3.5 py-1.5 text-xs font-semibold text-brand-ink/60 transition-all hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
-                      type="button"
-                      onClick={() => setPrompt(example)}
-                    >
-                      {example}
-                    </button>
-                  ))}
-                </div>
-
-                <form onSubmit={handleSubmit} className="relative">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                    <div className="relative flex-1">
-                      <textarea
-                        className="min-h-[52px] w-full resize-none rounded-[20px] border border-brand-ink/10 bg-white/84 px-4 py-3 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/30 focus:border-brand-teal/30 focus:bg-white focus:outline-none sm:max-h-48"
-                        disabled={isBusy}
-                        maxLength={2000}
-                        placeholder="Ask me to plan your week..."
-                        rows={1}
-                        value={prompt}
-                        onChange={(event) => setPrompt(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && !event.shiftKey) {
-                            event.preventDefault();
-                            void sendPrompt(prompt);
-                          }
-                        }}
-                      />
-                    </div>
-                    <Button
-                      className="h-12 w-full px-6 sm:w-auto"
-                      disabled={isBusy}
-                      type="submit"
-                    >
-                      Send
-                    </Button>
-                  </div>
-                </form>
-              </section>
-            )}
-          </main>
-
-          {/* Right Sidebar: Context */}
-          <aside className="order-first flex flex-col gap-4 lg:order-last lg:sticky lg:top-6">
-            <AssistantContextDetails context={context} />
-          </aside>
-
+        {/* Context Pill */}
+        <div className="mb-6 sm:mb-8">
+          <AssistantContextDetails context={context} />
         </div>
-      </div>
+
+        {/* Chat Flow */}
+        <div className="flex flex-1 flex-col gap-6">
+          {!hasMessages ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center sm:py-20">
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-white/70 shadow-[0_8px_30px_rgba(18,32,47,0.06)]">
+                <TargetIcon className="h-6 w-6 text-brand-teal" />
+              </div>
+              <h2 className="mb-8 text-xl font-semibold text-brand-ink sm:text-2xl">
+                What would you like to plan today?
+              </h2>
+              <div className="flex max-w-lg flex-wrap justify-center gap-2.5">
+                {examplePrompts.map((example) => (
+                  <button
+                    key={example}
+                    className="rounded-full border border-brand-ink/8 bg-white/60 px-4 py-2.5 text-sm font-medium text-brand-ink/70 shadow-sm transition-all hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
+                    type="button"
+                    onClick={() => {
+                      setPrompt(example);
+                    }}
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {messages.map((message) => (
+            <ChatBubble
+              key={message.id}
+              actionStates={actionStates}
+              message={message}
+              onApply={(suggestion) => void applySuggestion(suggestion)}
+              onIgnore={ignoreSuggestion}
+              onToggleEdit={toggleEdit}
+              onUpdateSuggestion={updateSuggestion}
+            />
+          ))}
+
+          {isSubmitting ? (
+             <div className="flex justify-start">
+               <div className="flex h-[52px] items-center rounded-2xl border border-white/60 bg-white/70 px-5 shadow-sm">
+                 <div className="flex gap-1.5">
+                   <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40"></div>
+                   <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]"></div>
+                   <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.4s]"></div>
+                 </div>
+               </div>
+             </div>
+          ) : null}
+
+          {error ? (
+            <div className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/8 p-4 text-center text-sm leading-6 text-brand-coral">
+              {error}
+            </div>
+          ) : null}
+
+          <div ref={chatEndRef} />
+        </div>
+      </main>
+
+      {/* Floating Sticky Composer */}
+      {status === "signed_out" ? (
+        <div className="fixed inset-x-0 bottom-[80px] z-40 mx-auto px-4 sm:bottom-10 sm:max-w-3xl sm:px-6">
+          <Card className="rounded-[24px] border-white/70 bg-white/90 shadow-[0_16px_40px_rgba(18,32,47,0.12)] backdrop-blur-md">
+            <CardContent className="flex flex-col items-center gap-4 p-5 text-center sm:flex-row sm:justify-between sm:text-left">
+              <div>
+                <p className="text-base font-semibold text-brand-ink">
+                  Sign in to use Planning Assistant
+                </p>
+                <p className="mt-1 text-sm text-brand-ink/60">
+                  The assistant reviews your signed-in schedule securely.
+                </p>
+              </div>
+              <Link
+                href="/"
+                className="inline-flex h-11 shrink-0 items-center justify-center rounded-2xl bg-brand-ink px-5 text-sm font-semibold text-white"
+              >
+                Sign in
+              </Link>
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <div className="fixed inset-x-0 bottom-[80px] z-40 mx-auto px-4 sm:bottom-10 sm:max-w-3xl sm:px-6">
+          <form onSubmit={handleSubmit} className="relative">
+            <div className="flex flex-col gap-2 rounded-[28px] border border-white/80 bg-white/84 p-2 shadow-[0_16px_40px_rgba(18,32,47,0.1)] backdrop-blur-xl sm:flex-row sm:items-end sm:rounded-full sm:p-2.5">
+              <div className="relative flex-1">
+                <textarea
+                  className="min-h-[48px] w-full resize-none bg-transparent px-4 py-3 text-base text-brand-ink placeholder:text-brand-ink/40 focus:outline-none sm:min-h-[52px] sm:max-h-40"
+                  disabled={isBusy}
+                  maxLength={2000}
+                  placeholder="Ask Schedule Builder to help plan..."
+                  rows={1}
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendPrompt(prompt);
+                    }
+                  }}
+                />
+              </div>
+              <Button
+                className="h-12 w-full shrink-0 rounded-[20px] px-6 text-sm font-semibold sm:h-[52px] sm:w-auto sm:rounded-full"
+                disabled={isBusy || !prompt.trim()}
+                type="submit"
+              >
+                Send
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
