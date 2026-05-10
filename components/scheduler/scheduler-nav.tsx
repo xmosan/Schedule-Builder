@@ -5,7 +5,13 @@ import { usePathname } from "next/navigation";
 import { FolderStackIcon } from "@/components/projects/icons";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+type SchedulerNavItem = {
+  href: string;
+  label: string;
+  mobileLabel: string;
+};
+
+const desktopNavItems: SchedulerNavItem[] = [
   {
     href: "/",
     label: "Dashboard",
@@ -22,9 +28,14 @@ const navItems = [
     mobileLabel: "Plan",
   },
   {
+    href: "/work",
+    label: "Work Schedule",
+    mobileLabel: "Work",
+  },
+  {
     href: "/assistant",
     label: "Assistant",
-    mobileLabel: "AI",
+    mobileLabel: "Assistant",
   },
   {
     href: "/integrations",
@@ -36,7 +47,40 @@ const navItems = [
     label: "Settings",
     mobileLabel: "Settings",
   },
-] as const;
+];
+
+const mobileNavItems: SchedulerNavItem[] = [
+  {
+    href: "/",
+    label: "Dashboard",
+    mobileLabel: "Home",
+  },
+  {
+    href: "/projects",
+    label: "Projects",
+    mobileLabel: "Projects",
+  },
+  {
+    href: "/plan",
+    label: "Plan",
+    mobileLabel: "Plan",
+  },
+  {
+    href: "/work",
+    label: "Work Schedule",
+    mobileLabel: "Work",
+  },
+  {
+    href: "/assistant",
+    label: "Assistant",
+    mobileLabel: "AI",
+  },
+  {
+    href: "/settings",
+    label: "Settings",
+    mobileLabel: "Settings",
+  },
+];
 
 function isActiveRoute(pathname: string, href: string) {
   if (href === "/") {
@@ -64,7 +108,7 @@ export function SchedulerNav() {
               Schedule Builder
             </p>
             <p className="truncate text-sm font-semibold text-brand-ink sm:text-base">
-              Projects, weekly planning, AI review, and integrations
+              Projects, weekly planning, assistant, and integrations
             </p>
           </div>
         </Link>
@@ -73,7 +117,7 @@ export function SchedulerNav() {
           aria-label="Scheduler navigation"
           className="hidden items-center gap-2 md:flex"
         >
-          {navItems.map((item) => {
+          {desktopNavItems.map((item) => {
             const isActive = isActiveRoute(pathname, item.href);
 
             return (
@@ -99,7 +143,7 @@ export function SchedulerNav() {
         aria-label="Mobile scheduler navigation"
         className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-50 grid grid-cols-6 gap-1 rounded-[24px] border border-white/70 bg-white/92 p-1.5 shadow-[0_18px_44px_rgba(18,32,47,0.18)] backdrop-blur md:hidden"
       >
-        {navItems.map((item) => {
+        {mobileNavItems.map((item) => {
           const isActive = isActiveRoute(pathname, item.href);
 
           return (

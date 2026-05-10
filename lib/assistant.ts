@@ -10,6 +10,11 @@ import {
   type WeekDay,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
+import {
+  formatWorkShiftRange,
+  getWorkShiftDurationHours,
+  type WorkShift,
+} from "@/lib/work-schedule";
 
 export const assistantSuggestionTypes = [
   "suggested_weekly_block",
@@ -37,11 +42,14 @@ export type AssistantContextSummary = {
   plannerType: PlannerType | "Unknown";
   totalWeeklyBlockHours: number;
   weeklyBlocksCount: number;
+  workScheduleHours: number;
+  workShiftsCount: number;
 };
 
 export type AssistantPlanningContext = AssistantContextSummary & {
   projects: Project[];
   weeklyPlanBlocks: WeeklyPlanBlock[];
+  workShifts: WorkShift[];
 };
 
 export type AssistantSuggestion = {
@@ -61,6 +69,8 @@ export type AssistantSuggestion = {
 };
 
 export type AssistantPlanReviewResponse = {
+  actions: AssistantSuggestion[];
+  assistantMessage: string;
   context: AssistantContextSummary;
   message: string;
   source: AssistantSource;
@@ -105,10 +115,20 @@ function createSuggestionId(prefix: string, index: number) {
   return `${prefix}-${index + 1}`;
 }
 
-function getLeastLoadedDay(blocks: WeeklyPlanBlock[]): WeekDay {
+function getLeastLoadedDay(
+  blocks: WeeklyPlanBlock[],
+  workShifts: WorkShift[] = [],
+): WeekDay {
   const hoursByDay = new Map<WeekDay, number>(
     weekDays.map((day) => [day, 0]),
   );
+
+  workShifts.forEach((shift) => {
+    hoursByDay.set(
+      shift.day,
+      (hoursByDay.get(shift.day) ?? 0) + getWorkShiftDurationHours(shift),
+    );
+  });
 
   blocks.forEach((block) => {
     hoursByDay.set(block.day, (hoursByDay.get(block.day) ?? 0) + block.estimatedHours);
@@ -118,6 +138,33 @@ function getLeastLoadedDay(blocks: WeeklyPlanBlock[]): WeekDay {
     (first, second) =>
       (hoursByDay.get(first) ?? 0) - (hoursByDay.get(second) ?? 0),
   )[0];
+}
+
+function getWorkShiftRangesForDay(workShifts: WorkShift[], day: WeekDay) {
+  return workShifts
+    .filter((shift) => shift.day === day)
+    .map(formatWorkShiftRange);
+}
+
+function createWorkAwareBlockDescription({
+  day,
+  estimatedHours,
+  nextAction,
+  workShifts,
+}: {
+  day: WeekDay;
+  estimatedHours: number;
+  nextAction: string;
+  workShifts: WorkShift[];
+}) {
+  const workRanges = getWorkShiftRangesForDay(workShifts, day);
+  const baseDescription = `Add a ${estimatedHours} hr block on ${day} for "${nextAction}".`;
+
+  if (workRanges.length === 0) {
+    return baseDescription;
+  }
+
+  return `${baseDescription} Plan it outside your work shift (${workRanges.join(", ")}).`;
 }
 
 function normalizeSuggestion(
@@ -193,6 +240,7 @@ export function createAssistantContextSummary(
   projects: Project[],
   weeklyPlanBlocks: WeeklyPlanBlock[],
   plannerType: PlannerType | "Unknown",
+  workShifts: WorkShift[] = [],
 ): AssistantContextSummary {
   return {
     activeProjectsCount: projects.filter((project) => !project.completed).length,
@@ -203,6 +251,11 @@ export function createAssistantContextSummary(
       0,
     ),
     weeklyBlocksCount: weeklyPlanBlocks.length,
+    workScheduleHours: workShifts.reduce(
+      (sum, shift) => sum + getWorkShiftDurationHours(shift),
+      0,
+    ),
+    workShiftsCount: workShifts.length,
   };
 }
 
@@ -210,11 +263,18 @@ export function createAssistantPlanningContext(
   projects: Project[],
   weeklyPlanBlocks: WeeklyPlanBlock[],
   plannerType: PlannerType | "Unknown",
+  workShifts: WorkShift[] = [],
 ): AssistantPlanningContext {
   return {
-    ...createAssistantContextSummary(projects, weeklyPlanBlocks, plannerType),
+    ...createAssistantContextSummary(
+      projects,
+      weeklyPlanBlocks,
+      plannerType,
+      workShifts,
+    ),
     projects,
     weeklyPlanBlocks,
+    workShifts,
   };
 }
 
@@ -235,15 +295,22 @@ export function normalizeAssistantSuggestions(
 export function createContextOnlyAssistantResponse(
   context: AssistantPlanningContext,
 ): AssistantPlanReviewResponse {
+  const assistantMessage =
+    "I’m ready to help. Tell me what you want to plan, and I’ll suggest practical next steps you can approve before anything changes.";
+
   return {
+    actions: [],
+    assistantMessage,
     context: {
       activeProjectsCount: context.activeProjectsCount,
       plannedWeeklyHours: context.plannedWeeklyHours,
       plannerType: context.plannerType,
       totalWeeklyBlockHours: context.totalWeeklyBlockHours,
       weeklyBlocksCount: context.weeklyBlocksCount,
+      workScheduleHours: context.workScheduleHours,
+      workShiftsCount: context.workShiftsCount,
     },
-    message: "Context loaded. Ask for planning help to generate reviewable suggestions.",
+    message: assistantMessage,
     source: "fallback",
     suggestions: [],
   };
@@ -275,18 +342,26 @@ export function createFallbackAssistantResponse(
           plannedTask: suggestion.plannedTask ?? "",
           estimatedHours: suggestion.estimatedHours ?? 1,
         })),
-    ]);
+    ], context.workShifts);
     const estimatedHours = Math.max(1, Math.min(2, project.weeklyHours));
+    const description = createWorkAwareBlockDescription({
+      day,
+      estimatedHours,
+      nextAction: project.nextAction,
+      workShifts: context.workShifts,
+    });
 
     suggestions.push({
       id: createSuggestionId("weekly-block", suggestions.length),
       type: "suggested_weekly_block",
       title: `Schedule ${project.name}`,
-      description: `Add a ${estimatedHours} hr block on ${day} for "${project.nextAction}".`,
+      description,
       confidence: 0.8,
-      summary: `Add a ${estimatedHours} hr block on ${day} for "${project.nextAction}".`,
+      summary: description,
       rationale:
-        "This project is high priority and does not yet appear in your weekly plan blocks.",
+        getWorkShiftRangesForDay(context.workShifts, day).length > 0
+          ? "This project is high priority and does not yet appear in your weekly plan blocks. The suggested day includes work hours, so keep the block outside that shift."
+          : "This project is high priority and does not yet appear in your weekly plan blocks.",
       severity: "important",
       projectName: project.name,
       day,
@@ -354,6 +429,9 @@ export function createFallbackAssistantResponse(
     const dayHours = context.weeklyPlanBlocks
       .filter((block) => block.day === day)
       .reduce((sum, block) => sum + block.estimatedHours, 0);
+    const workHours = context.workShifts
+      .filter((shift) => shift.day === day)
+      .reduce((sum, shift) => sum + getWorkShiftDurationHours(shift), 0);
 
     if (dayHours > 6) {
       suggestions.push({
@@ -365,6 +443,21 @@ export function createFallbackAssistantResponse(
         summary: `${day} has ${dayHours} hrs of planned blocks. Consider moving one block to a lighter day.`,
         rationale:
           "Daily overload warnings are review-only and will not move anything automatically.",
+        severity: "warning",
+        day,
+      });
+    }
+
+    if (workHours > 0 && dayHours + workHours > 10) {
+      suggestions.push({
+        id: createSuggestionId(`work-aware-${day.toLowerCase()}`, suggestions.length),
+        type: "workload_warning",
+        title: `${day} has work plus project blocks`,
+        description: `${day} already includes ${workHours} hrs of work and ${dayHours} hrs of planned blocks. Keep project work outside shifts or move a block to a lighter day.`,
+        confidence: 0.72,
+        summary: `${day} has work hours and project blocks. Avoid stacking project work during work shifts.`,
+        rationale:
+          "Work shifts are read-only context. Schedule Builder will not move anything automatically.",
         severity: "warning",
         day,
       });
@@ -389,16 +482,52 @@ export function createFallbackAssistantResponse(
     });
   }
 
+  const assistantMessage =
+    suggestions.length > 0
+      ? "I found a few planning ideas. Review the actions below and apply only the ones you want."
+      : "Your plan looks workable from what I can see. You can ask me for a more specific review if you want.";
+
   return {
+    actions: suggestions
+      .sort((first, second) => {
+        const severityScore: Record<AssistantSuggestionSeverity, number> = {
+          important: 3,
+          warning: 2,
+          info: 1,
+        };
+
+        if (severityScore[second.severity] !== severityScore[first.severity]) {
+          return severityScore[second.severity] - severityScore[first.severity];
+        }
+
+        if (first.projectName && second.projectName) {
+          const firstProject = activeProjects.find(
+            (project) => project.name === first.projectName,
+          );
+          const secondProject = activeProjects.find(
+            (project) => project.name === second.projectName,
+          );
+
+          return (
+            (secondProject ? priorityScore[secondProject.priority] : 0) -
+            (firstProject ? priorityScore[firstProject.priority] : 0)
+          );
+        }
+
+        return 0;
+      })
+      .slice(0, 8),
+    assistantMessage,
     context: {
       activeProjectsCount: context.activeProjectsCount,
       plannedWeeklyHours: context.plannedWeeklyHours,
       plannerType: context.plannerType,
       totalWeeklyBlockHours: context.totalWeeklyBlockHours,
       weeklyBlocksCount: context.weeklyBlocksCount,
+      workScheduleHours: context.workScheduleHours,
+      workShiftsCount: context.workShiftsCount,
     },
-    message:
-      "Generated safe review suggestions. Nothing has been saved or changed.",
+    message: assistantMessage,
     source: "fallback",
     suggestions: suggestions
       .sort((first, second) => {

@@ -34,6 +34,7 @@
     "components/projects/**/*.tsx",
     "components/scheduler/**/*.tsx",
     "components/ui/**/*.tsx",
+    "components/work/**/*.tsx",
     "lib/**/*.ts",
     ".next/types/**/*.ts"
   ],

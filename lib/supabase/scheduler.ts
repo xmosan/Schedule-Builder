@@ -11,6 +11,7 @@ import {
 } from "@/lib/onboarding";
 import type { Project, ProjectCategory, ProjectPriority } from "@/lib/projects";
 import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
+import type { WorkShift, WorkShiftDraft } from "@/lib/work-schedule";
 
 type SchedulerSyncError = Error | PostgrestError;
 
@@ -46,6 +47,17 @@ type PlannerProfileRow = {
   desired_integrations: string[] | null;
   schedule_intensity: ScheduleIntensity;
   onboarding_completed: boolean;
+};
+
+type WorkShiftRow = {
+  id: string;
+  user_id: string;
+  day: WeekDay;
+  start_time: string;
+  end_time: string;
+  location: string | null;
+  notes: string | null;
+  recurring: boolean;
 };
 
 function createTimeoutError(operation: string) {
@@ -139,6 +151,33 @@ function mapPlannerProfileRowToProfile(row: PlannerProfileRow): PlannerProfile {
     desiredIntegrations: normalizeDesiredIntegrations(row.desired_integrations),
     scheduleIntensity: normalizeScheduleIntensity(row.schedule_intensity),
     onboardingCompleted: row.onboarding_completed,
+  };
+}
+
+function mapWorkShiftRowToWorkShift(row: WorkShiftRow): WorkShift {
+  return {
+    id: row.id,
+    day: row.day,
+    startTime: row.start_time.slice(0, 5),
+    endTime: row.end_time.slice(0, 5),
+    location: row.location ?? "",
+    notes: row.notes ?? "",
+    recurring: row.recurring,
+  };
+}
+
+function mapWorkShiftDraftToRow(
+  userId: string,
+  draft: WorkShiftDraft,
+): Omit<WorkShiftRow, "id"> {
+  return {
+    user_id: userId,
+    day: draft.day,
+    start_time: draft.startTime,
+    end_time: draft.endTime,
+    location: draft.location.trim(),
+    notes: draft.notes.trim(),
+    recurring: draft.recurring,
   };
 }
 
@@ -366,4 +405,65 @@ export async function replaceWeeklyPlanBlocksForUser(
   );
 
   return { error: deleteError };
+}
+
+export async function fetchWorkShiftsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("work_shifts")
+      .select(
+        "id, user_id, day, start_time, end_time, location, notes, recurring",
+      )
+      .eq("user_id", userId)
+      .order("day", { ascending: true })
+      .order("start_time", { ascending: true }),
+    "Loading work schedule from Supabase",
+  );
+
+  return {
+    data: result.data?.map((row) => mapWorkShiftRowToWorkShift(row as WorkShiftRow)) ?? [],
+    error: result.error,
+  };
+}
+
+export async function createWorkShiftForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  draft: WorkShiftDraft,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("work_shifts")
+      .insert(mapWorkShiftDraftToRow(userId, draft))
+      .select("id, user_id, day, start_time, end_time, location, notes, recurring")
+      .single(),
+    "Saving work shift to Supabase",
+  );
+
+  return {
+    data: result.data
+      ? mapWorkShiftRowToWorkShift(result.data as WorkShiftRow)
+      : null,
+    error: result.error,
+  };
+}
+
+export async function deleteWorkShiftForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  shiftId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("work_shifts")
+      .delete()
+      .eq("user_id", userId)
+      .eq("id", shiftId),
+    "Removing work shift from Supabase",
+  );
+
+  return { error: result.error };
 }

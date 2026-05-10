@@ -15,6 +15,7 @@ import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
 import {
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
+  fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
 
@@ -31,7 +32,7 @@ const assistantResponseJsonSchema = {
     message: {
       type: "string",
       description:
-        "A concise note explaining that suggestions are reviewable and nothing was saved automatically.",
+        "A friendly plain-language assistant reply. It should explain the planning ideas conversationally and remind the user that they choose what to apply.",
     },
     suggestions: {
       type: "array",
@@ -186,15 +187,17 @@ async function getAuthenticatedUser(
 }
 
 async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
-  const [profileResult, projectsResult, weeklyPlanResult] = await Promise.all([
+  const [profileResult, projectsResult, weeklyPlanResult, workShiftsResult] = await Promise.all([
     fetchPlannerProfileForUser(supabase, userId),
     fetchProjectsForUser(supabase, userId),
     fetchWeeklyPlanBlocksForUser(supabase, userId),
+    fetchWorkShiftsForUser(supabase, userId),
   ]);
   const loadErrors = [
     profileResult.error,
     projectsResult.error,
     weeklyPlanResult.error,
+    workShiftsResult.error,
   ].filter(Boolean);
 
   const profile = profileResult.error == null ? profileResult.data : null;
@@ -207,6 +210,7 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
       projectsResult.error == null ? projectsResult.data : [],
       weeklyPlanResult.error == null ? weeklyPlanResult.data : [],
       plannerType,
+      workShiftsResult.error == null ? workShiftsResult.data : [],
     ),
     profile,
     warning:
@@ -226,12 +230,15 @@ function createAiPrompt(
   return [
     "You are Schedule Builder's AI Plan Review assistant.",
     "Return JSON only matching the provided schema.",
-    "Return only reviewable planning suggestions. Do not claim anything was saved.",
+    "Return a friendly plain-language message first, then reviewable planning suggestions.",
+    "Do not claim anything was saved.",
     "Do not create calendar events.",
     "Do not mark projects done.",
     "Do not delete anything.",
     "Do not suggest destructive overwrites.",
     "Prefer additive weekly plan suggestions for active projects.",
+    "Use the work schedule as unavailable time. Avoid suggesting weekly project blocks during work shifts.",
+    "Weekly plan blocks do not have exact start times yet. Prefer lighter non-work days when possible, and if a block lands on a work day, explain that it should happen outside work hours.",
     "Allowed suggestion types only: suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
     "Every suggestion must include id, type, title, description, confidence, rationale, and severity.",
     "For optional fields that do not apply, return an empty string or 0.",
@@ -261,6 +268,8 @@ function createAiPrompt(
     `Planned weekly project hours: ${context.plannedWeeklyHours}`,
     `Weekly plan blocks: ${context.weeklyBlocksCount}`,
     `Weekly block hours: ${context.totalWeeklyBlockHours}`,
+    `Work shifts: ${context.workShiftsCount}`,
+    `Work schedule hours: ${context.workScheduleHours}`,
     "",
     "Projects:",
     JSON.stringify(
@@ -282,6 +291,18 @@ function createAiPrompt(
         projectName: block.projectName,
         plannedTask: block.plannedTask,
         estimatedHours: block.estimatedHours,
+      })),
+    ),
+    "",
+    "Work shifts:",
+    JSON.stringify(
+      context.workShifts.map((shift) => ({
+        day: shift.day,
+        startTime: shift.startTime,
+        endTime: shift.endTime,
+        location: shift.location,
+        notes: shift.notes,
+        recurring: shift.recurring,
       })),
     ),
   ].join("\n");
@@ -354,10 +375,14 @@ export async function GET(request: NextRequest) {
     authResult.userId,
   );
   const response = createContextOnlyAssistantResponse(context);
+  const nextMessage = warning
+    ? `${response.message} ${warning}`
+    : response.message;
 
   return NextResponse.json({
     ...response,
-    message: warning ? `${response.message} ${warning}` : response.message,
+    assistantMessage: nextMessage,
+    message: nextMessage,
   });
 }
 
@@ -390,11 +415,13 @@ export async function POST(request: NextRequest) {
     authResult.userId,
   );
   const fallbackResponse = createFallbackAssistantResponse(context, prompt);
+  const fallbackMessage = warning
+    ? `${fallbackResponse.message} ${warning}`
+    : fallbackResponse.message;
   const fallbackWithWarning: AssistantPlanReviewResponse = {
     ...fallbackResponse,
-    message: warning
-      ? `${fallbackResponse.message} ${warning}`
-      : fallbackResponse.message,
+    assistantMessage: fallbackMessage,
+    message: fallbackMessage,
   };
 
   if (!process.env.OPENAI_API_KEY) {
@@ -404,16 +431,23 @@ export async function POST(request: NextRequest) {
   try {
     const aiResponse = await createOpenAiSuggestions(prompt, context, profile);
 
+    const aiMessage = warning ? `${aiResponse.message} ${warning}` : aiResponse.message;
+
     return NextResponse.json({
+      actions: aiResponse.suggestions,
+      assistantMessage: aiMessage,
       context: fallbackResponse.context,
-      message: warning ? `${aiResponse.message} ${warning}` : aiResponse.message,
+      message: aiMessage,
       source: "ai",
       suggestions: aiResponse.suggestions,
     } satisfies AssistantPlanReviewResponse);
   } catch (error) {
+    const fallbackMessage = `${fallbackWithWarning.message} I had trouble reaching the AI model, so I used the built-in planning rules instead. ${getErrorMessage(error)}`;
+
     return NextResponse.json({
       ...fallbackWithWarning,
-      message: `${fallbackWithWarning.message} OpenAI was unavailable or returned invalid output, so rule-based fallback suggestions were used. ${getErrorMessage(error)}`,
+      assistantMessage: fallbackMessage,
+      message: fallbackMessage,
     });
   }
 }

@@ -28,9 +28,10 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `https://schedule-builder-ruddy.vercel.app`
    - Any Vercel preview URLs you want to test
 7. In Supabase SQL Editor, run the SQL in `supabase/schema.sql`.
-   - This creates `projects`, `weekly_plan_blocks`, and `planner_profiles`.
+   - This creates `projects`, `weekly_plan_blocks`, `planner_profiles`, and `work_shifts`.
    - `planner_profiles` stores onboarding answers and uses Row Level Security so each user only sees their own setup.
-   - If your existing Supabase project already has the scheduler tables, you can run only `supabase/onboarding.sql` to add onboarding.
+   - `work_shifts` stores manual work availability and uses Row Level Security so each user only sees their own shifts.
+   - If your existing Supabase project already has the scheduler tables, you can run `supabase/onboarding.sql` for onboarding and `supabase/work-shifts.sql` for work schedule support.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.
    - Magic link sign-in also uses the Email provider.
@@ -71,7 +72,7 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
 - Users can also request a magic link.
 - Users can continue with Google through Supabase Auth.
 - First-time signed-in users complete a short onboarding questionnaire. Their answers are saved to `planner_profiles`.
-- Projects and weekly plan blocks are scoped to the signed-in user in Supabase through Row Level Security policies.
+- Projects, weekly plan blocks, and work shifts are scoped to the signed-in user in Supabase through Row Level Security policies.
 - Local storage is still kept as a per-user fallback cache in case Supabase is temporarily unavailable.
 
 ## Calendar export
@@ -85,15 +86,24 @@ Weekly Plan blocks can be exported as an `.ics` file for Apple Calendar, Google 
 
 Each block becomes a calendar event using the project name as the title, the planned task as the description, and the estimated hours as the event duration. Blocks start at 9:00 AM on each selected day and stack in the order shown.
 
-## AI Plan Review
+## Work Schedule
 
-The `/assistant` page gives signed-in users a safe planning workspace. Users can ask for help planning the week, then review structured suggestions before applying approved changes.
+The `/work` page lets signed-in users add recurring or one-time work shifts manually. Add the day, start time, end time, optional location, optional notes, and whether the shift repeats weekly.
 
-- Approved suggestions can be applied only after an explicit confirmation.
+- Work shifts are saved in the `work_shifts` table in Supabase.
+- RLS policies keep each user's shifts private.
+- The Planning Assistant can read work shifts as unavailable-time context and will prefer lighter non-work days or warn users to place weekly blocks outside work hours.
+- Existing Weekly Plan blocks are not moved automatically.
+
+## Planning Assistant
+
+The `/assistant` page gives signed-in users a chat-style planning workspace. Users can ask naturally for help planning the week, then review structured action cards before applying approved changes.
+
+- Action cards can be applied or ignored one at a time.
 - Safe apply supports adding weekly plan blocks and updating approved next actions.
-- Rejected suggestions are never sent to the apply endpoint, and informational warnings are skipped instead of written.
+- Ignored suggestions are never sent to the apply endpoint, and informational warnings are skipped instead of written.
 - The assistant can suggest weekly blocks, next actions, workload warnings, and missing or unclear project details.
-- The server routes load the signed-in user's projects, weekly plan blocks, and onboarding profile from Supabase. The client never sends or controls `user_id`.
+- The server routes load the signed-in user's projects, weekly plan blocks, work shifts, and onboarding profile from Supabase. The client never sends or controls `user_id`.
 - `OPENAI_API_KEY` is optional. If it is configured, `/api/assistant/plan` uses the OpenAI Responses API through the official `openai` JavaScript SDK.
 - If `OPENAI_API_KEY` is missing or OpenAI returns invalid output, the assistant returns deterministic rule-based fallback suggestions.
 - `AI_MODEL` is optional and defaults to `gpt-4o-mini`.
@@ -105,7 +115,8 @@ The `/assistant` page gives signed-in users a safe planning workspace. Users can
 - `/` is the focused dashboard with Today's Top 3, weekly summary, focus rule, and quick links.
 - `/projects` contains the project list and add-project form.
 - `/plan` contains Weekly Plan blocks, the add-block form, and calendar export.
-- `/assistant` contains AI Plan Review suggestions with safe approval/rejection controls.
+- `/work` contains manual work shift entry and the weekly work schedule view.
+- `/assistant` contains the Planning Assistant chat with safe action cards.
 - `/integrations` contains personalized integration recommendations.
 - `/settings` contains account and sync status.
 
@@ -132,20 +143,22 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 ## What’s inside
 
 - `app/` contains the App Router layout, homepage, and metadata routes.
-- `app/api/assistant/plan/route.ts` contains the server-side AI Plan Review endpoint.
+- `app/api/assistant/plan/route.ts` contains the server-side Planning Assistant endpoint.
 - `app/api/assistant/apply/route.ts` validates and applies approved assistant suggestions safely.
 - `app/manifest.ts` defines the PWA install manifest.
-- `components/assistant/` contains the AI Plan Review workspace UI.
+- `components/assistant/` contains the Planning Assistant chat UI.
 - `components/auth/` contains the authentication entry UI.
 - `components/onboarding/` contains the first-run setup questionnaire.
 - `components/projects/` contains the scheduler feature components, including the weekly planner.
 - `components/pwa/` contains the browser service worker registration.
 - `components/ui/` contains lightweight reusable UI primitives used by the app.
+- `components/work/` contains the manual work schedule UI.
 - `lib/calendar-export.ts` generates downloadable calendar files for Weekly Plan exports.
 - `lib/assistant.ts` contains assistant response types, context summaries, and fallback suggestion rules.
 - `lib/projects.ts` holds project types, storage helpers, and ranking helpers for the Top 3 logic.
 - `lib/onboarding.ts` holds onboarding types, answer options, and use-case starter projects.
 - `lib/weekly-plan.ts` holds weekly plan types, storage helpers, and planner utilities.
+- `lib/work-schedule.ts` holds work shift types, validation, sorting, and time formatting helpers.
 - `lib/supabase/` contains the Supabase browser client and scheduler sync helpers.
 - `public/` contains PWA icons and the lightweight service worker.
 - `supabase/schema.sql` contains the database tables and RLS policies required for sync.

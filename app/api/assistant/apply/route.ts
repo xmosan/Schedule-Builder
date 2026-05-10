@@ -11,9 +11,11 @@ import type { Project } from "@/lib/projects";
 import {
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
+  fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
 import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
+import { formatWorkShiftRange, type WorkShift } from "@/lib/work-schedule";
 
 export const dynamic = "force-dynamic";
 
@@ -160,6 +162,7 @@ async function applyWeeklyBlockSuggestion({
   suggestion,
   supabase,
   userId,
+  workShifts,
 }: {
   appliedBlockCount: number;
   currentBlocks: WeeklyPlanBlock[];
@@ -167,6 +170,7 @@ async function applyWeeklyBlockSuggestion({
   suggestion: AssistantSuggestion;
   supabase: SupabaseClient;
   userId: string;
+  workShifts: WorkShift[];
 }) {
   const projectName = suggestion.projectName?.trim();
   const plannedTask = suggestion.plannedTask?.trim();
@@ -226,7 +230,17 @@ async function applyWeeklyBlockSuggestion({
     estimatedHours: row.estimated_hours,
   });
 
-  return createResult(suggestion, "applied", "Created a weekly plan block.");
+  const workRanges = workShifts
+    .filter((shift) => shift.day === row.day)
+    .map(formatWorkShiftRange);
+
+  return createResult(
+    suggestion,
+    "applied",
+    workRanges.length > 0
+      ? `Created a weekly plan block. This day has work shifts (${workRanges.join(", ")}), so place the block outside those hours.`
+      : "Created a weekly plan block.",
+  );
 }
 
 async function applyNextActionSuggestion({
@@ -276,10 +290,11 @@ async function applyNextActionSuggestion({
 }
 
 async function loadContextSummary(supabase: SupabaseClient, userId: string) {
-  const [profileResult, projectsResult, weeklyPlanResult] = await Promise.all([
+  const [profileResult, projectsResult, weeklyPlanResult, workShiftsResult] = await Promise.all([
     fetchPlannerProfileForUser(supabase, userId),
     fetchProjectsForUser(supabase, userId),
     fetchWeeklyPlanBlocksForUser(supabase, userId),
+    fetchWorkShiftsForUser(supabase, userId),
   ]);
 
   return createAssistantContextSummary(
@@ -288,6 +303,7 @@ async function loadContextSummary(supabase: SupabaseClient, userId: string) {
     profileResult.error == null && profileResult.data
       ? profileResult.data.plannerType
       : "Unknown",
+    workShiftsResult.error == null ? workShiftsResult.data : [],
   );
 }
 
@@ -330,9 +346,10 @@ export async function POST(request: NextRequest) {
     };
   });
 
-  const [projectsResult, weeklyPlanResult] = await Promise.all([
+  const [projectsResult, weeklyPlanResult, workShiftsResult] = await Promise.all([
     fetchProjectsForUser(authResult.supabase, authResult.userId),
     fetchWeeklyPlanBlocksForUser(authResult.supabase, authResult.userId),
+    fetchWorkShiftsForUser(authResult.supabase, authResult.userId),
   ]);
 
   if (projectsResult.error || weeklyPlanResult.error) {
@@ -352,6 +369,7 @@ export async function POST(request: NextRequest) {
 
   const currentProjects = [...projectsResult.data];
   const currentBlocks = [...weeklyPlanResult.data];
+  const workShifts = workShiftsResult.error ? [] : [...workShiftsResult.data];
   const results: AssistantApplyResult[] = [];
   let appliedBlockCount = 0;
 
@@ -382,6 +400,7 @@ export async function POST(request: NextRequest) {
         suggestion: item.normalized,
         supabase: authResult.supabase,
         userId: authResult.userId,
+        workShifts,
       });
 
       results.push(result);

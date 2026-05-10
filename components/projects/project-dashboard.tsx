@@ -209,6 +209,53 @@ function AccountCard({ dataMessage, email, onSignOut }: AccountCardProps) {
   );
 }
 
+function SettingsQuickLinksCard() {
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+          Planning setup
+        </p>
+        <div className="mt-4 grid gap-3">
+          <Link
+            className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink hover:-translate-y-0.5 hover:bg-white"
+            href="/work"
+          >
+            <div className="flex items-center gap-3">
+              <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
+                <CalendarIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Work Schedule</p>
+                <p className="text-sm leading-5 text-brand-ink/58">
+                  Add unavailable work hours.
+                </p>
+              </div>
+            </div>
+          </Link>
+
+          <Link
+            className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink hover:-translate-y-0.5 hover:bg-white"
+            href="/integrations"
+          >
+            <div className="flex items-center gap-3">
+              <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
+                <TargetIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Integrations</p>
+                <p className="text-sm leading-5 text-brand-ink/58">
+                  Review calendar connection options.
+                </p>
+              </div>
+            </div>
+          </Link>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ProjectDashboard() {
   const pathname = usePathname();
   const currentSection = getSchedulerSection(pathname);
@@ -1020,6 +1067,7 @@ export function ProjectDashboard() {
                   completedProjects={completedProjects}
                 />
                 <FocusRuleCard />
+                <SettingsQuickLinksCard />
               </div>
             </section>
           </>
