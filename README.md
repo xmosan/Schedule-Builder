@@ -85,11 +85,22 @@ Weekly Plan blocks can be exported as an `.ics` file for Apple Calendar, Google 
 
 Each block becomes a calendar event using the project name as the title, the planned task as the description, and the estimated hours as the event duration. Blocks start at 9:00 AM on each selected day and stack in the order shown.
 
+## AI Plan Review
+
+The `/assistant` page gives signed-in users a safe planning workspace. Users can ask for help planning the week, then review structured suggestions before anything is changed.
+
+- V1 is review-only: approving and rejecting suggestions is local UI state, and the app does not save AI suggestions automatically.
+- The assistant can suggest weekly blocks, next actions, workload warnings, and missing or unclear project details.
+- The server route loads the signed-in user's projects, weekly plan blocks, and onboarding profile from Supabase. The client never sends or controls `user_id`.
+- `OPENAI_API_KEY` is optional. If it is not configured, the assistant returns deterministic rule-based fallback suggestions.
+- If you add `OPENAI_API_KEY`, keep it server-side only in `.env.local` or Vercel environment variables. Do not prefix it with `NEXT_PUBLIC_`.
+
 ## App sections
 
 - `/` is the focused dashboard with Today's Top 3, weekly summary, focus rule, and quick links.
 - `/projects` contains the project list and add-project form.
 - `/plan` contains Weekly Plan blocks, the add-block form, and calendar export.
+- `/assistant` contains AI Plan Review suggestions with safe approval/rejection controls.
 - `/integrations` contains personalized integration recommendations.
 - `/settings` contains account and sync status.
 
@@ -116,13 +127,16 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 ## What’s inside
 
 - `app/` contains the App Router layout, homepage, and metadata routes.
+- `app/api/assistant/plan/route.ts` contains the server-side AI Plan Review endpoint.
 - `app/manifest.ts` defines the PWA install manifest.
+- `components/assistant/` contains the AI Plan Review workspace UI.
 - `components/auth/` contains the authentication entry UI.
 - `components/onboarding/` contains the first-run setup questionnaire.
 - `components/projects/` contains the scheduler feature components, including the weekly planner.
 - `components/pwa/` contains the browser service worker registration.
 - `components/ui/` contains lightweight reusable UI primitives used by the app.
 - `lib/calendar-export.ts` generates downloadable calendar files for Weekly Plan exports.
+- `lib/assistant.ts` contains assistant response types, context summaries, and fallback suggestion rules.
 - `lib/projects.ts` holds project types, storage helpers, and ranking helpers for the Top 3 logic.
 - `lib/onboarding.ts` holds onboarding types, answer options, and use-case starter projects.
 - `lib/weekly-plan.ts` holds weekly plan types, storage helpers, and planner utilities.

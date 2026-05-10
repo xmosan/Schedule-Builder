@@ -9,22 +9,32 @@ const navItems = [
   {
     href: "/",
     label: "Dashboard",
+    mobileLabel: "Home",
   },
   {
     href: "/projects",
     label: "Projects",
+    mobileLabel: "Projects",
   },
   {
     href: "/plan",
     label: "Plan",
+    mobileLabel: "Plan",
+  },
+  {
+    href: "/assistant",
+    label: "Assistant",
+    mobileLabel: "AI",
   },
   {
     href: "/integrations",
     label: "Integrations",
+    mobileLabel: "Links",
   },
   {
     href: "/settings",
     label: "Settings",
+    mobileLabel: "Settings",
   },
 ] as const;
 
@@ -54,7 +64,7 @@ export function SchedulerNav() {
               Schedule Builder
             </p>
             <p className="truncate text-sm font-semibold text-brand-ink sm:text-base">
-              Projects, weekly planning, and integrations
+              Projects, weekly planning, AI review, and integrations
             </p>
           </div>
         </Link>
@@ -87,7 +97,7 @@ export function SchedulerNav() {
 
       <nav
         aria-label="Mobile scheduler navigation"
-        className="fixed inset-x-3 bottom-3 z-50 grid grid-cols-5 gap-1 rounded-[26px] border border-white/70 bg-white/92 p-2 shadow-[0_18px_44px_rgba(18,32,47,0.18)] backdrop-blur md:hidden"
+        className="fixed inset-x-3 bottom-3 z-50 grid grid-cols-6 gap-1 rounded-[26px] border border-white/70 bg-white/92 p-2 shadow-[0_18px_44px_rgba(18,32,47,0.18)] backdrop-blur md:hidden"
       >
         {navItems.map((item) => {
           const isActive = isActiveRoute(pathname, item.href);
@@ -104,7 +114,7 @@ export function SchedulerNav() {
                   : "text-brand-ink/62 hover:bg-brand-ink/5 hover:text-brand-ink",
               )}
             >
-              {item.label}
+              {item.mobileLabel}
             </Link>
           );
         })}

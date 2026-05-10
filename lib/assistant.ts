@@ -1,0 +1,370 @@
+import type { PlannerType } from "@/lib/onboarding";
+import {
+  getPlannedHours,
+  priorityScore,
+  sortProjectsForFocus,
+  type Project,
+} from "@/lib/projects";
+import {
+  weekDays,
+  type WeekDay,
+  type WeeklyPlanBlock,
+} from "@/lib/weekly-plan";
+
+export const assistantSuggestionTypes = [
+  "suggested_weekly_block",
+  "suggested_next_action",
+  "workload_warning",
+  "missing_deadline_warning",
+  "unclear_project_warning",
+] as const;
+
+export type AssistantSuggestionType = (typeof assistantSuggestionTypes)[number];
+export type AssistantSuggestionSeverity = "info" | "warning" | "important";
+export type AssistantSource = "ai" | "fallback";
+
+export type AssistantContextSummary = {
+  activeProjectsCount: number;
+  plannedWeeklyHours: number;
+  plannerType: PlannerType | "Unknown";
+  totalWeeklyBlockHours: number;
+  weeklyBlocksCount: number;
+};
+
+export type AssistantPlanningContext = AssistantContextSummary & {
+  projects: Project[];
+  weeklyPlanBlocks: WeeklyPlanBlock[];
+};
+
+export type AssistantSuggestion = {
+  id: string;
+  type: AssistantSuggestionType;
+  title: string;
+  summary: string;
+  rationale: string;
+  severity: AssistantSuggestionSeverity;
+  projectName?: string;
+  day?: WeekDay;
+  estimatedHours?: number;
+  plannedTask?: string;
+  proposedNextAction?: string;
+};
+
+export type AssistantPlanReviewResponse = {
+  context: AssistantContextSummary;
+  message: string;
+  source: AssistantSource;
+  suggestions: AssistantSuggestion[];
+};
+
+function isSuggestionType(value: unknown): value is AssistantSuggestionType {
+  return (
+    typeof value === "string" &&
+    assistantSuggestionTypes.includes(value as AssistantSuggestionType)
+  );
+}
+
+function isSeverity(value: unknown): value is AssistantSuggestionSeverity {
+  return value === "info" || value === "warning" || value === "important";
+}
+
+function isWeekDay(value: unknown): value is WeekDay {
+  return typeof value === "string" && weekDays.includes(value as WeekDay);
+}
+
+function createSuggestionId(prefix: string, index: number) {
+  return `${prefix}-${index + 1}`;
+}
+
+function getLeastLoadedDay(blocks: WeeklyPlanBlock[]): WeekDay {
+  const hoursByDay = new Map<WeekDay, number>(
+    weekDays.map((day) => [day, 0]),
+  );
+
+  blocks.forEach((block) => {
+    hoursByDay.set(block.day, (hoursByDay.get(block.day) ?? 0) + block.estimatedHours);
+  });
+
+  return [...weekDays].sort(
+    (first, second) =>
+      (hoursByDay.get(first) ?? 0) - (hoursByDay.get(second) ?? 0),
+  )[0];
+}
+
+function normalizeSuggestion(
+  value: unknown,
+  index: number,
+): AssistantSuggestion | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const candidate = value as Partial<AssistantSuggestion>;
+
+  if (
+    !isSuggestionType(candidate.type) ||
+    typeof candidate.title !== "string" ||
+    typeof candidate.summary !== "string" ||
+    typeof candidate.rationale !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    id:
+      typeof candidate.id === "string" && candidate.id.trim()
+        ? candidate.id.trim().slice(0, 80)
+        : createSuggestionId("ai", index),
+    type: candidate.type,
+    title: candidate.title.trim().slice(0, 120),
+    summary: candidate.summary.trim().slice(0, 360),
+    rationale: candidate.rationale.trim().slice(0, 420),
+    severity: isSeverity(candidate.severity) ? candidate.severity : "info",
+    projectName:
+      typeof candidate.projectName === "string"
+        ? candidate.projectName.trim().slice(0, 120)
+        : undefined,
+    day: isWeekDay(candidate.day) ? candidate.day : undefined,
+    estimatedHours:
+      typeof candidate.estimatedHours === "number" &&
+      Number.isFinite(candidate.estimatedHours) &&
+      candidate.estimatedHours > 0
+        ? Math.min(candidate.estimatedHours, 8)
+        : undefined,
+    plannedTask:
+      typeof candidate.plannedTask === "string"
+        ? candidate.plannedTask.trim().slice(0, 220)
+        : undefined,
+    proposedNextAction:
+      typeof candidate.proposedNextAction === "string"
+        ? candidate.proposedNextAction.trim().slice(0, 220)
+        : undefined,
+  };
+}
+
+export function createAssistantContextSummary(
+  projects: Project[],
+  weeklyPlanBlocks: WeeklyPlanBlock[],
+  plannerType: PlannerType | "Unknown",
+): AssistantContextSummary {
+  return {
+    activeProjectsCount: projects.filter((project) => !project.completed).length,
+    plannedWeeklyHours: getPlannedHours(projects),
+    plannerType,
+    totalWeeklyBlockHours: weeklyPlanBlocks.reduce(
+      (sum, block) => sum + block.estimatedHours,
+      0,
+    ),
+    weeklyBlocksCount: weeklyPlanBlocks.length,
+  };
+}
+
+export function createAssistantPlanningContext(
+  projects: Project[],
+  weeklyPlanBlocks: WeeklyPlanBlock[],
+  plannerType: PlannerType | "Unknown",
+): AssistantPlanningContext {
+  return {
+    ...createAssistantContextSummary(projects, weeklyPlanBlocks, plannerType),
+    projects,
+    weeklyPlanBlocks,
+  };
+}
+
+export function normalizeAssistantSuggestions(
+  value: unknown,
+): AssistantSuggestion[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index) => normalizeSuggestion(item, index))
+    .filter((item): item is AssistantSuggestion => item !== null)
+    .slice(0, 8);
+}
+
+export function createContextOnlyAssistantResponse(
+  context: AssistantPlanningContext,
+): AssistantPlanReviewResponse {
+  return {
+    context: {
+      activeProjectsCount: context.activeProjectsCount,
+      plannedWeeklyHours: context.plannedWeeklyHours,
+      plannerType: context.plannerType,
+      totalWeeklyBlockHours: context.totalWeeklyBlockHours,
+      weeklyBlocksCount: context.weeklyBlocksCount,
+    },
+    message: "Context loaded. Ask for planning help to generate reviewable suggestions.",
+    source: "fallback",
+    suggestions: [],
+  };
+}
+
+export function createFallbackAssistantResponse(
+  context: AssistantPlanningContext,
+  prompt: string,
+): AssistantPlanReviewResponse {
+  const suggestions: AssistantSuggestion[] = [];
+  const activeProjects = sortProjectsForFocus(context.projects);
+  const existingBlockProjectNames = new Set(
+    context.weeklyPlanBlocks.map((block) => block.projectName.toLowerCase()),
+  );
+  const highPriorityUnscheduledProjects = activeProjects
+    .filter((project) => project.priority === "High")
+    .filter((project) => !existingBlockProjectNames.has(project.name.toLowerCase()))
+    .slice(0, 3);
+
+  highPriorityUnscheduledProjects.forEach((project, index) => {
+    const day = getLeastLoadedDay([
+      ...context.weeklyPlanBlocks,
+      ...suggestions
+        .filter((suggestion) => suggestion.type === "suggested_weekly_block")
+        .map((suggestion) => ({
+          id: suggestion.id,
+          day: suggestion.day ?? "Monday",
+          projectName: suggestion.projectName ?? "",
+          plannedTask: suggestion.plannedTask ?? "",
+          estimatedHours: suggestion.estimatedHours ?? 1,
+        })),
+    ]);
+    const estimatedHours = Math.max(1, Math.min(2, project.weeklyHours));
+
+    suggestions.push({
+      id: createSuggestionId("weekly-block", suggestions.length),
+      type: "suggested_weekly_block",
+      title: `Schedule ${project.name}`,
+      summary: `Add a ${estimatedHours} hr block on ${day} for "${project.nextAction}".`,
+      rationale:
+        "This project is high priority and does not yet appear in your weekly plan blocks.",
+      severity: "important",
+      projectName: project.name,
+      day,
+      estimatedHours,
+      plannedTask: project.nextAction,
+    });
+  });
+
+  activeProjects
+    .filter((project) => !project.deadline.trim())
+    .slice(0, 3)
+    .forEach((project) => {
+      suggestions.push({
+        id: createSuggestionId("missing-deadline", suggestions.length),
+        type: "missing_deadline_warning",
+        title: `Add a deadline for ${project.name}`,
+        summary:
+          "This project does not have a deadline, so it may be harder to rank against urgent work.",
+        rationale:
+          "Deadlines help Schedule Builder prioritize what needs attention first.",
+        severity: "warning",
+        projectName: project.name,
+      });
+    });
+
+  activeProjects
+    .filter((project) => project.nextAction.trim().length < 8)
+    .slice(0, 3)
+    .forEach((project) => {
+      suggestions.push({
+        id: createSuggestionId("next-action", suggestions.length),
+        type: "suggested_next_action",
+        title: `Clarify the next action for ${project.name}`,
+        summary:
+          "Rewrite the next action so it starts with a concrete verb and can fit into one work block.",
+        rationale:
+          "Specific next actions make weekly planning faster and reduce decision fatigue.",
+        severity: "info",
+        projectName: project.name,
+        proposedNextAction: `Define the next concrete step for ${project.name}`,
+      });
+    });
+
+  if (context.plannedWeeklyHours >= 35) {
+    suggestions.push({
+      id: createSuggestionId("workload", suggestions.length),
+      type: "workload_warning",
+      title: "Review weekly workload",
+      summary: `You have ${context.plannedWeeklyHours} planned project hours. Consider protecting focus time or moving lower-priority work.`,
+      rationale:
+        "High planned workload can make the week brittle if meetings, classes, or unexpected tasks appear.",
+      severity: "warning",
+    });
+  }
+
+  weekDays.forEach((day) => {
+    const dayHours = context.weeklyPlanBlocks
+      .filter((block) => block.day === day)
+      .reduce((sum, block) => sum + block.estimatedHours, 0);
+
+    if (dayHours > 6) {
+      suggestions.push({
+        id: createSuggestionId(`workload-${day.toLowerCase()}`, suggestions.length),
+        type: "workload_warning",
+        title: `${day} may be overloaded`,
+        summary: `${day} has ${dayHours} hrs of planned blocks. Consider moving one block to a lighter day.`,
+        rationale:
+          "Daily overload warnings are review-only and will not move anything automatically.",
+        severity: "warning",
+        day,
+      });
+    }
+  });
+
+  if (suggestions.length === 0) {
+    suggestions.push({
+      id: "fallback-good-shape",
+      type: "workload_warning",
+      title: "Your plan looks workable",
+      summary:
+        "I did not find obvious missing deadlines, overloaded days, or high-priority projects without weekly blocks.",
+      rationale:
+        prompt.trim().length > 0
+          ? "The rule-based fallback reviewed your current projects and weekly plan."
+          : "Ask for a specific planning review to get more targeted suggestions.",
+      severity: "info",
+    });
+  }
+
+  return {
+    context: {
+      activeProjectsCount: context.activeProjectsCount,
+      plannedWeeklyHours: context.plannedWeeklyHours,
+      plannerType: context.plannerType,
+      totalWeeklyBlockHours: context.totalWeeklyBlockHours,
+      weeklyBlocksCount: context.weeklyBlocksCount,
+    },
+    message:
+      "Generated safe review suggestions. Nothing has been saved or changed.",
+    source: "fallback",
+    suggestions: suggestions
+      .sort((first, second) => {
+        const severityScore: Record<AssistantSuggestionSeverity, number> = {
+          important: 3,
+          warning: 2,
+          info: 1,
+        };
+
+        if (severityScore[second.severity] !== severityScore[first.severity]) {
+          return severityScore[second.severity] - severityScore[first.severity];
+        }
+
+        if (first.projectName && second.projectName) {
+          const firstProject = activeProjects.find(
+            (project) => project.name === first.projectName,
+          );
+          const secondProject = activeProjects.find(
+            (project) => project.name === second.projectName,
+          );
+
+          return (
+            (secondProject ? priorityScore[secondProject.priority] : 0) -
+            (firstProject ? priorityScore[firstProject.priority] : 0)
+          );
+        }
+
+        return 0;
+      })
+      .slice(0, 8),
+  };
+}

@@ -27,6 +27,7 @@
     "next-env.d.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
+    "components/assistant/**/*.tsx",
     "components/auth/**/*.tsx",
     "components/onboarding/**/*.tsx",
     "components/integrations/**/*.tsx",
