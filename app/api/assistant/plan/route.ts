@@ -1,14 +1,17 @@
+import OpenAI from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  assistantPlanningSuggestionTypes,
   createAssistantPlanningContext,
   createContextOnlyAssistantResponse,
   createFallbackAssistantResponse,
   normalizeAssistantSuggestions,
   type AssistantPlanReviewResponse,
   type AssistantPlanningContext,
+  type AssistantSuggestionType,
 } from "@/lib/assistant";
-import type { PlannerType } from "@/lib/onboarding";
+import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
 import {
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
@@ -19,6 +22,7 @@ export const dynamic = "force-dynamic";
 
 const maxPromptLength = 2000;
 const defaultOpenAiModel = "gpt-4o-mini";
+let openAiClient: OpenAI | null = null;
 
 const assistantResponseJsonSchema = {
   type: "object",
@@ -27,7 +31,7 @@ const assistantResponseJsonSchema = {
     message: {
       type: "string",
       description:
-        "A concise note explaining that suggestions are review-only and nothing was saved.",
+        "A concise note explaining that suggestions are reviewable and nothing was saved automatically.",
     },
     suggestions: {
       type: "array",
@@ -39,16 +43,15 @@ const assistantResponseJsonSchema = {
           id: { type: "string" },
           type: {
             type: "string",
-            enum: [
-              "suggested_weekly_block",
-              "suggested_next_action",
-              "workload_warning",
-              "missing_deadline_warning",
-              "unclear_project_warning",
-            ],
+            enum: assistantPlanningSuggestionTypes,
           },
           title: { type: "string" },
-          summary: { type: "string" },
+          description: { type: "string" },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+          },
           rationale: { type: "string" },
           severity: {
             type: "string",
@@ -76,7 +79,8 @@ const assistantResponseJsonSchema = {
           "id",
           "type",
           "title",
-          "summary",
+          "description",
+          "confidence",
           "rationale",
           "severity",
           "projectName",
@@ -141,6 +145,14 @@ function createAuthenticatedSupabaseClient(accessToken: string) {
   });
 }
 
+function getOpenAiClient(apiKey: string) {
+  if (!openAiClient) {
+    openAiClient = new OpenAI({ apiKey });
+  }
+
+  return openAiClient;
+}
+
 async function getAuthenticatedUser(
   request: NextRequest,
 ): Promise<{ supabase: SupabaseClient; userId: string } | NextResponse> {
@@ -185,10 +197,10 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
     weeklyPlanResult.error,
   ].filter(Boolean);
 
-  const plannerType: PlannerType | "Unknown" =
-    profileResult.error == null && profileResult.data
-      ? profileResult.data.plannerType
-      : "Unknown";
+  const profile = profileResult.error == null ? profileResult.data : null;
+  const plannerType: PlannerType | "Unknown" = profile
+    ? profile.plannerType
+    : "Unknown";
 
   return {
     context: createAssistantPlanningContext(
@@ -196,6 +208,7 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
       weeklyPlanResult.error == null ? weeklyPlanResult.data : [],
       plannerType,
     ),
+    profile,
     warning:
       loadErrors.length > 0
         ? `Some scheduler data could not load from Supabase, so suggestions may be limited. ${loadErrors
@@ -205,43 +218,45 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
   };
 }
 
-function extractOpenAiOutputText(value: unknown) {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-
-  const response = value as {
-    output?: Array<{
-      content?: Array<{ text?: unknown; type?: unknown }>;
-    }>;
-    output_text?: unknown;
-  };
-
-  if (typeof response.output_text === "string") {
-    return response.output_text;
-  }
-
-  const textParts =
-    response.output
-      ?.flatMap((item) => item.content ?? [])
-      .map((content) => content.text)
-      .filter((text): text is string => typeof text === "string") ?? [];
-
-  return textParts.length > 0 ? textParts.join("") : null;
-}
-
-function createAiPrompt(prompt: string, context: AssistantPlanningContext) {
+function createAiPrompt(
+  prompt: string,
+  context: AssistantPlanningContext,
+  profile: PlannerProfile | null,
+) {
   return [
     "You are Schedule Builder's AI Plan Review assistant.",
-    "Return only reviewable suggestions. Do not claim anything was saved.",
-    "Do not suggest direct calendar edits, OAuth actions, or destructive overwrites.",
-    "Prefer practical suggestions that use existing projects and weekly plan blocks.",
-    "Suggestion types allowed: suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
+    "Return JSON only matching the provided schema.",
+    "Return only reviewable planning suggestions. Do not claim anything was saved.",
+    "Do not create calendar events.",
+    "Do not mark projects done.",
+    "Do not delete anything.",
+    "Do not suggest destructive overwrites.",
+    "Prefer additive weekly plan suggestions for active projects.",
+    "Allowed suggestion types only: suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
+    "Every suggestion must include id, type, title, description, confidence, rationale, and severity.",
     "For optional fields that do not apply, return an empty string or 0.",
     "",
     `User request: ${prompt}`,
     "",
-    `Planner type: ${context.plannerType}`,
+    "Onboarding profile:",
+    JSON.stringify(
+      profile
+        ? {
+            plannerType: profile.plannerType,
+            planningGoals: profile.planningGoals,
+            desiredIntegrations: profile.desiredIntegrations,
+            scheduleIntensity: profile.scheduleIntensity,
+            onboardingCompleted: profile.onboardingCompleted,
+          }
+        : {
+            plannerType: context.plannerType,
+            planningGoals: [],
+            desiredIntegrations: [],
+            scheduleIntensity: "Unknown",
+            onboardingCompleted: false,
+          },
+    ),
+    "",
     `Active projects: ${context.activeProjectsCount}`,
     `Planned weekly project hours: ${context.plannedWeeklyHours}`,
     `Weekly plan blocks: ${context.weeklyBlocksCount}`,
@@ -275,6 +290,7 @@ function createAiPrompt(prompt: string, context: AssistantPlanningContext) {
 async function createOpenAiSuggestions(
   prompt: string,
   context: AssistantPlanningContext,
+  profile: PlannerProfile | null,
 ): Promise<Pick<AssistantPlanReviewResponse, "message" | "suggestions">> {
   const apiKey = process.env.OPENAI_API_KEY;
 
@@ -282,63 +298,46 @@ async function createOpenAiSuggestions(
     throw new Error("OPENAI_API_KEY is not configured.");
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || defaultOpenAiModel,
-      input: [
-        {
-          role: "system",
-          content:
-            "You generate safe, structured planning suggestions for a project scheduling app. Output JSON matching the provided schema.",
-        },
-        {
-          role: "user",
-          content: createAiPrompt(prompt, context),
-        },
-      ],
-      max_output_tokens: 1400,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "schedule_builder_plan_review",
-          schema: assistantResponseJsonSchema,
-          strict: true,
-        },
+  const client = getOpenAiClient(apiKey);
+  const response = await client.responses.create({
+    model: process.env.AI_MODEL || defaultOpenAiModel,
+    instructions:
+      "You generate safe, structured planning suggestions for a project scheduling app. Output JSON only and never suggest destructive actions.",
+    input: createAiPrompt(prompt, context, profile),
+    max_output_tokens: 1400,
+    text: {
+      format: {
+        type: "json_schema",
+        name: "schedule_builder_plan_review",
+        schema: assistantResponseJsonSchema,
+        strict: true,
       },
-    }),
+    },
   });
-
-  if (!response.ok) {
-    throw new Error(`AI provider request failed with status ${response.status}.`);
-  }
-
-  const payload: unknown = await response.json();
-  const outputText = extractOpenAiOutputText(payload);
+  const outputText = response.output_text;
 
   if (!outputText) {
-    throw new Error("AI provider returned an empty response.");
+    throw new Error("OpenAI returned an empty response.");
   }
 
   const parsed = JSON.parse(outputText) as {
     message?: unknown;
     suggestions?: unknown;
   };
-  const suggestions = normalizeAssistantSuggestions(parsed.suggestions);
+  const suggestions = normalizeAssistantSuggestions(
+    parsed.suggestions,
+    assistantPlanningSuggestionTypes as readonly AssistantSuggestionType[],
+  );
 
   if (suggestions.length === 0) {
-    throw new Error("AI provider returned no valid suggestions.");
+    throw new Error("OpenAI returned no valid safe suggestions.");
   }
 
   return {
     message:
       typeof parsed.message === "string" && parsed.message.trim()
         ? parsed.message.trim()
-        : "Generated safe review suggestions. Nothing has been saved or changed.",
+        : "Generated safe review suggestions. Nothing has been saved automatically.",
     suggestions,
   };
 }
@@ -386,7 +385,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { context, warning } = await loadPlanningContext(
+  const { context, profile, warning } = await loadPlanningContext(
     authResult.supabase,
     authResult.userId,
   );
@@ -403,7 +402,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const aiResponse = await createOpenAiSuggestions(prompt, context);
+    const aiResponse = await createOpenAiSuggestions(prompt, context, profile);
 
     return NextResponse.json({
       context: fallbackResponse.context,
@@ -414,7 +413,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     return NextResponse.json({
       ...fallbackWithWarning,
-      message: `${fallbackWithWarning.message} AI provider was unavailable, so rule-based fallback suggestions were used. ${getErrorMessage(error)}`,
+      message: `${fallbackWithWarning.message} OpenAI was unavailable or returned invalid output, so rule-based fallback suggestions were used. ${getErrorMessage(error)}`,
     });
   }
 }

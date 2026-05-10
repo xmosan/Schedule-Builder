@@ -19,6 +19,14 @@ export const assistantSuggestionTypes = [
   "unclear_project_warning",
 ] as const;
 
+export const assistantPlanningSuggestionTypes = [
+  "suggested_weekly_block",
+  "suggested_next_action",
+  "workload_warning",
+  "missing_deadline_warning",
+  "unclear_project_warning",
+] as const;
+
 export type AssistantSuggestionType = (typeof assistantSuggestionTypes)[number];
 export type AssistantSuggestionSeverity = "info" | "warning" | "important";
 export type AssistantSource = "ai" | "fallback";
@@ -40,6 +48,8 @@ export type AssistantSuggestion = {
   id: string;
   type: AssistantSuggestionType;
   title: string;
+  description: string;
+  confidence: number;
   summary: string;
   rationale: string;
   severity: AssistantSuggestionSeverity;
@@ -57,10 +67,29 @@ export type AssistantPlanReviewResponse = {
   suggestions: AssistantSuggestion[];
 };
 
-function isSuggestionType(value: unknown): value is AssistantSuggestionType {
+export type AssistantApplyResultStatus = "applied" | "error" | "skipped";
+
+export type AssistantApplyResult = {
+  suggestionId: string;
+  suggestionTitle: string;
+  type: AssistantSuggestionType;
+  status: AssistantApplyResultStatus;
+  message: string;
+};
+
+export type AssistantApplyResponse = {
+  context: AssistantContextSummary;
+  message: string;
+  results: AssistantApplyResult[];
+};
+
+function isSuggestionType(
+  value: unknown,
+  allowedTypes: readonly AssistantSuggestionType[] = assistantSuggestionTypes,
+): value is AssistantSuggestionType {
   return (
     typeof value === "string" &&
-    assistantSuggestionTypes.includes(value as AssistantSuggestionType)
+    allowedTypes.includes(value as AssistantSuggestionType)
   );
 }
 
@@ -94,21 +123,37 @@ function getLeastLoadedDay(blocks: WeeklyPlanBlock[]): WeekDay {
 function normalizeSuggestion(
   value: unknown,
   index: number,
+  allowedTypes?: readonly AssistantSuggestionType[],
 ): AssistantSuggestion | null {
   if (typeof value !== "object" || value === null) {
     return null;
   }
 
   const candidate = value as Partial<AssistantSuggestion>;
+  const description =
+    typeof candidate.description === "string"
+      ? candidate.description.trim()
+      : typeof candidate.summary === "string"
+        ? candidate.summary.trim()
+        : "";
+  const rationale =
+    typeof candidate.rationale === "string" && candidate.rationale.trim()
+      ? candidate.rationale.trim()
+      : description;
 
   if (
-    !isSuggestionType(candidate.type) ||
+    !isSuggestionType(candidate.type, allowedTypes) ||
     typeof candidate.title !== "string" ||
-    typeof candidate.summary !== "string" ||
-    typeof candidate.rationale !== "string"
+    !description
   ) {
     return null;
   }
+
+  const confidence =
+    typeof candidate.confidence === "number" &&
+    Number.isFinite(candidate.confidence)
+      ? Math.min(Math.max(candidate.confidence, 0), 1)
+      : 0.6;
 
   return {
     id:
@@ -117,8 +162,10 @@ function normalizeSuggestion(
         : createSuggestionId("ai", index),
     type: candidate.type,
     title: candidate.title.trim().slice(0, 120),
-    summary: candidate.summary.trim().slice(0, 360),
-    rationale: candidate.rationale.trim().slice(0, 420),
+    description: description.slice(0, 360),
+    confidence,
+    summary: description.slice(0, 360),
+    rationale: rationale.slice(0, 420),
     severity: isSeverity(candidate.severity) ? candidate.severity : "info",
     projectName:
       typeof candidate.projectName === "string"
@@ -173,13 +220,14 @@ export function createAssistantPlanningContext(
 
 export function normalizeAssistantSuggestions(
   value: unknown,
+  allowedTypes?: readonly AssistantSuggestionType[],
 ): AssistantSuggestion[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value
-    .map((item, index) => normalizeSuggestion(item, index))
+    .map((item, index) => normalizeSuggestion(item, index, allowedTypes))
     .filter((item): item is AssistantSuggestion => item !== null)
     .slice(0, 8);
 }
@@ -234,6 +282,8 @@ export function createFallbackAssistantResponse(
       id: createSuggestionId("weekly-block", suggestions.length),
       type: "suggested_weekly_block",
       title: `Schedule ${project.name}`,
+      description: `Add a ${estimatedHours} hr block on ${day} for "${project.nextAction}".`,
+      confidence: 0.8,
       summary: `Add a ${estimatedHours} hr block on ${day} for "${project.nextAction}".`,
       rationale:
         "This project is high priority and does not yet appear in your weekly plan blocks.",
@@ -253,6 +303,9 @@ export function createFallbackAssistantResponse(
         id: createSuggestionId("missing-deadline", suggestions.length),
         type: "missing_deadline_warning",
         title: `Add a deadline for ${project.name}`,
+        description:
+          "This project does not have a deadline, so it may be harder to rank against urgent work.",
+        confidence: 0.7,
         summary:
           "This project does not have a deadline, so it may be harder to rank against urgent work.",
         rationale:
@@ -270,6 +323,9 @@ export function createFallbackAssistantResponse(
         id: createSuggestionId("next-action", suggestions.length),
         type: "suggested_next_action",
         title: `Clarify the next action for ${project.name}`,
+        description:
+          "Rewrite the next action so it starts with a concrete verb and can fit into one work block.",
+        confidence: 0.65,
         summary:
           "Rewrite the next action so it starts with a concrete verb and can fit into one work block.",
         rationale:
@@ -285,6 +341,8 @@ export function createFallbackAssistantResponse(
       id: createSuggestionId("workload", suggestions.length),
       type: "workload_warning",
       title: "Review weekly workload",
+      description: `You have ${context.plannedWeeklyHours} planned project hours. Consider protecting focus time or moving lower-priority work.`,
+      confidence: 0.75,
       summary: `You have ${context.plannedWeeklyHours} planned project hours. Consider protecting focus time or moving lower-priority work.`,
       rationale:
         "High planned workload can make the week brittle if meetings, classes, or unexpected tasks appear.",
@@ -302,6 +360,8 @@ export function createFallbackAssistantResponse(
         id: createSuggestionId(`workload-${day.toLowerCase()}`, suggestions.length),
         type: "workload_warning",
         title: `${day} may be overloaded`,
+        description: `${day} has ${dayHours} hrs of planned blocks. Consider moving one block to a lighter day.`,
+        confidence: 0.75,
         summary: `${day} has ${dayHours} hrs of planned blocks. Consider moving one block to a lighter day.`,
         rationale:
           "Daily overload warnings are review-only and will not move anything automatically.",
@@ -316,6 +376,9 @@ export function createFallbackAssistantResponse(
       id: "fallback-good-shape",
       type: "workload_warning",
       title: "Your plan looks workable",
+      description:
+        "I did not find obvious missing deadlines, overloaded days, or high-priority projects without weekly blocks.",
+      confidence: 0.6,
       summary:
         "I did not find obvious missing deadlines, overloaded days, or high-priority projects without weekly blocks.",
       rationale:

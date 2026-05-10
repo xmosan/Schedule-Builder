@@ -97,7 +97,7 @@ export function SchedulerNav() {
 
       <nav
         aria-label="Mobile scheduler navigation"
-        className="fixed inset-x-3 bottom-3 z-50 grid grid-cols-6 gap-1 rounded-[26px] border border-white/70 bg-white/92 p-2 shadow-[0_18px_44px_rgba(18,32,47,0.18)] backdrop-blur md:hidden"
+        className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-50 grid grid-cols-6 gap-1 rounded-[24px] border border-white/70 bg-white/92 p-1.5 shadow-[0_18px_44px_rgba(18,32,47,0.18)] backdrop-blur md:hidden"
       >
         {navItems.map((item) => {
           const isActive = isActiveRoute(pathname, item.href);
@@ -108,7 +108,7 @@ export function SchedulerNav() {
               href={item.href}
               aria-current={isActive ? "page" : undefined}
               className={cn(
-                "inline-flex min-h-12 items-center justify-center rounded-[20px] px-1 text-center text-[11px] font-semibold leading-tight",
+                "inline-flex min-h-11 items-center justify-center rounded-[18px] px-1 text-center text-[11px] font-semibold leading-tight",
                 isActive
                   ? "bg-brand-ink text-white"
                   : "text-brand-ink/62 hover:bg-brand-ink/5 hover:text-brand-ink",

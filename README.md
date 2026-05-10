@@ -87,13 +87,18 @@ Each block becomes a calendar event using the project name as the title, the pla
 
 ## AI Plan Review
 
-The `/assistant` page gives signed-in users a safe planning workspace. Users can ask for help planning the week, then review structured suggestions before anything is changed.
+The `/assistant` page gives signed-in users a safe planning workspace. Users can ask for help planning the week, then review structured suggestions before applying approved changes.
 
-- V1 is review-only: approving and rejecting suggestions is local UI state, and the app does not save AI suggestions automatically.
+- Approved suggestions can be applied only after an explicit confirmation.
+- Safe apply supports adding weekly plan blocks and updating approved next actions.
+- Rejected suggestions are never sent to the apply endpoint, and informational warnings are skipped instead of written.
 - The assistant can suggest weekly blocks, next actions, workload warnings, and missing or unclear project details.
-- The server route loads the signed-in user's projects, weekly plan blocks, and onboarding profile from Supabase. The client never sends or controls `user_id`.
-- `OPENAI_API_KEY` is optional. If it is not configured, the assistant returns deterministic rule-based fallback suggestions.
-- If you add `OPENAI_API_KEY`, keep it server-side only in `.env.local` or Vercel environment variables. Do not prefix it with `NEXT_PUBLIC_`.
+- The server routes load the signed-in user's projects, weekly plan blocks, and onboarding profile from Supabase. The client never sends or controls `user_id`.
+- `OPENAI_API_KEY` is optional. If it is configured, `/api/assistant/plan` uses the OpenAI Responses API through the official `openai` JavaScript SDK.
+- If `OPENAI_API_KEY` is missing or OpenAI returns invalid output, the assistant returns deterministic rule-based fallback suggestions.
+- `AI_MODEL` is optional and defaults to `gpt-4o-mini`.
+- Keep `OPENAI_API_KEY` server-side only in `.env.local` or Vercel environment variables. Do not prefix it with `NEXT_PUBLIC_`.
+- OpenAI suggestions are validated on the server and limited to non-destructive suggestion types: weekly blocks, next actions, workload warnings, missing deadlines, and unclear project warnings.
 
 ## App sections
 
@@ -128,6 +133,7 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 
 - `app/` contains the App Router layout, homepage, and metadata routes.
 - `app/api/assistant/plan/route.ts` contains the server-side AI Plan Review endpoint.
+- `app/api/assistant/apply/route.ts` validates and applies approved assistant suggestions safely.
 - `app/manifest.ts` defines the PWA install manifest.
 - `components/assistant/` contains the AI Plan Review workspace UI.
 - `components/auth/` contains the authentication entry UI.
