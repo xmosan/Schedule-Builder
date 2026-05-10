@@ -175,7 +175,7 @@ function ActionCard({
   return (
     <article
       className={cn(
-        "rounded-[20px] border bg-white/80 p-4 shadow-sm transition-opacity",
+        "rounded-[16px] border border-brand-ink/10 bg-white p-3 shadow-sm transition-opacity",
         actionState.status === "applied" && "border-brand-teal/20 bg-brand-teal/5",
         actionState.status === "ignored" && "opacity-50 grayscale-[30%]",
         actionState.status === "error" && "border-brand-coral/20 bg-brand-coral/5",
@@ -203,15 +203,15 @@ function ActionCard({
       </div>
 
       {(suggestion.projectName || suggestion.day || suggestion.estimatedHours) && !isEditing ? (
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 rounded-xl bg-white/50 px-3 py-2 text-xs">
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-brand-ink/60">
           {suggestion.projectName && (
-            <div><span className="font-medium text-brand-ink/50">Project:</span> <span className="font-semibold text-brand-ink">{suggestion.projectName}</span></div>
+            <div><span className="font-medium text-brand-ink/40">Project:</span> <span className="font-semibold text-brand-ink">{suggestion.projectName}</span></div>
           )}
           {suggestion.day && (
-            <div><span className="font-medium text-brand-ink/50">Day:</span> <span className="font-semibold text-brand-ink">{suggestion.day}</span></div>
+            <div><span className="font-medium text-brand-ink/40">Day:</span> <span className="font-semibold text-brand-ink">{suggestion.day}</span></div>
           )}
           {suggestion.estimatedHours && (
-            <div><span className="font-medium text-brand-ink/50">Time:</span> <span className="font-semibold text-brand-ink">{suggestion.estimatedHours}h</span></div>
+            <div><span className="font-medium text-brand-ink/40">Time:</span> <span className="font-semibold text-brand-ink">{suggestion.estimatedHours}h</span></div>
           )}
         </div>
       ) : null}
@@ -278,7 +278,7 @@ function ActionCard({
         </p>
       )}
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         {isActionableSuggestion(suggestion) ? (
           <>
             <Button
@@ -365,40 +365,36 @@ function ChatBubble({
   const suggestionCount = actionCount - warningCount;
 
   return (
-    <div className={cn("flex flex-col gap-2", isUser ? "items-end" : "items-start")}>
-      <div
-        className={cn(
-          "max-w-[92%] rounded-2xl px-4 py-3 sm:max-w-[85%] sm:px-5 sm:py-3.5",
-          isUser
-            ? "bg-brand-ink text-white shadow-sm"
-            : "border border-white/60 bg-white/70 text-brand-ink shadow-sm backdrop-blur-sm",
-        )}
-      >
-        <p className={cn("text-sm leading-6", isUser ? "text-white" : "text-brand-ink")}>
-          {message.content}
-        </p>
-      </div>
+    <div className={cn("flex w-full gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
+      {!isUser && (
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-teal/10">
+          <TargetIcon className="h-4 w-4 text-brand-teal" />
+        </div>
+      )}
+      <div className={cn("flex max-w-[92%] flex-col gap-2 sm:max-w-[85%]", isUser ? "items-end" : "items-start")}>
+        <div
+          className={cn(
+            "rounded-2xl px-4 py-3 sm:px-5 sm:py-3.5",
+            isUser
+              ? "bg-brand-ink text-white shadow-sm"
+              : "border border-brand-ink/5 bg-white text-brand-ink shadow-sm",
+          )}
+        >
+          <p className={cn("text-sm leading-6 whitespace-pre-wrap", isUser ? "text-white" : "text-brand-ink")}>
+            {message.content}
+          </p>
+        </div>
 
-      {!isUser && actionCount > 0 ? (
-        <div className="mt-2 w-full max-w-[92%] sm:max-w-[85%]">
-          <div className="mb-3 px-1">
-            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-brand-ink/60">
-              Suggestions from this response
-            </h4>
-            <div className="mt-1 flex items-center gap-2 text-xs text-brand-ink/50">
-              <span>{suggestionCount} suggestion{suggestionCount !== 1 ? 's' : ''}</span>
-              {warningCount > 0 && (
-                <>
-                  <span>•</span>
-                  <span className="text-brand-amber/80">{warningCount} warning{warningCount !== 1 ? 's' : ''}</span>
-                </>
-              )}
+        {!isUser && actionCount > 0 ? (
+          <div className="mt-1 w-full">
+            <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+              <h4 className="text-[11px] font-semibold text-brand-ink/80">
+                Proposed Actions
+              </h4>
+              <span className="text-[10px] text-brand-ink/40">•</span>
+              <span className="text-[10px] text-brand-ink/50">Nothing changes unless you apply a suggestion.</span>
             </div>
-            <p className="mt-1.5 text-xs text-brand-ink/50">
-              Nothing changes unless you apply a suggestion.
-            </p>
-          </div>
-          <div className="grid gap-3">
+            <div className="grid gap-2">
             {actions.map((suggestion) => (
               <ActionCard
                 key={suggestion.id}
@@ -417,9 +413,10 @@ function ChatBubble({
                 }
               />
             ))}
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -435,6 +432,16 @@ export function AssistantPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = "auto";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, [prompt]);
 
   const hasMessages = messages.length > 0;
   const isBusy = isSubmitting || status === "loading";
@@ -782,15 +789,31 @@ export function AssistantPage() {
               Ask naturally. Review suggested changes before anything is added.
             </p>
           </div>
-          <div className="sm:shrink-0">
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
             <AssistantContextDetails context={context} />
+            {hasMessages && (
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="h-8 rounded-full px-3 text-[11px] font-bold uppercase tracking-wider text-brand-ink/40 hover:text-brand-ink"
+                onClick={() => {
+                  if (confirm("Clear your conversation history?")) {
+                    setMessages([]);
+                    setActionStates({});
+                    setError(null);
+                  }
+                }}
+              >
+                Clear Chat
+              </Button>
+            )}
           </div>
         </section>
 
-        {/* Main Chat Card */}
-        <section className="panel-strong flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Main Chat Area */}
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* Chat Flow Container */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+          <div className="flex-1 overflow-y-auto px-2 sm:px-6 lg:px-8">
             <div className="flex flex-col gap-6">
               {!hasMessages ? (
                 <div className="flex flex-col items-center justify-center py-6 text-center sm:py-16">
@@ -855,7 +878,7 @@ export function AssistantPage() {
           </div>
 
           {/* Chat Composer */}
-          <div className="shrink-0 border-t border-brand-ink/5 bg-brand-background/30 p-4 sm:p-6">
+          <div className="shrink-0 bg-brand-background/90 backdrop-blur-md pt-4 pb-2 sm:pb-4 border-t border-brand-ink/5">
             {status === "signed_out" ? (
               <div className="text-center">
                 <p className="text-sm font-semibold text-brand-ink">
@@ -876,7 +899,8 @@ export function AssistantPage() {
                 <div className="flex flex-col gap-3 rounded-[24px] border border-brand-ink/10 bg-white p-2 shadow-sm focus-within:border-brand-teal/30 sm:flex-row sm:items-end sm:rounded-full sm:p-2.5">
                   <div className="relative flex-1">
                     <textarea
-                      className="min-h-[44px] w-full resize-none bg-transparent px-4 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/40 focus:outline-none sm:min-h-[48px] sm:text-base"
+                      ref={textareaRef}
+                      className="min-h-[44px] w-full resize-none bg-transparent px-4 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/40 focus:outline-none sm:min-h-[48px] sm:text-base max-h-[160px] overflow-y-auto"
                       disabled={isBusy}
                       maxLength={2000}
                       placeholder="Ask Schedule Builder to help plan..."
