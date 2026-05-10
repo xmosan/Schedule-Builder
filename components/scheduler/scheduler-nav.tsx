@@ -73,7 +73,7 @@ const mobileNavItems: SchedulerNavItem[] = [
   {
     href: "/assistant",
     label: "Assistant",
-    mobileLabel: "AI",
+    mobileLabel: "Assistant",
   },
   {
     href: "/settings",

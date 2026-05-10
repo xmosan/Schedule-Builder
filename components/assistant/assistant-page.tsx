@@ -43,10 +43,10 @@ type ActionState = {
 
 const examplePrompts = [
   "Plan my week",
-  "Find overloaded days",
-  "Turn projects into work blocks",
-  "Suggest my Top 3",
-  "Help me balance school, work, and projects",
+  "Find overload",
+  "Create work blocks",
+  "Suggest Top 3",
+  "Balance school/work",
 ];
 
 const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
@@ -146,7 +146,7 @@ function AssistantContextDetails({
       <div className="flex items-center gap-2 mb-3">
         <FolderStackIcon className="h-4 w-4 text-brand-ink/40" />
         <h3 className="text-xs font-semibold uppercase tracking-wider text-brand-ink/50">
-          Assistant Context
+          Planning context
         </h3>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-6">
@@ -218,184 +218,131 @@ function ActionCard({
   return (
     <article
       className={cn(
-        "rounded-[22px] border bg-white/84 p-4 shadow-[0_12px_30px_rgba(18,32,47,0.05)]",
-        actionState.status === "applied" && "border-brand-teal/24 bg-brand-teal/8",
-        actionState.status === "ignored" && "opacity-60",
-        actionState.status === "error" && "border-brand-coral/22 bg-brand-coral/5",
+        "rounded-[20px] border bg-white/80 p-4 shadow-sm transition-opacity",
+        actionState.status === "applied" && "border-brand-teal/20 bg-brand-teal/5",
+        actionState.status === "ignored" && "opacity-50 grayscale-[30%]",
+        actionState.status === "error" && "border-brand-coral/20 bg-brand-coral/5",
       )}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge
-          className={cn("border", severityStyles[suggestion.severity])}
-          variant="subtle"
-        >
-          {suggestionTypeLabels[suggestion.type]}
-        </Badge>
-        {actionState.status === "applied" ? (
-          <Badge variant="subtle">Applied</Badge>
-        ) : null}
-        {actionState.status === "ignored" ? (
-          <Badge variant="subtle">Ignored</Badge>
-        ) : null}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <Badge
+              className={cn("border px-2 py-0.5 text-[10px]", severityStyles[suggestion.severity])}
+              variant="subtle"
+            >
+              {suggestionTypeLabels[suggestion.type]}
+            </Badge>
+            {actionState.status === "applied" && <Badge variant="subtle" className="text-[10px]">Applied</Badge>}
+            {actionState.status === "ignored" && <Badge variant="subtle" className="text-[10px]">Ignored</Badge>}
+          </div>
+          <h3 className="text-sm font-semibold text-brand-ink">
+            {suggestion.title}
+          </h3>
+          <p className="mt-1 text-sm leading-5 text-brand-ink/60">
+            {suggestion.description}
+          </p>
+        </div>
       </div>
 
-      <h3 className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
-        {suggestion.title}
-      </h3>
-      <p className="mt-2 text-sm leading-6 text-brand-ink/68">
-        {suggestion.description}
-      </p>
+      {(suggestion.projectName || suggestion.day || suggestion.estimatedHours) && !isEditing ? (
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 rounded-xl bg-white/50 px-3 py-2 text-xs">
+          {suggestion.projectName && (
+            <div><span className="font-medium text-brand-ink/50">Project:</span> <span className="font-semibold text-brand-ink">{suggestion.projectName}</span></div>
+          )}
+          {suggestion.day && (
+            <div><span className="font-medium text-brand-ink/50">Day:</span> <span className="font-semibold text-brand-ink">{suggestion.day}</span></div>
+          )}
+          {suggestion.estimatedHours && (
+            <div><span className="font-medium text-brand-ink/50">Time:</span> <span className="font-semibold text-brand-ink">{suggestion.estimatedHours}h</span></div>
+          )}
+        </div>
+      ) : null}
 
-      <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-        {suggestion.projectName || isEditing ? (
-          <label className="rounded-[18px] border border-brand-ink/8 bg-white/72 p-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-ink/42">
-              Project
-            </span>
-            {isEditing ? (
+      {isEditing ? (
+        <div className="mt-4 grid gap-3 text-sm">
+          {suggestion.projectName !== undefined && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Project</span>
               <input
-                className="mt-2 w-full rounded-xl border border-brand-ink/10 bg-white px-3 py-2 text-sm font-semibold text-brand-ink"
+                className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
                 value={suggestion.projectName ?? ""}
                 onChange={(event) => onUpdate({ projectName: event.target.value })}
               />
-            ) : (
-              <span className="mt-1 block font-semibold text-brand-ink">
-                {suggestion.projectName}
-              </span>
-            )}
-          </label>
-        ) : null}
-
-        {suggestion.day || isEditing ? (
-          <label className="rounded-[18px] border border-brand-ink/8 bg-white/72 p-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-ink/42">
-              Day
-            </span>
-            {isEditing ? (
+            </label>
+          )}
+          {suggestion.day !== undefined && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Day</span>
               <select
-                className="mt-2 w-full rounded-xl border border-brand-ink/10 bg-white px-3 py-2 text-sm font-semibold text-brand-ink"
+                className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
                 value={suggestion.day ?? "Monday"}
-                onChange={(event) =>
-                  onUpdate({ day: event.target.value as WeekDay })
-                }
+                onChange={(event) => onUpdate({ day: event.target.value as WeekDay })}
               >
                 {weekDays.map((day) => (
-                  <option key={day} value={day}>
-                    {day}
-                  </option>
+                  <option key={day} value={day}>{day}</option>
                 ))}
               </select>
-            ) : (
-              <span className="mt-1 block font-semibold text-brand-ink">
-                {suggestion.day}
-              </span>
-            )}
-          </label>
-        ) : null}
-
-        {suggestion.estimatedHours || isEditing ? (
-          <label className="rounded-[18px] border border-brand-ink/8 bg-white/72 p-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-ink/42">
-              Time
-            </span>
-            {isEditing ? (
+            </label>
+          )}
+          {suggestion.estimatedHours !== undefined && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Hours</span>
               <input
-                className="mt-2 w-full rounded-xl border border-brand-ink/10 bg-white px-3 py-2 text-sm font-semibold text-brand-ink"
-                min="0.25"
-                step="0.25"
-                type="number"
+                className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                min="0.25" step="0.25" type="number"
                 value={suggestion.estimatedHours ?? 1}
-                onChange={(event) =>
-                  onUpdate({ estimatedHours: Number(event.target.value) })
-                }
+                onChange={(event) => onUpdate({ estimatedHours: Number(event.target.value) })}
               />
-            ) : (
-              <span className="mt-1 block font-semibold text-brand-ink">
-                {suggestion.estimatedHours}{" "}
-                {suggestion.estimatedHours === 1 ? "hr" : "hrs"}
-              </span>
-            )}
-          </label>
-        ) : null}
-
-        {suggestion.plannedTask || isEditing ? (
-          <label className="rounded-[18px] border border-brand-ink/8 bg-white/72 p-3 sm:col-span-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-ink/42">
-              Task
-            </span>
-            {isEditing ? (
+            </label>
+          )}
+          {suggestion.plannedTask !== undefined && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Task Details</span>
               <textarea
-                className="mt-2 min-h-20 w-full resize-y rounded-xl border border-brand-ink/10 bg-white px-3 py-2 text-sm font-semibold leading-6 text-brand-ink"
+                className="w-full resize-y rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm leading-5"
+                rows={2}
                 value={suggestion.plannedTask ?? ""}
                 onChange={(event) => onUpdate({ plannedTask: event.target.value })}
               />
-            ) : (
-              <span className="mt-1 block font-semibold leading-6 text-brand-ink">
-                {suggestion.plannedTask}
-              </span>
-            )}
-          </label>
-        ) : null}
-
-        {suggestion.proposedNextAction || isEditing ? (
-          <label className="rounded-[18px] border border-brand-ink/8 bg-white/72 p-3 sm:col-span-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-ink/42">
-              Next action
-            </span>
-            {isEditing ? (
-              <textarea
-                className="mt-2 min-h-20 w-full resize-y rounded-xl border border-brand-ink/10 bg-white px-3 py-2 text-sm font-semibold leading-6 text-brand-ink"
-                value={suggestion.proposedNextAction ?? ""}
-                onChange={(event) =>
-                  onUpdate({ proposedNextAction: event.target.value })
-                }
-              />
-            ) : (
-              <span className="mt-1 block font-semibold leading-6 text-brand-ink">
-                {suggestion.proposedNextAction}
-              </span>
-            )}
-          </label>
-        ) : null}
-      </div>
-
-      <p className="mt-3 text-sm leading-6 text-brand-ink/56">
-        {suggestion.rationale}
-      </p>
-
-      {actionState.message ? (
-        <p
-          className={cn(
-            "mt-3 rounded-[16px] border p-3 text-sm leading-6",
-            actionState.status === "error"
-              ? "border-brand-coral/20 bg-brand-coral/8 text-brand-coral"
-              : "border-brand-teal/18 bg-brand-teal/8 text-brand-teal",
+            </label>
           )}
-        >
-          {actionState.message}
-        </p>
+        </div>
       ) : null}
 
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+      {actionState.message && (
+        <p className={cn(
+          "mt-3 rounded-xl border p-2 text-xs leading-5",
+          actionState.status === "error"
+            ? "border-brand-coral/20 bg-brand-coral/8 text-brand-coral"
+            : "border-brand-teal/18 bg-brand-teal/8 text-brand-teal"
+        )}>
+          {actionState.message}
+        </p>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button
-          className="sm:min-w-28"
+          className="h-8 px-4 text-xs"
           disabled={!canApply || isFinished || actionState.status === "applying"}
           size="sm"
           onClick={onApply}
         >
           {actionState.status === "applying" ? "Applying..." : "Apply"}
         </Button>
-        {isEditableSuggestion(suggestion) ? (
+        {isEditableSuggestion(suggestion) && (
           <Button
+            className="h-8 px-3 text-xs"
             disabled={isFinished || actionState.status === "applying"}
             size="sm"
             variant="outline"
             onClick={onToggleEdit}
           >
-            {isEditing ? "Done editing" : "Edit"}
+            {isEditing ? "Done" : "Edit"}
           </Button>
-        ) : null}
+        )}
         <Button
+          className="h-8 px-3 text-xs text-brand-ink/60 hover:text-brand-ink"
           disabled={isFinished || actionState.status === "applying"}
           size="sm"
           variant="secondary"
@@ -404,12 +351,12 @@ function ActionCard({
           Ignore
         </Button>
       </div>
-
-      {!canApply ? (
-        <p className="mt-3 text-xs font-semibold uppercase tracking-[0.13em] text-brand-ink/42">
-          This is guidance only. Nothing will be saved.
+      
+      {!canApply && (
+        <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-brand-ink/40">
+          Guidance only. Nothing saved.
         </p>
-      ) : null}
+      )}
     </article>
   );
 }
@@ -435,28 +382,47 @@ function ChatBubble({
 }) {
   const isUser = message.role === "user";
   const actions = getActions(message.response);
+  const actionCount = actions.length;
+  
+  // Count warnings (severity: warning or important) vs normal suggestions
+  const warningCount = actions.filter(a => a.severity === 'warning' || a.severity === 'important').length;
+  const suggestionCount = actionCount - warningCount;
 
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("flex flex-col gap-2", isUser ? "items-end" : "items-start")}>
       <div
         className={cn(
-          "max-w-[92%] rounded-[26px] px-4 py-3 shadow-[0_12px_30px_rgba(18,32,47,0.05)] sm:max-w-[78%] sm:px-5 sm:py-4",
+          "max-w-[92%] rounded-2xl px-4 py-3 sm:max-w-[85%] sm:px-5 sm:py-3.5",
           isUser
-            ? "bg-brand-ink text-white"
-            : "border border-white/70 bg-white/88 text-brand-ink",
+            ? "bg-brand-ink text-white shadow-sm"
+            : "border border-white/60 bg-white/70 text-brand-ink shadow-sm backdrop-blur-sm",
         )}
       >
-        <p
-          className={cn(
-            "text-sm leading-7 sm:text-base",
-            isUser ? "text-white" : "text-brand-ink/78",
-          )}
-        >
+        <p className={cn("text-sm leading-6", isUser ? "text-white" : "text-brand-ink")}>
           {message.content}
         </p>
+      </div>
 
-        {actions.length > 0 ? (
-          <div className="mt-4 grid gap-3">
+      {!isUser && actionCount > 0 ? (
+        <div className="mt-2 w-full max-w-[92%] sm:max-w-[85%]">
+          <div className="mb-3 px-1">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-brand-ink/60">
+              Suggestions from this response
+            </h4>
+            <div className="mt-1 flex items-center gap-2 text-xs text-brand-ink/50">
+              <span>{suggestionCount} suggestion{suggestionCount !== 1 ? 's' : ''}</span>
+              {warningCount > 0 && (
+                <>
+                  <span>•</span>
+                  <span className="text-brand-amber/80">{warningCount} warning{warningCount !== 1 ? 's' : ''}</span>
+                </>
+              )}
+            </div>
+            <p className="mt-1.5 text-xs text-brand-ink/40">
+              Review suggestions before applying. Rejected suggestions are ignored.
+            </p>
+          </div>
+          <div className="grid gap-3">
             {actions.map((suggestion) => (
               <ActionCard
                 key={suggestion.id}
@@ -476,8 +442,8 @@ function ChatBubble({
               />
             ))}
           </div>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -839,130 +805,133 @@ export function AssistantPage() {
             Planning Assistant
           </h1>
           <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
-            Ask for help planning your week, projects, work blocks, or priorities.
+            Ask for help planning your week, balancing projects, or turning work into schedule blocks.
           </p>
           <div className="mt-4 flex items-center gap-2 text-xs font-medium text-brand-ink/45">
             <CheckCircleIcon className="h-3.5 w-3.5 text-brand-teal/60" />
-            <span>You stay in control. Nothing is added unless you approve it.</span>
+            <span>You stay in control. Nothing changes unless you approve it.</span>
           </div>
         </header>
 
-        {/* Compact Context Card */}
-        <AssistantContextDetails context={context} />
-
-        {/* Main Chat Area */}
-        <main className="flex flex-col gap-6">
-          <div className="flex flex-col gap-4">
-            {!hasMessages ? (
-              <div className="flex justify-start">
-                <div className="max-w-[92%] rounded-[26px] border border-white/70 bg-white/88 px-4 py-4 shadow-[0_12px_30px_rgba(18,32,47,0.05)] sm:max-w-[78%] sm:px-5">
-                  <p className="text-sm leading-7 text-brand-ink/78 sm:text-base">
-                    Hi! I can help you turn your projects into a realistic plan. What's on your mind today?
-                  </p>
-                </div>
-              </div>
-            ) : null}
-
-            {messages.map((message) => (
-              <ChatBubble
-                key={message.id}
-                actionStates={actionStates}
-                message={message}
-                onApply={(suggestion) => void applySuggestion(suggestion)}
-                onIgnore={ignoreSuggestion}
-                onToggleEdit={toggleEdit}
-                onUpdateSuggestion={updateSuggestion}
-              />
-            ))}
-
-            {isSubmitting ? (
-              <div className="flex justify-start">
-                <div className="rounded-[26px] border border-white/70 bg-white/88 px-4 py-3 text-sm font-semibold text-brand-ink/62 shadow-[0_12px_30px_rgba(18,32,47,0.05)]">
-                  Thinking through your plan...
-                </div>
-              </div>
-            ) : null}
-
-            {error ? (
-              <div className="rounded-[24px] border border-brand-coral/18 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
-                {error}
-              </div>
-            ) : null}
-
-            <div ref={chatEndRef} />
-          </div>
-
-          {status === "signed_out" ? (
-            <Card className="rounded-[28px] border-white/70 bg-white/88 max-w-md">
-              <CardContent className="p-5">
-                <p className="text-base font-semibold text-brand-ink">
-                  Sign in to use Planning Assistant.
-                </p>
-                <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                  The assistant reviews only your signed-in schedule.
-                </p>
-                <Link
-                  href="/"
-                  className="mt-4 inline-flex h-11 items-center justify-center rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white"
-                >
-                  Go to sign in
-                </Link>
-              </CardContent>
-            </Card>
-          ) : (
-            <section className="panel-strong p-4 sm:p-6 lg:p-7">
-              <div className="mb-5">
-                <h2 className="text-lg font-semibold text-brand-ink">Ask the assistant</h2>
-                <p className="text-sm text-brand-ink/50 mt-1">
-                  Tell the assistant what you need help planning.
-                </p>
-              </div>
-
-              {/* Suggested Prompt Chips */}
-              <div className="flex flex-wrap gap-2 mb-5">
-                {examplePrompts.map((example) => (
-                  <button
-                    key={example}
-                    className="rounded-full border border-brand-ink/8 bg-white/60 px-3.5 py-2 text-xs font-semibold text-brand-ink/60 transition-all hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
-                    type="button"
-                    onClick={() => setPrompt(example)}
-                  >
-                    {example}
-                  </button>
-                ))}
-              </div>
-
-              <form onSubmit={handleSubmit} className="relative">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
-                  <div className="relative flex-1">
-                    <textarea
-                      className="min-h-[100px] w-full resize-none rounded-[22px] border border-brand-ink/10 bg-white/84 px-4 py-3.5 text-base leading-6 text-brand-ink placeholder:text-brand-ink/30 focus:border-brand-teal/30 focus:bg-white focus:outline-none sm:min-h-[56px] sm:max-h-48"
-                      disabled={isBusy}
-                      maxLength={2000}
-                      placeholder="Ask me to plan your week..."
-                      value={prompt}
-                      onChange={(event) => setPrompt(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && !event.shiftKey) {
-                          event.preventDefault();
-                          void sendPrompt(prompt);
-                        }
-                      }}
-                    />
+        {/* Workspace Layout */}
+        <div className="grid items-start gap-6 lg:grid-cols-[1fr_300px]">
+          
+          {/* Main Column: Chat Flow */}
+          <main className="flex min-w-0 flex-col gap-6">
+            <div className="flex flex-col gap-4">
+              {!hasMessages ? (
+                <div className="flex justify-start">
+                  <div className="max-w-[92%] rounded-2xl border border-white/60 bg-white/70 px-4 py-3.5 text-sm leading-6 text-brand-ink shadow-sm sm:max-w-[85%] sm:px-5">
+                    Ask me to help plan your week, balance your workload, or turn projects into work blocks.
                   </div>
-                  <Button
-                    className="h-12 w-full px-8 sm:h-14 sm:w-auto"
-                    disabled={isBusy}
-                    type="submit"
-                  >
-                    Send
-                  </Button>
                 </div>
-              </form>
-            </section>
-          )}
-        </main>
+              ) : null}
+
+              {messages.map((message) => (
+                <ChatBubble
+                  key={message.id}
+                  actionStates={actionStates}
+                  message={message}
+                  onApply={(suggestion) => void applySuggestion(suggestion)}
+                  onIgnore={ignoreSuggestion}
+                  onToggleEdit={toggleEdit}
+                  onUpdateSuggestion={updateSuggestion}
+                />
+              ))}
+
+              {isSubmitting ? (
+                <div className="flex justify-start">
+                  <div className="max-w-[92%] rounded-2xl border border-white/60 bg-white/70 px-4 py-3 text-sm leading-6 text-brand-ink/60 shadow-sm sm:max-w-[85%] sm:px-5">
+                    Thinking through your plan...
+                  </div>
+                </div>
+              ) : null}
+
+              {error ? (
+                <div className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
+                  {error}
+                </div>
+              ) : null}
+
+              <div ref={chatEndRef} />
+            </div>
+
+            {status === "signed_out" ? (
+              <Card className="rounded-[24px] border-white/70 bg-white/88 max-w-md">
+                <CardContent className="p-5">
+                  <p className="text-base font-semibold text-brand-ink">
+                    Sign in to use Planning Assistant.
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+                    The assistant reviews only your signed-in schedule.
+                  </p>
+                  <Link
+                    href="/"
+                    className="mt-4 inline-flex h-11 items-center justify-center rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white"
+                  >
+                    Go to sign in
+                  </Link>
+                </CardContent>
+              </Card>
+            ) : (
+              <section className="panel-strong mt-2 p-3 sm:p-4">
+                {/* Suggested Prompt Chips */}
+                <div 
+                  className="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible"
+                  style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                >
+                  {examplePrompts.map((example) => (
+                    <button
+                      key={example}
+                      className="shrink-0 rounded-full border border-brand-ink/8 bg-white/60 px-3.5 py-1.5 text-xs font-semibold text-brand-ink/60 transition-all hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
+                      type="button"
+                      onClick={() => setPrompt(example)}
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+
+                <form onSubmit={handleSubmit} className="relative">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <div className="relative flex-1">
+                      <textarea
+                        className="min-h-[52px] w-full resize-none rounded-[20px] border border-brand-ink/10 bg-white/84 px-4 py-3 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/30 focus:border-brand-teal/30 focus:bg-white focus:outline-none sm:max-h-48"
+                        disabled={isBusy}
+                        maxLength={2000}
+                        placeholder="Ask me to plan your week..."
+                        rows={1}
+                        value={prompt}
+                        onChange={(event) => setPrompt(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            void sendPrompt(prompt);
+                          }
+                        }}
+                      />
+                    </div>
+                    <Button
+                      className="h-12 w-full px-6 sm:w-auto"
+                      disabled={isBusy}
+                      type="submit"
+                    >
+                      Send
+                    </Button>
+                  </div>
+                </form>
+              </section>
+            )}
+          </main>
+
+          {/* Right Sidebar: Context */}
+          <aside className="order-first flex flex-col gap-4 lg:order-last lg:sticky lg:top-6">
+            <AssistantContextDetails context={context} />
+          </aside>
+
+        </div>
       </div>
     </div>
   );
 }
+
