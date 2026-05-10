@@ -127,11 +127,11 @@ function ContextMetric({
   value: string | number;
 }) {
   return (
-    <div className="rounded-[18px] border border-brand-ink/8 bg-white/72 p-3">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-brand-ink/42">
+    <div className="rounded-2xl border border-brand-ink/5 bg-white/40 p-2.5 sm:p-3">
+      <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-brand-ink/40">
         {label}
       </p>
-      <p className="mt-1 text-sm font-semibold text-brand-ink">{value}</p>
+      <p className="mt-0.5 text-xs font-semibold text-brand-ink sm:text-sm">{value}</p>
     </div>
   );
 }
@@ -142,62 +142,43 @@ function AssistantContextDetails({
   context?: AssistantContextSummary;
 }) {
   return (
-    <details className="rounded-[24px] border border-white/70 bg-white/76 p-4 shadow-[0_14px_34px_rgba(18,32,47,0.05)]">
-      <summary className="cursor-pointer text-sm font-semibold text-brand-ink">
-        What the assistant can see
-      </summary>
-      <p className="mt-2 text-sm leading-6 text-brand-ink/60">
-        A compact snapshot of your signed-in schedule. Your data stays scoped to
-        your Supabase account.
-      </p>
-      <div className="mt-4 grid grid-cols-2 gap-2">
+    <div className="rounded-[22px] border border-white/60 bg-white/64 p-4 shadow-sm sm:p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <FolderStackIcon className="h-4 w-4 text-brand-ink/40" />
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-brand-ink/50">
+          Assistant Context
+        </h3>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-6">
         <ContextMetric
-          label="Active projects"
+          label="Projects"
           value={context?.activeProjectsCount ?? "--"}
         />
         <ContextMetric
-          label="Planned hours"
-          value={context ? `${context.plannedWeeklyHours} hrs` : "--"}
+          label="Planned"
+          value={context ? `${context.plannedWeeklyHours}h` : "--"}
         />
         <ContextMetric
-          label="Weekly blocks"
+          label="Blocks"
           value={context?.weeklyBlocksCount ?? "--"}
         />
         <ContextMetric
-          label="Work shifts"
+          label="Shifts"
           value={context?.workShiftsCount ?? "--"}
         />
         <ContextMetric
-          label="Planner type"
+          label="Type"
           value={context?.plannerType ?? "--"}
         />
         <ContextMetric
-          label="Work hours"
-          value={context ? `${context.workScheduleHours} hrs` : "--"}
+          label="Work"
+          value={context ? `${context.workScheduleHours}h` : "--"}
         />
-      </div>
-    </details>
-  );
-}
-
-function SafetyNote() {
-  return (
-    <div className="rounded-[24px] border border-brand-teal/16 bg-brand-teal/8 p-4">
-      <div className="flex items-start gap-3">
-        <CheckCircleIcon className="mt-0.5 h-5 w-5 text-brand-teal" />
-        <div>
-          <p className="text-sm font-semibold text-brand-ink">
-            You stay in control
-          </p>
-          <p className="mt-1 text-sm leading-6 text-brand-ink/62">
-            The assistant can suggest changes, but nothing is added to your
-            schedule unless you approve it.
-          </p>
-        </div>
       </div>
     </div>
   );
 }
+
 
 function updateSuggestionInResponse(
   response: AssistantPlanReviewResponse,
@@ -516,9 +497,6 @@ export function AssistantPage() {
   const hasMessages = messages.length > 0;
   const isBusy = isSubmitting || status === "loading";
 
-  const latestAssistantMessage = useMemo(() => {
-    return [...messages].reverse().find((message) => message.role === "assistant");
-  }, [messages]);
 
   async function requestPlanReview(
     method: "GET" | "POST",
@@ -847,70 +825,63 @@ export function AssistantPage() {
   }
 
   return (
-    <div className="px-3 pb-[calc(8.5rem+env(safe-area-inset-bottom))] pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
-      <div className="app-shell flex flex-col gap-4 sm:gap-6">
+    <div className="px-3 pb-[160px] pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pt-10">
+      <div className="app-shell flex flex-col gap-6 sm:gap-8">
         <SchedulerNav />
 
-        <section className="panel-strong overflow-hidden bg-dashboard-radial p-4 sm:p-7 lg:p-8">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-end">
-            <div className="max-w-3xl">
-              <div className="eyebrow-chip">
-                <TargetIcon className="h-4 w-4" />
-                Assistant
-              </div>
-              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
-                Planning Assistant
-              </h1>
-              <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
-                Ask for help planning your week, projects, work blocks, or
-                priorities.
-              </p>
-            </div>
-
-            <SafetyNote />
+        {/* Simple Hero Section */}
+        <header className="max-w-3xl">
+          <div className="eyebrow-chip mb-4">
+            <TargetIcon className="h-3.5 w-3.5" />
+            Assistant
           </div>
-        </section>
+          <h1 className="text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+            Planning Assistant
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
+            Ask for help planning your week, projects, work blocks, or priorities.
+          </p>
+          <div className="mt-4 flex items-center gap-2 text-xs font-medium text-brand-ink/45">
+            <CheckCircleIcon className="h-3.5 w-3.5 text-brand-teal/60" />
+            <span>You stay in control. Nothing is added unless you approve it.</span>
+          </div>
+        </header>
 
-        <section className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="flex min-w-0 flex-col gap-4">
-            <div className="panel flex min-h-[34vh] flex-col gap-4 p-4 sm:min-h-[44vh] sm:p-5">
-              <AssistantContextDetails context={context} />
+        {/* Compact Context Card */}
+        <AssistantContextDetails context={context} />
 
-              <div className="flex-1 space-y-4">
-                {!hasMessages ? (
-                  <div className="flex justify-start">
-                    <div className="max-w-[92%] rounded-[26px] border border-white/70 bg-white/88 px-4 py-4 shadow-[0_12px_30px_rgba(18,32,47,0.05)] sm:max-w-[78%] sm:px-5">
-                      <p className="text-sm leading-7 text-brand-ink/78 sm:text-base">
-                        Ask me to plan your week, balance projects, or find
-                        overloaded days.
-                      </p>
-                    </div>
-                  </div>
-                ) : null}
-
-                {messages.map((message) => (
-                  <ChatBubble
-                    key={message.id}
-                    actionStates={actionStates}
-                    message={message}
-                    onApply={(suggestion) => void applySuggestion(suggestion)}
-                    onIgnore={ignoreSuggestion}
-                    onToggleEdit={toggleEdit}
-                    onUpdateSuggestion={updateSuggestion}
-                  />
-                ))}
-
-                {isSubmitting ? (
-                  <div className="flex justify-start">
-                    <div className="rounded-[26px] border border-white/70 bg-white/88 px-4 py-3 text-sm font-semibold text-brand-ink/62 shadow-[0_12px_30px_rgba(18,32,47,0.05)]">
-                      Thinking through your plan...
-                    </div>
-                  </div>
-                ) : null}
-
-                <div ref={chatEndRef} />
+        {/* Main Chat Area */}
+        <main className="flex flex-col gap-6">
+          <div className="flex flex-col gap-4">
+            {!hasMessages ? (
+              <div className="flex justify-start">
+                <div className="max-w-[92%] rounded-[26px] border border-white/70 bg-white/88 px-4 py-4 shadow-[0_12px_30px_rgba(18,32,47,0.05)] sm:max-w-[78%] sm:px-5">
+                  <p className="text-sm leading-7 text-brand-ink/78 sm:text-base">
+                    Hi! I can help you turn your projects into a realistic plan. What's on your mind today?
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : null}
+
+            {messages.map((message) => (
+              <ChatBubble
+                key={message.id}
+                actionStates={actionStates}
+                message={message}
+                onApply={(suggestion) => void applySuggestion(suggestion)}
+                onIgnore={ignoreSuggestion}
+                onToggleEdit={toggleEdit}
+                onUpdateSuggestion={updateSuggestion}
+              />
+            ))}
+
+            {isSubmitting ? (
+              <div className="flex justify-start">
+                <div className="rounded-[26px] border border-white/70 bg-white/88 px-4 py-3 text-sm font-semibold text-brand-ink/62 shadow-[0_12px_30px_rgba(18,32,47,0.05)]">
+                  Thinking through your plan...
+                </div>
+              </div>
+            ) : null}
 
             {error ? (
               <div className="rounded-[24px] border border-brand-coral/18 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
@@ -918,34 +889,41 @@ export function AssistantPage() {
               </div>
             ) : null}
 
-            {status === "signed_out" ? (
-              <Card className="rounded-[28px] border-white/70 bg-white/88">
-                <CardContent className="p-5">
-                  <p className="text-base font-semibold text-brand-ink">
-                    Sign in to use Planning Assistant.
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                    The assistant reviews only your signed-in schedule.
-                  </p>
-                  <Link
-                    href="/"
-                    className="mt-4 inline-flex h-11 items-center justify-center rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white"
-                  >
-                    Go to sign in
-                  </Link>
-                </CardContent>
-              </Card>
-            ) : null}
+            <div ref={chatEndRef} />
+          </div>
 
-            <form
-              className="rounded-[28px] border border-white/80 bg-white/94 p-3 shadow-[0_18px_48px_rgba(18,32,47,0.12)] backdrop-blur"
-              onSubmit={handleSubmit}
-            >
-              <div className="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
+          {status === "signed_out" ? (
+            <Card className="rounded-[28px] border-white/70 bg-white/88 max-w-md">
+              <CardContent className="p-5">
+                <p className="text-base font-semibold text-brand-ink">
+                  Sign in to use Planning Assistant.
+                </p>
+                <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+                  The assistant reviews only your signed-in schedule.
+                </p>
+                <Link
+                  href="/"
+                  className="mt-4 inline-flex h-11 items-center justify-center rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white"
+                >
+                  Go to sign in
+                </Link>
+              </CardContent>
+            </Card>
+          ) : (
+            <section className="panel-strong p-4 sm:p-6 lg:p-7">
+              <div className="mb-5">
+                <h2 className="text-lg font-semibold text-brand-ink">Ask the assistant</h2>
+                <p className="text-sm text-brand-ink/50 mt-1">
+                  Tell the assistant what you need help planning.
+                </p>
+              </div>
+
+              {/* Suggested Prompt Chips */}
+              <div className="flex flex-wrap gap-2 mb-5">
                 {examplePrompts.map((example) => (
                   <button
                     key={example}
-                    className="shrink-0 rounded-full border border-brand-ink/8 bg-white/78 px-3 py-2 text-xs font-semibold text-brand-ink/68 hover:border-brand-teal/22 hover:bg-brand-teal/8 hover:text-brand-ink"
+                    className="rounded-full border border-brand-ink/8 bg-white/60 px-3.5 py-2 text-xs font-semibold text-brand-ink/60 transition-all hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
                     type="button"
                     onClick={() => setPrompt(example)}
                   >
@@ -954,74 +932,36 @@ export function AssistantPage() {
                 ))}
               </div>
 
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                <textarea
-                  className="max-h-36 min-h-24 w-full resize-none rounded-[22px] border border-brand-ink/10 bg-white/84 px-4 py-3 text-base leading-6 text-brand-ink placeholder:text-brand-ink/36 focus:border-brand-teal/35 focus:bg-white focus:outline-none sm:min-h-12 sm:flex-1"
-                  disabled={status === "signed_out"}
-                  maxLength={2000}
-                  placeholder="Ask me to plan your week..."
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void sendPrompt(prompt);
-                    }
-                  }}
-                />
-                <Button
-                  className="h-12 w-full px-4 sm:w-auto"
-                  disabled={isBusy || status === "signed_out"}
-                  type="submit"
-                >
-                  Send
-                </Button>
-              </div>
-            </form>
-          </div>
-
-          <aside className="hidden min-w-0 flex-col gap-4 lg:flex lg:sticky lg:top-6">
-            <SafetyNote />
-            <Card className="rounded-[28px] border-white/70 bg-white/84">
-              <CardContent className="p-5">
-                <div className="flex items-start gap-3">
-                  <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
-                    <FolderStackIcon className="h-5 w-5" />
+              <form onSubmit={handleSubmit} className="relative">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
+                  <div className="relative flex-1">
+                    <textarea
+                      className="min-h-[100px] w-full resize-none rounded-[22px] border border-brand-ink/10 bg-white/84 px-4 py-3.5 text-base leading-6 text-brand-ink placeholder:text-brand-ink/30 focus:border-brand-teal/30 focus:bg-white focus:outline-none sm:min-h-[56px] sm:max-h-48"
+                      disabled={isBusy}
+                      maxLength={2000}
+                      placeholder="Ask me to plan your week..."
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          void sendPrompt(prompt);
+                        }
+                      }}
+                    />
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold text-brand-ink">
-                      Good things to ask
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                      Try asking for a weekly plan, overloaded days, or next
-                      actions for active projects.
-                    </p>
-                  </div>
+                  <Button
+                    className="h-12 w-full px-8 sm:h-14 sm:w-auto"
+                    disabled={isBusy}
+                    type="submit"
+                  >
+                    Send
+                  </Button>
                 </div>
-              </CardContent>
-            </Card>
-            {latestAssistantMessage?.response ? (
-              <Card className="rounded-[28px] border-white/70 bg-white/84">
-                <CardContent className="p-5">
-                  <div className="flex items-start gap-3">
-                    <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
-                      <CalendarIcon className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-brand-ink">
-                        Latest ideas
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                        {getActions(latestAssistantMessage.response).length}{" "}
-                        reviewable suggestions in the latest assistant reply.
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : null}
-          </aside>
-        </section>
+              </form>
+            </section>
+          )}
+        </main>
       </div>
     </div>
   );
