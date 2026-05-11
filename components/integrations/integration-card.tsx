@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { IntegrationCardData } from "@/lib/integrations";
@@ -36,7 +37,9 @@ export function IntegrationCard({
                 {recommendationLabel}
               </Badge>
             ) : null}
-            <Badge variant="subtle">Placeholder</Badge>
+            <Badge variant={integration.status === "available" ? undefined : "subtle"}>
+              {integration.status === "available" ? "Available now" : "Coming soon"}
+            </Badge>
           </div>
         </div>
 
@@ -52,40 +55,30 @@ export function IntegrationCard({
           </p>
         </div>
 
-        <div className="mt-5 space-y-3">
-          {isRecommended && recommendationReason ? (
-            <div className="rounded-[22px] border border-brand-teal/15 bg-brand-teal/8 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-teal">
-                Why this fits
-              </p>
-              <p className="mt-2 text-sm leading-6 text-brand-ink/70">
-                {recommendationReason}
-              </p>
-            </div>
-          ) : null}
-
-          <div className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-              What it will do
-            </p>
-            <p className="mt-2 text-sm leading-6 text-brand-ink/70">
-              {integration.plannedBehavior}
-            </p>
-          </div>
-
-          <div className="rounded-[22px] border border-brand-ink/8 bg-brand-ink/[0.03] p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-              Why it helps
-            </p>
-            <p className="mt-2 text-sm leading-6 text-brand-ink/70">
-              {integration.value}
+        <div className="mt-5 flex-1">
+          <div className="rounded-[18px] border border-brand-ink/8 bg-brand-ink/[0.02] p-4">
+            <p className="text-sm leading-6 text-brand-ink/70">
+              <span className="font-semibold text-brand-ink">Why it helps:</span> {integration.whyItHelps}
             </p>
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap gap-2">
-          <Badge variant="outline">OAuth later</Badge>
-          <Badge variant="outline">No sync yet</Badge>
+        <div className="mt-6 flex flex-wrap gap-3">
+          {integration.status === "available" ? (
+            <Link
+              href="/plan"
+              className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
+            >
+              Go to Weekly Plan
+            </Link>
+          ) : (
+            <button
+              disabled
+              className="inline-flex h-11 w-full cursor-not-allowed items-center justify-center rounded-xl border border-brand-ink/10 bg-white/50 px-6 text-sm font-semibold text-brand-ink/40 sm:w-auto"
+            >
+              Setup coming later
+            </button>
+          )}
         </div>
       </CardContent>
     </Card>

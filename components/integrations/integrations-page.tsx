@@ -51,6 +51,8 @@ const recommendationReasons: Record<
       "Most relevant for pulling course deadlines, quizzes, and assignment dates into planning.",
     "ICS import/export":
       "A flexible fallback for importing course calendars or exported academic schedules.",
+    "Work schedule imports":
+      "Helpful if you balance classes around part-time jobs or shift work.",
   },
   Professional: {
     "Google Calendar":
@@ -63,6 +65,8 @@ const recommendationReasons: Record<
       "Less central for most professional workflows unless you also manage coursework.",
     "ICS import/export":
       "Helpful for moving calendar data between tools without a direct connection.",
+    "Work schedule imports":
+      "Useful if your work relies on shift schedules or variable hours.",
   },
   "Organization leader": {
     "Google Calendar":
@@ -75,6 +79,8 @@ const recommendationReasons: Record<
       "Useful only if your organization planning overlaps with course-based schedules.",
     "ICS import/export":
       "Helpful for sharing events or importing calendars from tools that export files.",
+    "Work schedule imports":
+      "Helpful for aligning organization commitments with personal work schedules.",
   },
   "Creator / entrepreneur": {
     "Google Calendar":
@@ -87,6 +93,8 @@ const recommendationReasons: Record<
       "Less central unless your creator or business work also overlaps with coursework.",
     "ICS import/export":
       "Useful for exporting launches, content plans, or important work blocks into other tools.",
+    "Work schedule imports":
+      "A great fit if you balance creative work around a separate day job or shift schedule.",
   },
   "General planning": {
     "Google Calendar":
@@ -99,6 +107,8 @@ const recommendationReasons: Record<
       "Best when classes, assignments, or course calendars are part of your planning.",
     "ICS import/export":
       "A flexible option for moving calendar data in or out without a direct integration.",
+    "Work schedule imports":
+      "Useful if you need to plan your week around variable work shifts.",
   },
 };
 
@@ -235,6 +245,9 @@ export function IntegrationsPage() {
       ? "Recommended for you"
       : `Recommended for ${plannerType.toLowerCase()}`;
 
+  const availableIntegrations = visibleIntegrations.filter(i => i.status === "available");
+  const comingSoonIntegrations = visibleIntegrations.filter(i => i.status === "coming_soon");
+
   return (
     <div className="px-3 pb-28 pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
       <div className="app-shell flex flex-col gap-5 sm:gap-6">
@@ -249,19 +262,16 @@ export function IntegrationsPage() {
               </div>
 
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                Prepare Schedule Builder for calendar connections.
+                Connect your schedule tools
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                These placeholders show where calendar and import workflows can
-                connect later. OAuth, imports, and email-based automation are
-                intentionally not enabled yet.
+                Bring calendar events, deadlines, and planning workflows into Schedule Builder.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2.5">
-                <Badge>5 planned integrations</Badge>
+                <Badge>{visibleIntegrations.length} integrations</Badge>
                 <Badge variant="subtle">{recommendationSource}</Badge>
-                <Badge variant="subtle">UI placeholders only</Badge>
               </div>
             </div>
 
@@ -295,51 +305,75 @@ export function IntegrationsPage() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-6 xl:grid-cols-3">
-          {visibleIntegrations.map((integration) => {
-            const wasSelectedDuringSetup = selectedIntegrations.has(
-              integration.onboardingName,
-            );
-            const isUsefulForWorkflow = workflowRecommendedIntegrations.has(
-              integration.onboardingName,
-            );
-            const isRecommended =
-              wasSelectedDuringSetup || isUsefulForWorkflow;
-            const recommendationLabel = wasSelectedDuringSetup
-              ? "Selected during setup"
-              : "Useful for your workflow";
+        <div className="mt-4">
+          <h2 className="mb-5 text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
+            Available now
+          </h2>
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-6 xl:grid-cols-3">
+            {availableIntegrations.map((integration) => {
+              const wasSelectedDuringSetup = selectedIntegrations.has(
+                integration.onboardingName,
+              );
+              const isUsefulForWorkflow = workflowRecommendedIntegrations.has(
+                integration.onboardingName,
+              );
+              const isRecommended =
+                wasSelectedDuringSetup || isUsefulForWorkflow;
+              const recommendationLabel = wasSelectedDuringSetup
+                ? "Selected during setup"
+                : "Useful for your workflow";
 
-            return (
-              <IntegrationCard
-                key={integration.id}
-                integration={integration}
-                isRecommended={isRecommended}
-                recommendationLabel={recommendationLabel}
-                recommendationReason={
-                  isRecommended
-                    ? recommendationReasons[plannerType][integration.onboardingName]
-                    : undefined
-                }
-              />
-            );
-          })}
-        </section>
+              return (
+                <IntegrationCard
+                  key={integration.id}
+                  integration={integration}
+                  isRecommended={isRecommended}
+                  recommendationLabel={recommendationLabel}
+                  recommendationReason={
+                    isRecommended
+                      ? recommendationReasons[plannerType][integration.onboardingName]
+                      : undefined
+                  }
+                />
+              );
+            })}
+          </section>
+        </div>
 
-        <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
-          <CardContent className="p-5 sm:p-6">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge>Roadmap note</Badge>
-              <Badge variant="subtle">No OAuth yet</Badge>
-              <Badge variant="subtle">No email scanning yet</Badge>
-            </div>
+        <div className="mt-8 lg:mt-12">
+          <h2 className="mb-5 text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
+            Coming soon
+          </h2>
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-6 xl:grid-cols-3">
+            {comingSoonIntegrations.map((integration) => {
+              const wasSelectedDuringSetup = selectedIntegrations.has(
+                integration.onboardingName,
+              );
+              const isUsefulForWorkflow = workflowRecommendedIntegrations.has(
+                integration.onboardingName,
+              );
+              const isRecommended =
+                wasSelectedDuringSetup || isUsefulForWorkflow;
+              const recommendationLabel = wasSelectedDuringSetup
+                ? "Selected during setup"
+                : "Useful for your workflow";
 
-            <p className="mt-4 text-sm leading-6 text-brand-ink/70 sm:text-base">
-              The next implementation phase can focus on real connection flows
-              without changing the planning layout. Until then, this page keeps
-              the integration surface visible and easy to extend.
-            </p>
-          </CardContent>
-        </Card>
+              return (
+                <IntegrationCard
+                  key={integration.id}
+                  integration={integration}
+                  isRecommended={isRecommended}
+                  recommendationLabel={recommendationLabel}
+                  recommendationReason={
+                    isRecommended
+                      ? recommendationReasons[plannerType][integration.onboardingName]
+                      : undefined
+                  }
+                />
+              );
+            })}
+          </section>
+        </div>
       </div>
     </div>
   );

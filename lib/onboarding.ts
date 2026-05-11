@@ -23,6 +23,7 @@ export const desiredIntegrationOptions = [
   "Outlook Calendar",
   "D2L / Brightspace",
   "ICS import/export",
+  "Work schedule imports",
 ] as const;
 
 export const scheduleIntensityOptions = ["Light", "Moderate", "Heavy"] as const;
