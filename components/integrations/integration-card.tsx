@@ -32,7 +32,11 @@ export function IntegrationCard({
             {integration.monogram}
           </div>
           <div className="flex flex-col items-end gap-2">
-            {isRecommended ? (
+            {integration.priority === "planned_next" ? (
+              <Badge className="border-brand-ink/20 bg-brand-ink/10 text-brand-ink">
+                Planned next
+              </Badge>
+            ) : isRecommended ? (
               <Badge className="border-brand-teal/20 bg-brand-teal/10 text-brand-teal">
                 {recommendationLabel}
               </Badge>
@@ -69,15 +73,12 @@ export function IntegrationCard({
               href="/plan"
               className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
             >
-              Go to Weekly Plan
+              Export from Weekly Plan
             </Link>
           ) : (
-            <button
-              disabled
-              className="inline-flex h-11 w-full cursor-not-allowed items-center justify-center rounded-xl border border-brand-ink/10 bg-white/50 px-6 text-sm font-semibold text-brand-ink/40 sm:w-auto"
-            >
+            <div className="inline-flex h-11 items-center justify-center px-1 text-sm font-medium text-brand-ink/40">
               Setup coming later
-            </button>
+            </div>
           )}
         </div>
       </CardContent>

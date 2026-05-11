@@ -10,6 +10,7 @@ export type IntegrationCardData = {
   whyItHelps: string;
   accentClassName: string;
   status: "available" | "coming_soon";
+  priority?: "planned_next";
 };
 
 export const integrations: IntegrationCardData[] = [
@@ -68,6 +69,7 @@ export const integrations: IntegrationCardData[] = [
     accentClassName:
       "bg-[#eef9f4] text-[#1f6d52] ring-1 ring-inset ring-[#d2ebdf]",
     status: "coming_soon",
+    priority: "planned_next",
   },
   {
     id: "work-schedule-imports",
@@ -82,13 +84,14 @@ export const integrations: IntegrationCardData[] = [
     accentClassName:
       "bg-[#f0edfd] text-[#553c9a] ring-1 ring-inset ring-[#d8cbf9]",
     status: "coming_soon",
+    priority: "planned_next",
   },
   {
     id: "ics-upload-import",
-    name: "Calendar export",
+    name: "Calendar Export",
     onboardingName: "ICS import/export",
     monogram: "ICS",
-    category: "Export & import",
+    category: "Export Available",
     description:
       "Export your weekly plan to Apple Calendar, Google Calendar, or Outlook.",
     whyItHelps:

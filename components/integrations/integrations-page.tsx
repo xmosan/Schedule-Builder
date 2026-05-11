@@ -15,8 +15,6 @@ import {
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { fetchPlannerProfileForUser } from "@/lib/supabase/scheduler";
 
-type ProfileStatus = "loading" | "loaded" | "signed_out" | "error";
-
 const defaultRecommendationsByPlannerType: Record<
   PlannerType,
   DesiredIntegration[]
@@ -112,22 +110,6 @@ const recommendationReasons: Record<
   },
 };
 
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return "Personalized recommendations are unavailable right now.";
-}
 
 export function IntegrationsPage() {
   const [plannerType, setPlannerType] =
@@ -135,14 +117,9 @@ export function IntegrationsPage() {
   const [desiredIntegrations, setDesiredIntegrations] = useState<
     DesiredIntegration[]
   >([]);
-  const [profileStatus, setProfileStatus] =
-    useState<ProfileStatus>("loading");
-  const [profileMessage, setProfileMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
-      setProfileStatus("signed_out");
-      setProfileMessage("Sign in to personalize integration recommendations.");
       return;
     }
 
@@ -159,16 +136,12 @@ export function IntegrationsPage() {
         }
 
         if (sessionError) {
-          setProfileStatus("error");
-          setProfileMessage(sessionError.message);
           return;
         }
 
         const userId = sessionData.session?.user.id;
 
         if (!userId) {
-          setProfileStatus("signed_out");
-          setProfileMessage("Sign in to personalize integration recommendations.");
           return;
         }
 
@@ -179,29 +152,20 @@ export function IntegrationsPage() {
         }
 
         if (profileResult.error) {
-          setProfileStatus("error");
-          setProfileMessage(getErrorMessage(profileResult.error));
           return;
         }
 
         if (profileResult.data) {
           setPlannerType(profileResult.data.plannerType);
           setDesiredIntegrations(profileResult.data.desiredIntegrations);
-          setProfileMessage(null);
         } else {
           setPlannerType("General planning");
           setDesiredIntegrations([]);
-          setProfileMessage("Using balanced recommendations until onboarding is saved.");
         }
-
-        setProfileStatus("loaded");
       } catch (error) {
         if (!isActive) {
           return;
         }
-
-        setProfileStatus("error");
-        setProfileMessage(getErrorMessage(error));
       }
     }
 
@@ -277,28 +241,15 @@ export function IntegrationsPage() {
 
             <Card className="rounded-[26px] border-white/70 bg-white/88 sm:rounded-[30px]">
               <CardContent className="p-4 sm:p-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-                  Current scope
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-teal">
+                  Planned Roadmap
                 </p>
                 <div className="mt-4 space-y-3">
                   <div className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4">
-                    <p className="text-sm font-semibold text-brand-ink">
-                      Recommendations only
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-brand-ink/65">
-                      {profileStatus === "loading"
-                        ? "Loading your onboarding preferences..."
-                        : profileMessage ??
-                          "Highlighted cards reflect your onboarding profile. No accounts are connected yet."}
+                    <p className="text-sm leading-6 text-brand-ink/70">
+                      <span className="font-semibold text-brand-ink">Start with calendar export today.</span> Direct calendar and school/work connections are planned next.
                     </p>
                   </div>
-
-                  <Link
-                    href="/"
-                    className="inline-flex h-12 w-full items-center justify-center rounded-2xl border border-brand-ink/10 bg-white/75 px-4 text-sm font-semibold text-brand-ink hover:-translate-y-0.5 hover:border-brand-ink/20 hover:bg-white"
-                  >
-                    Back to dashboard
-                  </Link>
                 </div>
               </CardContent>
             </Card>
