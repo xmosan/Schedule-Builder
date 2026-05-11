@@ -26,10 +26,21 @@ type ActionStatus = "pending" | "ignored" | "applying" | "applied" | "error";
 
 type ChatMessage = {
   id: string;
+  isStreaming?: boolean;
   role: ChatRole;
   content: string;
   response?: AssistantPlanReviewResponse;
 };
+
+type AssistantChatHistoryItem = {
+  role: ChatRole;
+  content: string;
+};
+
+type AssistantStreamEvent =
+  | { type: "message_delta"; delta: string }
+  | { type: "final"; response: AssistantPlanReviewResponse }
+  | { type: "error"; error: string };
 
 type ActionState = {
   editing: boolean;
@@ -123,6 +134,61 @@ function normalizeResponseForChat(
     actions,
     suggestions: actions,
   };
+}
+
+function normalizeMessagesForRequest(
+  messages: ChatMessage[],
+): AssistantChatHistoryItem[] {
+  return messages
+    .filter((message) => message.content.trim().length > 0)
+    .slice(-8)
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+}
+
+function parseAssistantStreamLine(line: string): AssistantStreamEvent | null {
+  if (!line.trim()) {
+    return null;
+  }
+
+  const parsed = JSON.parse(line) as unknown;
+
+  if (typeof parsed !== "object" || parsed === null || !("type" in parsed)) {
+    return null;
+  }
+
+  if (
+    parsed.type === "message_delta" &&
+    "delta" in parsed &&
+    typeof parsed.delta === "string"
+  ) {
+    return {
+      type: "message_delta",
+      delta: parsed.delta,
+    };
+  }
+
+  if (parsed.type === "final" && "response" in parsed) {
+    return {
+      type: "final",
+      response: parsed.response as AssistantPlanReviewResponse,
+    };
+  }
+
+  if (
+    parsed.type === "error" &&
+    "error" in parsed &&
+    typeof parsed.error === "string"
+  ) {
+    return {
+      type: "error",
+      error: parsed.error,
+    };
+  }
+
+  return null;
 }
 
 function AssistantContextDetails({
@@ -449,12 +515,25 @@ function ChatBubble({
               : "border border-brand-ink/5 bg-white text-brand-ink shadow-sm",
           )}
         >
-          <p className={cn("text-sm leading-6 whitespace-pre-wrap", isUser ? "text-white" : "text-brand-ink")}>
-            {message.content}
-          </p>
+          {message.isStreaming && !message.content ? (
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold text-brand-ink/60">
+                Thinking through your schedule
+              </span>
+              <span className="flex gap-1.5">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40" />
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]" />
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.4s]" />
+              </span>
+            </div>
+          ) : (
+            <p className={cn("text-sm leading-6 whitespace-pre-wrap", isUser ? "text-white" : "text-brand-ink")}>
+              {message.content}
+            </p>
+          )}
         </div>
 
-        {!isUser && actionCount > 0 ? (
+        {!isUser && !message.isStreaming && actionCount > 0 ? (
           <div className="mt-2 w-full space-y-4">
             {actionableActions.length > 0 ? (
               <section>
@@ -600,6 +679,120 @@ export function AssistantPage() {
     }
 
     return payload as AssistantPlanReviewResponse;
+  }
+
+  async function requestPlanReviewStream({
+    nextPrompt,
+    onDelta,
+    recentMessages,
+  }: {
+    nextPrompt: string;
+    onDelta: (delta: string) => void;
+    recentMessages: AssistantChatHistoryItem[];
+  }) {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error: sessionError } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error(sessionError.message);
+    }
+
+    const accessToken = data.session?.access_token;
+
+    if (!accessToken) {
+      const signedOutError = new Error("Sign in before using Planning Assistant.");
+      signedOutError.name = "SignedOutError";
+      throw signedOutError;
+    }
+
+    const apiResponse = await fetch("/api/assistant/plan", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: nextPrompt,
+        recentMessages,
+      }),
+    });
+
+    if (!apiResponse.ok) {
+      const payload: unknown = await apiResponse.json().catch(() => null);
+      const apiError =
+        typeof payload === "object" &&
+        payload !== null &&
+        "error" in payload &&
+        typeof payload.error === "string"
+          ? payload.error
+          : "Planning Assistant could not load.";
+      throw new Error(apiError);
+    }
+
+    if (!apiResponse.body) {
+      throw new Error("Planning Assistant could not stream a response.");
+    }
+
+    const reader = apiResponse.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResponse: AssistantPlanReviewResponse | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const event = parseAssistantStreamLine(line);
+
+        if (!event) {
+          continue;
+        }
+
+        if (event.type === "message_delta") {
+          onDelta(event.delta);
+        }
+
+        if (event.type === "final") {
+          finalResponse = event.response;
+        }
+
+        if (event.type === "error") {
+          throw new Error(event.error);
+        }
+      }
+    }
+
+    const finalLine = buffer.trim();
+
+    if (finalLine) {
+      const event = parseAssistantStreamLine(finalLine);
+
+      if (event?.type === "message_delta") {
+        onDelta(event.delta);
+      }
+
+      if (event?.type === "final") {
+        finalResponse = event.response;
+      }
+
+      if (event?.type === "error") {
+        throw new Error(event.error);
+      }
+    }
+
+    if (!finalResponse) {
+      throw new Error("Planning Assistant finished without a final response.");
+    }
+
+    return finalResponse;
   }
 
   async function requestApplyAction(suggestion: AssistantSuggestion) {
@@ -760,15 +953,34 @@ export function AssistantPage() {
       role: "user",
       content: trimmedPrompt,
     };
+    const assistantMessageId = createId("assistant");
+    const assistantPlaceholder: ChatMessage = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      isStreaming: true,
+    };
+    const recentMessages = normalizeMessagesForRequest(messages);
 
-    setMessages((current) => [...current, userMessage]);
+    setMessages((current) => [...current, userMessage, assistantPlaceholder]);
     setPrompt("");
     setIsSubmitting(true);
     setError(null);
 
     try {
-      const response = await requestPlanReview("POST", trimmedPrompt);
-      const assistantMessageId = createId("assistant");
+      const response = await requestPlanReviewStream({
+        nextPrompt: trimmedPrompt,
+        recentMessages,
+        onDelta: (delta) => {
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: `${message.content}${delta}` }
+                : message,
+            ),
+          );
+        },
+      });
       const chatResponse = normalizeResponseForChat(response, assistantMessageId);
       const actions = getActions(chatResponse);
 
@@ -785,15 +997,18 @@ export function AssistantPage() {
 
         return nextStates;
       });
-      setMessages((current) => [
-        ...current,
-        {
-          id: assistantMessageId,
-          role: "assistant",
-          content: chatResponse.assistantMessage || chatResponse.message,
-          response: chatResponse,
-        },
-      ]);
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                content: chatResponse.assistantMessage || chatResponse.message,
+                isStreaming: false,
+                response: chatResponse,
+              }
+            : message,
+        ),
+      );
       setStatus("ready");
     } catch (submitError) {
       if (
@@ -802,19 +1017,26 @@ export function AssistantPage() {
       ) {
         setStatus("signed_out");
         setError(null);
+        setMessages((current) =>
+          current.filter((message) => message.id !== assistantMessageId),
+        );
         return;
       }
 
       setError(getErrorMessage(submitError));
-      setMessages((current) => [
-        ...current,
-        {
-          id: createId("assistant-error"),
-          role: "assistant",
-          content:
-            "I couldn’t finish that planning request. Try again in a moment, or ask in a simpler way.",
-        },
-      ]);
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                content:
+                  message.content ||
+                  "I couldn’t finish that planning request. Try again in a moment, or ask in a simpler way.",
+                isStreaming: false,
+              }
+            : message,
+        ),
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -966,21 +1188,6 @@ export function AssistantPage() {
                   onUpdateSuggestion={updateSuggestion}
                 />
               ))}
-
-              {isSubmitting ? (
-                <div className="flex justify-start">
-                  <div className="flex h-[44px] items-center gap-3 rounded-2xl border border-white/60 bg-white/90 px-4 shadow-sm">
-                    <span className="text-sm font-semibold text-brand-ink/60">
-                      Thinking through your schedule
-                    </span>
-                    <div className="flex gap-1.5">
-                      <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40"></div>
-                      <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]"></div>
-                      <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.4s]"></div>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
 
               {error ? (
                 <div className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-center text-sm leading-6 text-brand-coral">

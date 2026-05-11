@@ -97,11 +97,17 @@ const maxDefaultAssistantCards = 4;
 const maxDefaultWarningCards = 2;
 
 const greetingPattern = /^(hey|hello|hi|salam|assalamu alaikum|yo|sup|good morning|good afternoon|good evening)[\s!.?]*$/i;
+const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don't know|not sure|surprise me)[\s!.?]*$/i;
 const planningIntentPattern =
-  /\b(plan|schedule|week|weekly|block|blocks|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time)\b/i;
+  /\b(plan|schedule|week|weekly|block|blocks|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study)\b/i;
+const focusPromptPattern = /\b(focus|first|top 3|top priority|priorit|what should i do)\b/i;
 
 export function isGreetingPrompt(prompt: string) {
   return greetingPattern.test(prompt.trim());
+}
+
+export function isVaguePrompt(prompt: string) {
+  return vaguePromptPattern.test(prompt.trim());
 }
 
 export function hasPlanningIntent(prompt: string) {
@@ -479,9 +485,9 @@ export function createFallbackAssistantResponse(
     });
   }
 
-  if (!hasPlanningIntent(prompt)) {
+  if (isVaguePrompt(prompt) || !hasPlanningIntent(prompt)) {
     const message =
-      "I can help with that. If you want, tell me what you are trying to plan or what feels messy right now, and I’ll turn it into a few practical next steps.";
+      "I can help with that. What feels most useful right now: planning your week, finding overloaded days, or choosing what to focus on first?";
 
     return createAssistantResponseFromSuggestions({
       activeProjects: sortProjectsForFocus(context.projects),
@@ -493,6 +499,7 @@ export function createFallbackAssistantResponse(
 
   const suggestions: AssistantSuggestion[] = [];
   const activeProjects = sortProjectsForFocus(context.projects);
+  const topProject = activeProjects[0];
   const existingBlockProjectNames = new Set(
     context.weeklyPlanBlocks.map((block) => block.projectName.toLowerCase()),
   );
@@ -658,6 +665,8 @@ export function createFallbackAssistantResponse(
   const assistantMessage =
     hasNoObviousFindings
       ? "Your plan looks pretty workable from what I can see. If you want a sharper review, ask me to focus on deadlines, open time, or your Top 3."
+      : focusPromptPattern.test(prompt) && topProject
+      ? `I’d start with ${topProject.name}. It has the strongest priority signal right now, so I’d make the next action visible first and keep the rest of the plan lighter around it.`
       : suggestions.length > 0
       ? "Absolutely — I’d keep this focused. I picked the highest-impact next steps first so your plan stays realistic instead of crowded."
       : "Tell me what feels most important, and I’ll help turn it into a simple plan.";

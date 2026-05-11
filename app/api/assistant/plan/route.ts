@@ -9,6 +9,7 @@ import {
   filterAssistantSuggestions,
   hasPlanningIntent,
   isGreetingPrompt,
+  isVaguePrompt,
   normalizeAssistantSuggestions,
   type AssistantPlanReviewResponse,
   type AssistantPlanningContext,
@@ -25,8 +26,20 @@ import {
 export const dynamic = "force-dynamic";
 
 const maxPromptLength = 2000;
+const maxRecentMessages = 8;
+const maxRecentMessageLength = 1200;
 const defaultOpenAiModel = "gpt-4o-mini";
 let openAiClient: OpenAI | null = null;
+
+type AssistantChatHistoryItem = {
+  role: "assistant" | "user";
+  content: string;
+};
+
+type AssistantStreamEvent =
+  | { type: "message_delta"; delta: string }
+  | { type: "final"; response: AssistantPlanReviewResponse }
+  | { type: "error"; error: string };
 
 const assistantResponseJsonSchema = {
   type: "object",
@@ -157,6 +170,84 @@ function getOpenAiClient(apiKey: string) {
   return openAiClient;
 }
 
+function normalizeRecentMessages(value: unknown): AssistantChatHistoryItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (typeof item !== "object" || item === null) {
+        return null;
+      }
+
+      const candidate = item as Partial<AssistantChatHistoryItem>;
+
+      if (
+        (candidate.role !== "assistant" && candidate.role !== "user") ||
+        typeof candidate.content !== "string" ||
+        !candidate.content.trim()
+      ) {
+        return null;
+      }
+
+      return {
+        role: candidate.role,
+        content: candidate.content.trim().slice(0, maxRecentMessageLength),
+      };
+    })
+    .filter((item): item is AssistantChatHistoryItem => item !== null)
+    .slice(-maxRecentMessages);
+}
+
+function createNdjsonStream(
+  executor: (send: (event: AssistantStreamEvent) => void) => Promise<void>,
+) {
+  const encoder = new TextEncoder();
+
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        const send = (event: AssistantStreamEvent) => {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        };
+
+        try {
+          await executor(send);
+        } catch (error) {
+          send({
+            type: "error",
+            error: getErrorMessage(error),
+          });
+        } finally {
+          controller.close();
+        }
+      },
+    }),
+    {
+      headers: {
+        "Cache-Control": "no-cache, no-transform",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "X-Accel-Buffering": "no",
+      },
+    },
+  );
+}
+
+function splitTextForFallbackStream(message: string) {
+  return message.match(/.{1,28}(?:\s|$)/g) ?? [message];
+}
+
+async function streamFallbackMessage(
+  message: string,
+  send: (event: AssistantStreamEvent) => void,
+) {
+  for (const chunk of splitTextForFallbackStream(message)) {
+    send({ type: "message_delta", delta: chunk });
+    await new Promise((resolve) => setTimeout(resolve, 12));
+  }
+}
+
 async function getAuthenticatedUser(
   request: NextRequest,
 ): Promise<{ supabase: SupabaseClient; userId: string } | NextResponse> {
@@ -229,6 +320,7 @@ function createAiPrompt(
   prompt: string,
   context: AssistantPlanningContext,
   profile: PlannerProfile | null,
+  recentMessages: AssistantChatHistoryItem[] = [],
 ) {
   return [
     "You are Schedule Builder's friendly planning assistant.",
@@ -257,6 +349,9 @@ function createAiPrompt(
     "For optional fields that do not apply, return an empty string or 0.",
     "For suggested_weekly_block cards, include projectName, day, estimatedHours, and plannedTask.",
     "For suggested_next_action cards, include projectName and proposedNextAction.",
+    "",
+    "Recent conversation:",
+    JSON.stringify(recentMessages),
     "",
     `User request: ${prompt}`,
     "",
@@ -323,10 +418,69 @@ function createAiPrompt(
   ].join("\n");
 }
 
+function createAssistantMessagePrompt(
+  prompt: string,
+  context: AssistantPlanningContext,
+  profile: PlannerProfile | null,
+  recentMessages: AssistantChatHistoryItem[],
+) {
+  return [
+    "You are Schedule Builder's conversational planning assistant.",
+    "Write only the assistant message text. Do not return JSON.",
+    "Be natural, specific, and concise. Aim for 2-5 short sentences.",
+    "Pay attention to the latest user message and the recent conversation.",
+    "If the user greets you, reply warmly and ask what they want to plan. Do not give a full report.",
+    "If the user is vague, ask one helpful follow-up question instead of inventing a full schedule.",
+    "If the user asks a normal question, answer it first.",
+    "If the user asks for planning help, give a practical summary before separate action cards are shown by the app.",
+    "Avoid repeating the same opening wording from prior assistant messages.",
+    "Never claim anything was saved or changed.",
+    "Never say you created calendar events.",
+    "",
+    "Recent conversation:",
+    JSON.stringify(recentMessages),
+    "",
+    `Latest user message: ${prompt}`,
+    "",
+    "Schedule context:",
+    JSON.stringify({
+      plannerType: profile?.plannerType ?? context.plannerType,
+      activeProjectsCount: context.activeProjectsCount,
+      plannedWeeklyHours: context.plannedWeeklyHours,
+      weeklyBlocksCount: context.weeklyBlocksCount,
+      weeklyBlockHours: context.totalWeeklyBlockHours,
+      workShiftsCount: context.workShiftsCount,
+      workScheduleHours: context.workScheduleHours,
+      projects: context.projects.map((project) => ({
+        name: project.name,
+        category: project.category,
+        priority: project.priority,
+        deadline: project.deadline,
+        nextAction: project.nextAction,
+        weeklyHours: project.weeklyHours,
+        completed: project.completed,
+      })),
+      weeklyPlanBlocks: context.weeklyPlanBlocks.map((block) => ({
+        day: block.day,
+        projectName: block.projectName,
+        plannedTask: block.plannedTask,
+        estimatedHours: block.estimatedHours,
+      })),
+      workShifts: context.workShifts.map((shift) => ({
+        day: shift.day,
+        startTime: shift.startTime,
+        endTime: shift.endTime,
+        recurring: shift.recurring,
+      })),
+    }),
+  ].join("\n");
+}
+
 async function createOpenAiSuggestions(
   prompt: string,
   context: AssistantPlanningContext,
   profile: PlannerProfile | null,
+  recentMessages: AssistantChatHistoryItem[] = [],
 ): Promise<Pick<AssistantPlanReviewResponse, "message" | "suggestions">> {
   const apiKey = process.env.OPENAI_API_KEY;
 
@@ -339,7 +493,7 @@ async function createOpenAiSuggestions(
     model: process.env.AI_MODEL || defaultOpenAiModel,
     instructions:
       "You generate safe, structured planning suggestions for a project scheduling app. Output JSON only and never suggest destructive actions.",
-    input: createAiPrompt(prompt, context, profile),
+    input: createAiPrompt(prompt, context, profile, recentMessages),
     max_output_tokens: 1400,
     text: {
       format: {
@@ -377,6 +531,56 @@ async function createOpenAiSuggestions(
   };
 }
 
+async function streamOpenAiAssistantMessage({
+  context,
+  profile,
+  prompt,
+  recentMessages,
+  send,
+}: {
+  context: AssistantPlanningContext;
+  profile: PlannerProfile | null;
+  prompt: string;
+  recentMessages: AssistantChatHistoryItem[];
+  send: (event: AssistantStreamEvent) => void;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured.");
+  }
+
+  const client = getOpenAiClient(apiKey);
+  const stream = await client.responses.create({
+    model: process.env.AI_MODEL || defaultOpenAiModel,
+    instructions:
+      "You are a friendly planning coach inside Schedule Builder. Stream plain conversational text only.",
+    input: createAssistantMessagePrompt(prompt, context, profile, recentMessages),
+    max_output_tokens: 500,
+    stream: true,
+  });
+  let message = "";
+
+  for await (const event of stream) {
+    if (event.type === "response.output_text.delta") {
+      message += event.delta;
+      send({ type: "message_delta", delta: event.delta });
+    }
+
+    if (event.type === "response.failed") {
+      throw new Error(
+        event.response.error?.message ?? "OpenAI could not finish the response.",
+      );
+    }
+
+    if (event.type === "response.incomplete") {
+      throw new Error("OpenAI response was incomplete.");
+    }
+  }
+
+  return message.trim();
+}
+
 export async function GET(request: NextRequest) {
   const authResult = await getAuthenticatedUser(request);
 
@@ -407,8 +611,12 @@ export async function POST(request: NextRequest) {
     return authResult;
   }
 
-  const body = (await request.json().catch(() => ({}))) as { prompt?: unknown };
+  const body = (await request.json().catch(() => ({}))) as {
+    prompt?: unknown;
+    recentMessages?: unknown;
+  };
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  const recentMessages = normalizeRecentMessages(body.recentMessages);
 
   if (!prompt) {
     return NextResponse.json(
@@ -438,34 +646,78 @@ export async function POST(request: NextRequest) {
     message: fallbackMessage,
   };
 
-  if (isGreetingPrompt(prompt) || !hasPlanningIntent(prompt)) {
-    return NextResponse.json(fallbackWithWarning);
-  }
+  return createNdjsonStream(async (send) => {
+    if (
+      isGreetingPrompt(prompt) ||
+      isVaguePrompt(prompt) ||
+      !process.env.OPENAI_API_KEY
+    ) {
+      await streamFallbackMessage(fallbackWithWarning.message, send);
+      send({ type: "final", response: fallbackWithWarning });
+      return;
+    }
 
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json(fallbackWithWarning);
-  }
+    let streamedMessage = "";
 
-  try {
-    const aiResponse = await createOpenAiSuggestions(prompt, context, profile);
+    try {
+      streamedMessage = await streamOpenAiAssistantMessage({
+        context,
+        profile,
+        prompt,
+        recentMessages,
+        send,
+      });
+    } catch (error) {
+      const fallbackMessage = `${fallbackWithWarning.message} I had trouble getting the full assistant response, so I used a simpler planning check for now. ${getErrorMessage(error)}`;
+      const fallbackWithError: AssistantPlanReviewResponse = {
+        ...fallbackWithWarning,
+        assistantMessage: fallbackMessage,
+        message: fallbackMessage,
+      };
 
-    const aiMessage = warning ? `${aiResponse.message} ${warning}` : aiResponse.message;
+      await streamFallbackMessage(fallbackMessage, send);
+      send({ type: "final", response: fallbackWithError });
+      return;
+    }
 
-    return NextResponse.json({
-      actions: aiResponse.suggestions,
-      assistantMessage: aiMessage,
-      context: fallbackResponse.context,
-      message: aiMessage,
-      source: "ai",
-      suggestions: aiResponse.suggestions,
-    } satisfies AssistantPlanReviewResponse);
-  } catch (error) {
-    const fallbackMessage = `${fallbackWithWarning.message} I had trouble getting the full assistant response, so I used a simpler planning check for now. ${getErrorMessage(error)}`;
+    const shouldGenerateSuggestions = hasPlanningIntent(prompt);
+    let suggestions: AssistantPlanReviewResponse["suggestions"] = [];
+    let finalMessage = streamedMessage;
 
-    return NextResponse.json({
-      ...fallbackWithWarning,
-      assistantMessage: fallbackMessage,
-      message: fallbackMessage,
+    if (shouldGenerateSuggestions) {
+      try {
+        const aiResponse = await createOpenAiSuggestions(
+          prompt,
+          context,
+          profile,
+          recentMessages,
+        );
+        suggestions = aiResponse.suggestions;
+        finalMessage = streamedMessage || aiResponse.message;
+      } catch (error) {
+        const note =
+          " I couldn’t prepare action cards this time, but you can still use the plan above manually.";
+        finalMessage = `${streamedMessage}${note}`;
+        send({ type: "message_delta", delta: note });
+      }
+    }
+
+    const messageWithWarning = warning ? `${finalMessage} ${warning}` : finalMessage;
+
+    if (warning) {
+      send({ type: "message_delta", delta: ` ${warning}` });
+    }
+
+    send({
+      type: "final",
+      response: {
+        actions: suggestions,
+        assistantMessage: messageWithWarning,
+        context: fallbackResponse.context,
+        message: messageWithWarning,
+        source: "ai",
+        suggestions,
+      },
     });
-  }
+  });
 }
