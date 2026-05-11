@@ -89,12 +89,14 @@ export function ProjectCard({
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [isShowingMoreActions, setIsShowingMoreActions] = useState(false);
 
   useEffect(() => {
     setDraft(createDraftFromProject(project));
     setError(null);
     setIsEditing(false);
     setIsConfirmingDelete(false);
+    setIsShowingMoreActions(false);
   }, [
     project.category,
     project.completed,
@@ -111,6 +113,7 @@ export function ProjectCard({
     [draft],
   );
   const hasDeadline = project.deadline.trim().length > 0;
+  const planHref = `/plan?project=${encodeURIComponent(String(project.id))}`;
 
   function updateField<Key extends keyof ProjectEditDraft>(
     field: Key,
@@ -274,12 +277,15 @@ export function ProjectCard({
               <div className="flex flex-wrap items-center gap-2">
                 <h3
                   className={cn(
-                    "max-w-full text-xl font-semibold leading-tight tracking-[-0.02em] text-brand-ink sm:text-2xl",
+                    "max-w-full text-2xl font-semibold leading-tight tracking-[-0.035em] text-brand-ink sm:text-3xl",
                     project.completed && "line-through decoration-brand-ink/25",
                   )}
                 >
                   {project.name}
                 </h3>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
                 <span
                   className={cn(
                     "rounded-full border px-3 py-1 text-xs font-semibold",
@@ -296,28 +302,25 @@ export function ProjectCard({
                 >
                   {project.category}
                 </span>
-              </div>
-
-              <div className="grid gap-2 text-sm text-brand-ink/60 sm:grid-cols-2">
-                <span className="flex items-center gap-2 rounded-2xl border border-brand-ink/6 bg-brand-ink/[0.025] px-3 py-2">
-                  <CalendarIcon className="h-4 w-4 shrink-0" />
-                  {hasDeadline ? project.deadline : "No deadline yet"}
-                </span>
-                <span className="flex items-center gap-2 rounded-2xl border border-brand-ink/6 bg-brand-ink/[0.025] px-3 py-2">
-                  <ClockIcon className="h-4 w-4 shrink-0" />
-                  {project.weeklyHours} hrs this week
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-ink/8 bg-white/78 px-3 py-1 text-xs font-semibold text-brand-ink/62">
+                  <CalendarIcon className="h-3.5 w-3.5" />
+                  {hasDeadline ? project.deadline : "No deadline"}
                 </span>
               </div>
             </div>
 
-            {project.completed ? (
-              <Badge className="self-start" variant="subtle">
-                Completed
-              </Badge>
-            ) : null}
+            <div className="flex items-center gap-2 self-start rounded-[22px] border border-brand-ink/6 bg-brand-ink/[0.025] px-3 py-2 text-sm font-semibold text-brand-ink">
+              <ClockIcon className="h-4 w-4 text-brand-ink/45" />
+              {project.weeklyHours} hrs
+              {project.completed ? (
+                <Badge className="ml-1" variant="subtle">
+                  Done
+                </Badge>
+              ) : null}
+            </div>
           </div>
 
-          <div className="rounded-[22px] border border-brand-teal/12 bg-brand-teal/[0.06] p-4">
+          <div className="rounded-[24px] border border-brand-teal/12 bg-gradient-to-br from-brand-teal/[0.08] to-white/70 p-4">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
                 <TargetIcon className="h-4 w-4" />
@@ -360,13 +363,33 @@ export function ProjectCard({
             </div>
           ) : null}
 
-          <div className="flex flex-wrap gap-2 pt-1">
+          {isShowingMoreActions && !isConfirmingDelete ? (
+            <div className="rounded-[22px] border border-brand-ink/8 bg-white/64 p-4">
+              <p className="text-sm font-semibold text-brand-ink">
+                More options
+              </p>
+              <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                Delete is tucked away here so it takes an intentional extra
+                step. Archive can be added later.
+              </p>
+              <Button
+                className="mt-3 text-brand-coral hover:text-brand-coral"
+                size="sm"
+                variant="outline"
+                onClick={() => setIsConfirmingDelete(true)}
+              >
+                Remove project
+              </Button>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2 border-t border-brand-ink/6 pt-4">
             {!project.completed ? (
               <Link
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white shadow-[0_16px_40px_rgba(18,32,47,0.18)] transition hover:-translate-y-0.5 hover:bg-brand-teal"
-                href="/plan"
+                href={planHref}
               >
-                Plan this
+                Add to plan
               </Link>
             ) : null}
 
@@ -388,12 +411,14 @@ export function ProjectCard({
             </Button>
 
             <Button
-              className="text-brand-coral hover:text-brand-coral"
               size="sm"
               variant="secondary"
-              onClick={() => setIsConfirmingDelete(true)}
+              onClick={() => {
+                setIsShowingMoreActions((current) => !current);
+                setIsConfirmingDelete(false);
+              }}
             >
-              Delete
+              More
             </Button>
           </div>
         </div>

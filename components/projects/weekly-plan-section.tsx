@@ -59,6 +59,9 @@ export function WeeklyPlanSection({
   const [exportWeekStart, setExportWeekStart] = useState("");
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [projectFocusMessage, setProjectFocusMessage] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     setDraft((current) => {
@@ -81,6 +84,38 @@ export function WeeklyPlanSection({
   useEffect(() => {
     setExportWeekStart(getCurrentWeekMondayInputValue());
   }, []);
+
+  useEffect(() => {
+    const selectedProjectId = new URLSearchParams(window.location.search).get(
+      "project",
+    );
+
+    if (!selectedProjectId) {
+      setProjectFocusMessage(null);
+      return;
+    }
+
+    const selectedProject = projects.find(
+      (project) => String(project.id) === selectedProjectId,
+    );
+
+    if (!selectedProject) {
+      setProjectFocusMessage(
+        "That project is no longer available. Choose another project below.",
+      );
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      projectId: String(selectedProject.id),
+      plannedTask: selectedProject.nextAction,
+    }));
+    setProjectFocusMessage(
+      `${selectedProject.name} is selected. Choose a day and time estimate, then add it to your weekly plan.`,
+    );
+    setError(null);
+  }, [projects]);
 
   const totalPlannedHours = useMemo(() => {
     return planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0);
@@ -114,6 +149,7 @@ export function WeeklyPlanSection({
       projectId,
       plannedTask: selectedProject?.nextAction ?? "",
     }));
+    setProjectFocusMessage(null);
 
     if (error) {
       setError(null);
@@ -330,6 +366,12 @@ export function WeeklyPlanSection({
                 )}
               </Select>
             </div>
+
+            {projectFocusMessage ? (
+              <p className="rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+                {projectFocusMessage}
+              </p>
+            ) : null}
 
             <div>
               <label className="field-label" htmlFor="plan-task">

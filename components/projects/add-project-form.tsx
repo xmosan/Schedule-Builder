@@ -15,6 +15,7 @@ import {
   type Project,
   type ProjectDraft,
 } from "@/lib/projects";
+import { cn } from "@/lib/utils";
 
 type AddProjectFormProps = {
   onAddProject: (project: Project) => void;
@@ -23,6 +24,7 @@ type AddProjectFormProps = {
 export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
   const [draft, setDraft] = useState<ProjectDraft>(defaultProjectDraft);
   const [error, setError] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const canSubmit = useMemo(() => {
     const weeklyHours = Number(draft.weeklyHours);
@@ -59,24 +61,51 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
     onAddProject(project);
     setDraft(defaultProjectDraft);
     setError(null);
+    setIsExpanded(false);
   }
 
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
       <CardContent className="p-4 sm:p-6">
-        <div className="flex items-center gap-3">
-          <div className="rounded-2xl bg-brand-coral/10 p-2 text-brand-coral">
-            <PlusIcon className="h-5 w-5" />
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="rounded-2xl bg-brand-coral/10 p-2 text-brand-coral">
+              <PlusIcon className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                Start a Project
+              </h2>
+              <p className="text-sm text-brand-ink/60">
+                Turn a goal, course, client, or team effort into something you
+                can plan.
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">Start a Project</h2>
-            <p className="text-sm text-brand-ink/60">
-              Turn a goal, course, client, or team effort into something you can plan.
-            </p>
-          </div>
+          <Button
+            className="shrink-0 xl:hidden"
+            size="sm"
+            variant={isExpanded ? "secondary" : "default"}
+            onClick={() => setIsExpanded((current) => !current)}
+          >
+            {isExpanded ? "Close" : "+ Add"}
+          </Button>
         </div>
 
-        <form className="mt-5 space-y-4 sm:space-y-5" onSubmit={handleSubmit}>
+        {!isExpanded ? (
+          <p className="mt-4 rounded-[22px] border border-brand-ink/8 bg-white/62 p-4 text-sm leading-6 text-brand-ink/58 xl:hidden">
+            Add a project when you are ready. The form stays tucked away on
+            mobile so your project list is easier to scan.
+          </p>
+        ) : null}
+
+        <form
+          className={cn(
+            "mt-5 space-y-4 sm:space-y-5",
+            isExpanded ? "block" : "hidden xl:block",
+          )}
+          onSubmit={handleSubmit}
+        >
           <div>
             <label className="field-label" htmlFor="project-name">
               What are you working on?

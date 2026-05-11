@@ -66,15 +66,36 @@ function sortProjects(projects: Project[], sortBy: ProjectSort) {
   });
 }
 
+function pluralizeProject(count: number) {
+  return count === 1 ? "project" : "projects";
+}
+
+function getShowingCopy(filter: ProjectFilter, count: number) {
+  if (filter === "active") {
+    return `Showing ${count} active ${pluralizeProject(count)}`;
+  }
+
+  if (filter === "completed") {
+    return `Showing ${count} completed ${pluralizeProject(count)}`;
+  }
+
+  return `Showing ${count} ${pluralizeProject(count)}`;
+}
+
 function EmptyProjectState({ filter }: { filter: ProjectFilter }) {
-  const copy =
-    filter === "completed"
-      ? "Completed projects will collect here after you mark work as done."
-      : "Add a project to start building your command center.";
+  const copy = {
+    active:
+      "No active projects right now. Start one from the form or switch to All to review completed work.",
+    completed:
+      "Finished projects will collect here after you mark work as done.",
+    all: "Add your first project to start building your command center.",
+  }[filter];
 
   return (
     <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/58 p-6 text-center">
-      <p className="text-sm font-semibold text-brand-ink">No projects here yet</p>
+      <p className="text-sm font-semibold text-brand-ink">
+        {filter === "completed" ? "No completed projects yet" : "No projects here yet"}
+      </p>
       <p className="mt-2 text-sm leading-6 text-brand-ink/60">{copy}</p>
     </div>
   );
@@ -103,6 +124,7 @@ export function ProjectList({
   const visibleProjectCount =
     (shouldShowActive ? activeProjects.length : 0) +
     (shouldShowCompleted ? completedProjects.length : 0);
+  const hasProjects = projects.length > 0;
 
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
@@ -121,7 +143,7 @@ export function ProjectList({
               </p>
             </div>
           </div>
-          <Badge>{visibleProjectCount} visible</Badge>
+          <Badge>{getShowingCopy(filter, visibleProjectCount)}</Badge>
         </div>
 
         <div className="mb-5 grid gap-3 rounded-[24px] border border-brand-ink/8 bg-brand-ink/[0.025] p-3 md:grid-cols-[minmax(0,1fr)_220px]">
@@ -158,50 +180,21 @@ export function ProjectList({
           </label>
         </div>
 
-        <div className="space-y-4">
-          {shouldShowActive ? (
-            <section className="space-y-3 sm:space-y-4">
-              <div className="flex items-center justify-between px-1">
-                <h3 className="text-xs font-bold uppercase tracking-[0.16em] text-brand-ink/45">
-                  Active projects
-                </h3>
-                <span className="text-xs font-semibold text-brand-ink/45">
-                  {activeProjects.length}
-                </span>
-              </div>
+        {hasProjects ? (
+          <div className="space-y-4">
+            {shouldShowActive ? (
+              <section className="space-y-3 sm:space-y-4">
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-xs font-bold uppercase tracking-[0.16em] text-brand-ink/45">
+                    Active projects
+                  </h3>
+                  <span className="text-xs font-semibold text-brand-ink/45">
+                    {activeProjects.length}
+                  </span>
+                </div>
 
-              {activeProjects.length > 0 ? (
-                activeProjects.map((project) => (
-                  <ProjectCard
-                    key={project.id}
-                    project={project}
-                    onDeleteProject={onDeleteProject}
-                    onToggleComplete={onToggleComplete}
-                    onUpdateProject={onUpdateProject}
-                  />
-                ))
-              ) : (
-                <EmptyProjectState filter={filter} />
-              )}
-            </section>
-          ) : null}
-
-          {shouldShowCompleted ? (
-            <details
-              key={filter}
-              className="group rounded-[26px] border border-brand-ink/8 bg-white/58 p-3"
-              open={filter === "completed"}
-            >
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-[20px] px-2 py-2 text-sm font-semibold text-brand-ink">
-                <span>Completed projects</span>
-                <span className="rounded-full bg-brand-ink/6 px-3 py-1 text-xs text-brand-ink/60">
-                  {completedProjects.length}
-                </span>
-              </summary>
-
-              <div className="mt-3 space-y-3 sm:space-y-4">
-                {completedProjects.length > 0 ? (
-                  completedProjects.map((project) => (
+                {activeProjects.length > 0 ? (
+                  activeProjects.map((project) => (
                     <ProjectCard
                       key={project.id}
                       project={project}
@@ -211,13 +204,45 @@ export function ProjectList({
                     />
                   ))
                 ) : (
-                  <EmptyProjectState filter="completed" />
+                  <EmptyProjectState filter="active" />
                 )}
-              </div>
-            </details>
-          ) : null}
+              </section>
+            ) : null}
 
-        </div>
+            {shouldShowCompleted ? (
+              <details
+                key={filter}
+                className="group rounded-[26px] border border-brand-ink/8 bg-white/58 p-3"
+                open={filter === "completed"}
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-[20px] px-2 py-2 text-sm font-semibold text-brand-ink">
+                  <span>Completed projects</span>
+                  <span className="rounded-full bg-brand-ink/6 px-3 py-1 text-xs text-brand-ink/60">
+                    {completedProjects.length}
+                  </span>
+                </summary>
+
+                <div className="mt-3 space-y-3 sm:space-y-4">
+                  {completedProjects.length > 0 ? (
+                    completedProjects.map((project) => (
+                      <ProjectCard
+                        key={project.id}
+                        project={project}
+                        onDeleteProject={onDeleteProject}
+                        onToggleComplete={onToggleComplete}
+                        onUpdateProject={onUpdateProject}
+                      />
+                    ))
+                  ) : (
+                    <EmptyProjectState filter="completed" />
+                  )}
+                </div>
+              </details>
+            ) : null}
+          </div>
+        ) : (
+          <EmptyProjectState filter="all" />
+        )}
       </CardContent>
     </Card>
   );
