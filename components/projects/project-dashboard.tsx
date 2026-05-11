@@ -611,6 +611,14 @@ export function ProjectDashboard() {
     [projects],
   );
 
+  const highPriorityProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) => !project.completed && project.priority === "High",
+      ).length,
+    [projects],
+  );
+
   const totalHours = useMemo(() => getPlannedHours(projects), [projects]);
 
   const topThree = useMemo(
@@ -630,6 +638,18 @@ export function ProjectDashboard() {
           : project,
       ),
     );
+  }
+
+  function updateProject(updatedProject: Project) {
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === updatedProject.id ? updatedProject : project,
+      ),
+    );
+  }
+
+  function deleteProject(id: number) {
+    setProjects((current) => current.filter((project) => project.id !== id));
   }
 
   function addWeeklyPlanBlock(block: WeeklyPlanBlock) {
@@ -980,18 +1000,55 @@ export function ProjectDashboard() {
         {currentSection === "projects" ? (
           <>
             <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
-              <div className="max-w-3xl">
-                <div className="eyebrow-chip">
-                  <FolderStackIcon className="h-4 w-4" />
-                  Projects
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-end">
+                <div className="max-w-3xl">
+                  <div className="eyebrow-chip">
+                    <FolderStackIcon className="h-4 w-4" />
+                    Projects
+                  </div>
+                  <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
+                    Projects
+                  </h1>
+                  <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
+                    Manage your active work, next actions, and weekly project
+                    priorities.
+                  </p>
                 </div>
-                <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                  Keep every project tied to a next action.
-                </h1>
-                <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                  Add, review, and complete the projects that feed your weekly
-                  plan.
-                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-[24px] border border-white/75 bg-white/74 p-4 shadow-[0_14px_34px_rgba(18,32,47,0.06)]">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+                      Active
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-brand-ink">
+                      {activeProjects}
+                    </p>
+                  </div>
+                  <div className="rounded-[24px] border border-white/75 bg-white/74 p-4 shadow-[0_14px_34px_rgba(18,32,47,0.06)]">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+                      Completed
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-brand-ink">
+                      {completedProjects}
+                    </p>
+                  </div>
+                  <div className="rounded-[24px] border border-white/75 bg-white/74 p-4 shadow-[0_14px_34px_rgba(18,32,47,0.06)]">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+                      Weekly hours
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-brand-ink">
+                      {totalHours}
+                    </p>
+                  </div>
+                  <div className="rounded-[24px] border border-white/75 bg-white/74 p-4 shadow-[0_14px_34px_rgba(18,32,47,0.06)]">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+                      High priority
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-brand-ink">
+                      {highPriorityProjects}
+                    </p>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -999,7 +1056,9 @@ export function ProjectDashboard() {
               <div className="order-2 min-w-0 xl:order-1">
                 <ProjectList
                   projects={projects}
+                  onDeleteProject={deleteProject}
                   onToggleComplete={toggleComplete}
+                  onUpdateProject={updateProject}
                 />
               </div>
               <aside className="order-1 min-w-0 xl:sticky xl:top-6 xl:order-2">

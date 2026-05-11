@@ -25,10 +25,14 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
   const [error, setError] = useState<string | null>(null);
 
   const canSubmit = useMemo(() => {
+    const weeklyHours = Number(draft.weeklyHours);
+
     return (
       draft.name.trim().length > 0 &&
       draft.nextAction.trim().length > 0 &&
-      Number(draft.weeklyHours) >= 1
+      draft.weeklyHours.trim().length > 0 &&
+      Number.isFinite(weeklyHours) &&
+      weeklyHours >= 0
     );
   }, [draft]);
 
@@ -48,7 +52,7 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
     const project = createProjectFromDraft(draft);
 
     if (!project) {
-      setError("Add a name, next action, and at least 1 weekly hour.");
+      setError("Add a project name, a clear next action, and 0 or more weekly hours.");
       return;
     }
 
@@ -65,9 +69,9 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
             <PlusIcon className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">Add Project</h2>
+            <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">Start a Project</h2>
             <p className="text-sm text-brand-ink/60">
-              Capture any goal, initiative, course, client, or team effort.
+              Turn a goal, course, client, or team effort into something you can plan.
             </p>
           </div>
         </div>
@@ -75,11 +79,11 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
         <form className="mt-5 space-y-4 sm:space-y-5" onSubmit={handleSubmit}>
           <div>
             <label className="field-label" htmlFor="project-name">
-              Project name
+              What are you working on?
             </label>
             <Input
               id="project-name"
-              placeholder="Launch campaign, finish course, or plan event"
+              placeholder="Launch campaign, finish course, plan event..."
               value={draft.name}
               onChange={(event) => updateField("name", event.target.value)}
             />
@@ -87,11 +91,11 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
 
           <div>
             <label className="field-label" htmlFor="project-next-action">
-              Next action
+              What is the next clear action?
             </label>
             <Input
               id="project-next-action"
-              placeholder="Draft the next deliverable"
+              placeholder="Draft the outline, email the client, finish problem set..."
               value={draft.nextAction}
               onChange={(event) =>
                 updateField("nextAction", event.target.value)
@@ -101,11 +105,11 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
 
           <div>
             <label className="field-label" htmlFor="project-deadline">
-              Deadline
+              When does this need attention?
             </label>
             <Input
               id="project-deadline"
-              placeholder="Friday or end of month"
+              placeholder="Friday, this week, before the meeting..."
               value={draft.deadline}
               onChange={(event) => updateField("deadline", event.target.value)}
             />
@@ -153,13 +157,14 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
 
           <div>
             <label className="field-label" htmlFor="project-hours">
-              Weekly hours
+              How many hours this week?
             </label>
             <Input
               id="project-hours"
               type="number"
-              min="1"
-              inputMode="numeric"
+              min="0"
+              step="0.25"
+              inputMode="decimal"
               value={draft.weeklyHours}
               onChange={(event) =>
                 updateField("weeklyHours", event.target.value)
@@ -168,13 +173,13 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
           </div>
 
           <p className="text-sm leading-6 text-brand-ink/60">
-            A next action keeps the project specific enough to schedule.
+            Keep it lightweight: one project, one next action, and a realistic time budget.
           </p>
 
           {error ? <p className="text-sm font-medium text-brand-coral">{error}</p> : null}
 
           <Button className="w-full" type="submit" disabled={!canSubmit}>
-            Add to schedule
+            Add project
           </Button>
         </form>
       </CardContent>

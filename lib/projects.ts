@@ -167,7 +167,13 @@ export function getPlannedHours(projects: Project[]) {
 export function createProjectFromDraft(draft: ProjectDraft): Project | null {
   const weeklyHours = Number(draft.weeklyHours);
 
-  if (!draft.name.trim() || !draft.nextAction.trim() || weeklyHours < 1) {
+  if (
+    !draft.name.trim() ||
+    !draft.nextAction.trim() ||
+    !draft.weeklyHours.trim() ||
+    !Number.isFinite(weeklyHours) ||
+    weeklyHours < 0
+  ) {
     return null;
   }
 
