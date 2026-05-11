@@ -93,6 +93,11 @@ export type AssistantApplyResponse = {
   results: AssistantApplyResult[];
 };
 
+type AssistantHistoryItem = {
+  content: string;
+  role: "assistant" | "user";
+};
+
 const maxDefaultAssistantCards = 4;
 const maxDefaultWarningCards = 2;
 
@@ -101,6 +106,9 @@ const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don
 const planningIntentPattern =
   /\b(plan|schedule|week|weekly|block|blocks|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study)\b/i;
 const focusPromptPattern = /\b(focus|first|top 3|top priority|priorit|what should i do)\b/i;
+const balancePromptPattern = /\bbalance\b/i;
+const overloadPromptPattern = /\b(overload|overloaded|too much|busy)\b/i;
+const planWeekPromptPattern = /\b(plan my week|plan this week|weekly plan|week)\b/i;
 
 export function isGreetingPrompt(prompt: string) {
   return greetingPattern.test(prompt.trim());
@@ -112,6 +120,20 @@ export function isVaguePrompt(prompt: string) {
 
 export function hasPlanningIntent(prompt: string) {
   return planningIntentPattern.test(prompt.trim());
+}
+
+function didRecentlyOfferPlanningDirections(
+  recentMessages: readonly AssistantHistoryItem[] = [],
+) {
+  return recentMessages
+    .slice(-4)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /plan your week|finding overloaded days|turn projects into schedule blocks|choose one of three things|find open time|top 3/i.test(
+          message.content,
+        ),
+    );
 }
 
 function isSuggestionType(
@@ -472,10 +494,12 @@ export function createContextOnlyAssistantResponse(
 export function createFallbackAssistantResponse(
   context: AssistantPlanningContext,
   prompt: string,
+  recentMessages: readonly AssistantHistoryItem[] = [],
 ): AssistantPlanReviewResponse {
   if (isGreetingPrompt(prompt)) {
-    const message =
-      "Hey — I can help you plan your week, balance your workload, or turn projects into schedule blocks. What would you like to work on?";
+    const message = didRecentlyOfferPlanningDirections(recentMessages)
+      ? "Hey again — we can keep it simple. Do you want to plan your week, find open time, or pick your Top 3?"
+      : "Hey — I can help you plan your week, balance your workload, or turn projects into schedule blocks. What would you like to work on?";
 
     return createAssistantResponseFromSuggestions({
       activeProjects: sortProjectsForFocus(context.projects),
@@ -486,8 +510,9 @@ export function createFallbackAssistantResponse(
   }
 
   if (isVaguePrompt(prompt) || !hasPlanningIntent(prompt)) {
-    const message =
-      "I can help with that. What feels most useful right now: planning your week, finding overloaded days, or choosing what to focus on first?";
+    const message = didRecentlyOfferPlanningDirections(recentMessages)
+      ? "No problem — I can start by helping you choose one of three things: plan your week, find open time, or decide your Top 3. Which one sounds most useful?"
+      : "Sure — do you want me to help you plan your week, find open time, or decide what to focus on first?";
 
     return createAssistantResponseFromSuggestions({
       activeProjects: sortProjectsForFocus(context.projects),
@@ -667,6 +692,12 @@ export function createFallbackAssistantResponse(
       ? "Your plan looks pretty workable from what I can see. If you want a sharper review, ask me to focus on deadlines, open time, or your Top 3."
       : focusPromptPattern.test(prompt) && topProject
       ? `I’d start with ${topProject.name}. It has the strongest priority signal right now, so I’d make the next action visible first and keep the rest of the plan lighter around it.`
+      : balancePromptPattern.test(prompt)
+      ? "I’d balance this by protecting work or fixed commitments first, then placing one or two high-priority project blocks on your lighter days."
+      : overloadPromptPattern.test(prompt)
+      ? "I checked for pressure points first. The most useful move is to spot days where work plus project blocks are stacked too tightly, then shift one lower-priority block away."
+      : planWeekPromptPattern.test(prompt)
+      ? "For this week, I’d anchor the plan around your highest-priority active projects and keep the blocks small enough that the schedule still feels doable."
       : suggestions.length > 0
       ? "Absolutely — I’d keep this focused. I picked the highest-impact next steps first so your plan stays realistic instead of crowded."
       : "Tell me what feels most important, and I’ll help turn it into a simple plan.";

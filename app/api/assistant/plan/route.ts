@@ -636,7 +636,11 @@ export async function POST(request: NextRequest) {
     authResult.supabase,
     authResult.userId,
   );
-  const fallbackResponse = createFallbackAssistantResponse(context, prompt);
+  const fallbackResponse = createFallbackAssistantResponse(
+    context,
+    prompt,
+    recentMessages,
+  );
   const fallbackMessage = warning
     ? `${fallbackResponse.message} ${warning}`
     : fallbackResponse.message;

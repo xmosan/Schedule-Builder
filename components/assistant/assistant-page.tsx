@@ -191,6 +191,32 @@ function parseAssistantStreamLine(line: string): AssistantStreamEvent | null {
   return null;
 }
 
+function sleep(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function takeTypingChunk(buffer: string) {
+  const match = buffer.match(/^\s*\S+\s*/);
+
+  if (match?.[0]) {
+    return match[0];
+  }
+
+  return buffer.slice(0, Math.min(4, buffer.length));
+}
+
+function getTypingDelay(chunk: string) {
+  if (/[.!?]\s*$/.test(chunk)) {
+    return 90;
+  }
+
+  if (/[,;:]\s*$/.test(chunk)) {
+    return 55;
+  }
+
+  return Math.max(22, Math.min(42, chunk.length * 4));
+}
+
 function AssistantContextDetails({
   context,
 }: {
@@ -529,6 +555,9 @@ function ChatBubble({
           ) : (
             <p className={cn("text-sm leading-6 whitespace-pre-wrap", isUser ? "text-white" : "text-brand-ink")}>
               {message.content}
+              {!isUser && message.isStreaming ? (
+                <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded-full bg-brand-teal align-[-2px]" />
+              ) : null}
             </p>
           )}
         </div>
@@ -967,20 +996,45 @@ export function AssistantPage() {
     setIsSubmitting(true);
     setError(null);
 
+    let incomingBuffer = "";
+    let revealedText = "";
+    let streamFinished = false;
+    const setAssistantContent = (content: string) => {
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessageId
+            ? { ...message, content }
+            : message,
+        ),
+      );
+    };
+    const revealBufferedText = async () => {
+      while (!streamFinished || incomingBuffer.length > 0) {
+        if (incomingBuffer.length === 0) {
+          await sleep(18);
+          continue;
+        }
+
+        const chunk = takeTypingChunk(incomingBuffer);
+        incomingBuffer = incomingBuffer.slice(chunk.length);
+        revealedText += chunk;
+        setAssistantContent(revealedText);
+        await sleep(getTypingDelay(chunk));
+      }
+    };
+    const revealPromise = revealBufferedText();
+
     try {
       const response = await requestPlanReviewStream({
         nextPrompt: trimmedPrompt,
         recentMessages,
         onDelta: (delta) => {
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantMessageId
-                ? { ...message, content: `${message.content}${delta}` }
-                : message,
-            ),
-          );
+          incomingBuffer += delta;
         },
       });
+      streamFinished = true;
+      await revealPromise;
+
       const chatResponse = normalizeResponseForChat(response, assistantMessageId);
       const actions = getActions(chatResponse);
 
@@ -1015,6 +1069,8 @@ export function AssistantPage() {
         submitError instanceof Error &&
         submitError.name === "SignedOutError"
       ) {
+        streamFinished = true;
+        await revealPromise;
         setStatus("signed_out");
         setError(null);
         setMessages((current) =>
@@ -1024,6 +1080,8 @@ export function AssistantPage() {
       }
 
       setError(getErrorMessage(submitError));
+      streamFinished = true;
+      await revealPromise;
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessageId
