@@ -293,6 +293,7 @@ function ActionCard({
     actionState.status === "applied" ||
     actionState.status === "dismissing" ||
     actionState.status === "removed";
+  const isExiting = actionState.status === "dismissing";
   const detailItems = [
     suggestion.rationale ? { label: "Why this helps", value: suggestion.rationale } : null,
     suggestion.plannedTask ? { label: "Task", value: suggestion.plannedTask } : null,
@@ -302,216 +303,221 @@ function ActionCard({
   ].filter((item): item is { label: string; value: string } => item !== null);
 
   return (
-    <article
-      className={cn(
-        "animate-assistant-card rounded-[20px] border border-brand-ink/10 bg-white p-4 shadow-[0_14px_34px_rgba(18,32,47,0.07)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(18,32,47,0.1)]",
-        actionState.status === "applied" && "border-brand-teal/20 bg-brand-teal/5",
-        actionState.status === "dismissing" &&
-          "pointer-events-none -translate-y-2 scale-[0.98] opacity-0",
-        actionState.status === "error" && "border-brand-coral/20 bg-brand-coral/5",
-      )}
+    <div
+      aria-hidden={isExiting}
+      className="assistant-card-shell"
+      data-exiting={isExiting ? "true" : "false"}
       style={{ animationDelay: `${index * 70}ms` }}
     >
-      <div className="flex items-start gap-3">
-        <span
-          className={cn(
-            "mt-1 h-2.5 w-2.5 shrink-0 rounded-full",
-            suggestionMarkerStyles[suggestion.type],
-          )}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <Badge
-              className={cn(
-                "border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em]",
-                suggestionTypeStyles[suggestion.type],
+      <article
+        className={cn(
+          "assistant-card-inner animate-assistant-card rounded-[20px] border border-brand-ink/10 bg-white p-4 shadow-[0_14px_34px_rgba(18,32,47,0.07)] hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(18,32,47,0.1)]",
+          actionState.status === "applied" && "border-brand-teal/20 bg-brand-teal/5",
+          isExiting && "pointer-events-none",
+          actionState.status === "error" && "border-brand-coral/20 bg-brand-coral/5",
+        )}
+      >
+        <div className="flex items-start gap-3">
+          <span
+            className={cn(
+              "mt-1 h-2.5 w-2.5 shrink-0 rounded-full",
+              suggestionMarkerStyles[suggestion.type],
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Badge
+                className={cn(
+                  "border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em]",
+                  suggestionTypeStyles[suggestion.type],
+                )}
+                variant="subtle"
+              >
+                {suggestionTypeLabels[suggestion.type]}
+              </Badge>
+              {actionState.status === "applied" && (
+                <span className="text-[11px] font-semibold text-brand-teal">
+                  Applied
+                </span>
               )}
-              variant="subtle"
-            >
-              {suggestionTypeLabels[suggestion.type]}
-            </Badge>
-            {actionState.status === "applied" && (
-              <span className="text-[11px] font-semibold text-brand-teal">
-                Applied
-              </span>
+            </div>
+            <h3 className="text-base font-semibold tracking-[-0.01em] text-brand-ink">
+              {suggestion.title}
+            </h3>
+            <p className="mt-1.5 text-sm leading-6 text-brand-ink/70">
+              {suggestion.description}
+            </p>
+          </div>
+        </div>
+
+        {(suggestion.projectName || suggestion.day || suggestion.estimatedHours) && !isEditing ? (
+          <div className="mt-4 grid gap-2 text-xs text-brand-ink/60 sm:grid-cols-3">
+            {suggestion.projectName && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Project</span>
+                <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.projectName}</span>
+              </div>
+            )}
+            {suggestion.day && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Day</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.day}</span>
+              </div>
+            )}
+            {suggestion.estimatedHours && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Time</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.estimatedHours}h</span>
+              </div>
             )}
           </div>
-          <h3 className="text-base font-semibold tracking-[-0.01em] text-brand-ink">
-            {suggestion.title}
-          </h3>
-          <p className="mt-1.5 text-sm leading-6 text-brand-ink/70">
-            {suggestion.description}
-          </p>
-        </div>
-      </div>
+        ) : null}
 
-      {(suggestion.projectName || suggestion.day || suggestion.estimatedHours) && !isEditing ? (
-        <div className="mt-4 grid gap-2 text-xs text-brand-ink/60 sm:grid-cols-3">
-          {suggestion.projectName && (
-            <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
-              <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Project</span>
-              <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.projectName}</span>
-            </div>
-          )}
-          {suggestion.day && (
-            <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
-              <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Day</span>
-              <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.day}</span>
-            </div>
-          )}
-          {suggestion.estimatedHours && (
-            <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
-              <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Time</span>
-              <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.estimatedHours}h</span>
-            </div>
-          )}
-        </div>
-      ) : null}
+        {isEditing ? (
+          <div className="mt-4 grid gap-3 text-sm">
+            {suggestion.projectName !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Project</span>
+                <input
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  value={suggestion.projectName ?? ""}
+                  onChange={(event) => onUpdate({ projectName: event.target.value })}
+                />
+              </label>
+            )}
+            {suggestion.day !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Day</span>
+                <select
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  value={suggestion.day ?? "Monday"}
+                  onChange={(event) => onUpdate({ day: event.target.value as WeekDay })}
+                >
+                  {weekDays.map((day) => (
+                    <option key={day} value={day}>{day}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {suggestion.estimatedHours !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Hours</span>
+                <input
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  min="0.25" step="0.25" type="number"
+                  value={suggestion.estimatedHours ?? 1}
+                  onChange={(event) => onUpdate({ estimatedHours: Number(event.target.value) })}
+                />
+              </label>
+            )}
+            {suggestion.plannedTask !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Task</span>
+                <textarea
+                  className="w-full resize-y rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm leading-5"
+                  rows={2}
+                  value={suggestion.plannedTask ?? ""}
+                  onChange={(event) => onUpdate({ plannedTask: event.target.value })}
+                />
+              </label>
+            )}
+          </div>
+        ) : null}
 
-      {isEditing ? (
-        <div className="mt-4 grid gap-3 text-sm">
-          {suggestion.projectName !== undefined && (
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Project</span>
-              <input
-                className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
-                value={suggestion.projectName ?? ""}
-                onChange={(event) => onUpdate({ projectName: event.target.value })}
-              />
-            </label>
-          )}
-          {suggestion.day !== undefined && (
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Day</span>
-              <select
-                className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
-                value={suggestion.day ?? "Monday"}
-                onChange={(event) => onUpdate({ day: event.target.value as WeekDay })}
-              >
-                {weekDays.map((day) => (
-                  <option key={day} value={day}>{day}</option>
-                ))}
-              </select>
-            </label>
-          )}
-          {suggestion.estimatedHours !== undefined && (
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Hours</span>
-              <input
-                className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
-                min="0.25" step="0.25" type="number"
-                value={suggestion.estimatedHours ?? 1}
-                onChange={(event) => onUpdate({ estimatedHours: Number(event.target.value) })}
-              />
-            </label>
-          )}
-          {suggestion.plannedTask !== undefined && (
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Task</span>
-              <textarea
-                className="w-full resize-y rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm leading-5"
-                rows={2}
-                value={suggestion.plannedTask ?? ""}
-                onChange={(event) => onUpdate({ plannedTask: event.target.value })}
-              />
-            </label>
-          )}
-        </div>
-      ) : null}
-
-      {detailItems.length > 0 && !isEditing ? (
-        <div className="mt-3">
-          <button
-            className="text-xs font-semibold text-brand-ink/50 hover:text-brand-ink"
-            type="button"
-            onClick={() => setShowDetails((current) => !current)}
-          >
-            {showDetails ? "Hide details" : "Details"}
-          </button>
-          {showDetails ? (
-            <div className="animate-assistant-details mt-2 space-y-2 overflow-hidden rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] p-3">
-              {detailItems.map((item) => (
-                <div key={item.label}>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
-                    {item.label}
-                  </p>
-                  <p className="mt-1 text-sm leading-6 text-brand-ink/70">
-                    {item.value}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {actionState.message && (
-        <p className={cn(
-          "mt-3 rounded-xl border p-2 text-xs leading-5",
-          actionState.status === "error"
-            ? "border-brand-coral/20 bg-brand-coral/10 text-brand-coral"
-            : "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
-        )}>
-          {actionState.message}
-        </p>
-      )}
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {isActionableSuggestion(suggestion) ? (
-          <>
-            <Button
-              className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
-              disabled={!canApply || isFinished || actionState.status === "applying"}
-              size="sm"
-              onClick={onApply}
+        {detailItems.length > 0 && !isEditing ? (
+          <div className="mt-3">
+            <button
+              className="text-xs font-semibold text-brand-ink/50 transition hover:text-brand-ink active:scale-[0.98]"
+              type="button"
+              onClick={() => setShowDetails((current) => !current)}
             >
-              {actionState.status === "applying" ? "Applying..." : "Apply"}
-            </Button>
-            {isEditableSuggestion(suggestion) && (
+              {showDetails ? "Hide details" : "Details"}
+            </button>
+            {showDetails ? (
+              <div className="animate-assistant-details mt-2 space-y-2 overflow-hidden rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] p-3">
+                {detailItems.map((item) => (
+                  <div key={item.label}>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+                      {item.label}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-brand-ink/70">
+                      {item.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {actionState.message && (
+          <p className={cn(
+            "mt-3 rounded-xl border p-2 text-xs leading-5",
+            actionState.status === "error"
+              ? "border-brand-coral/20 bg-brand-coral/10 text-brand-coral"
+              : "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
+          )}>
+            {actionState.message}
+          </p>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {isActionableSuggestion(suggestion) ? (
+            <>
               <Button
                 className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
+                disabled={!canApply || isFinished || actionState.status === "applying"}
+                size="sm"
+                onClick={onApply}
+              >
+                {actionState.status === "applying" ? "Applying..." : "Apply"}
+              </Button>
+              {isEditableSuggestion(suggestion) && (
+                <Button
+                  className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
+                  disabled={isFinished || actionState.status === "applying"}
+                  size="sm"
+                  variant="outline"
+                  onClick={onToggleEdit}
+                >
+                  {isEditing ? "Done" : "Edit"}
+                </Button>
+              )}
+              <Button
+                className="h-9 rounded-full px-4 text-xs font-semibold text-brand-ink/60 hover:text-brand-ink active:scale-[0.98]"
                 disabled={isFinished || actionState.status === "applying"}
                 size="sm"
-                variant="outline"
-                onClick={onToggleEdit}
+                variant="secondary"
+                onClick={onIgnore}
               >
-                {isEditing ? "Done" : "Edit"}
+                Ignore
               </Button>
-            )}
-            <Button
-              className="h-9 rounded-full px-4 text-xs font-semibold text-brand-ink/60 hover:text-brand-ink active:scale-[0.98]"
-              disabled={isFinished || actionState.status === "applying"}
-              size="sm"
-              variant="secondary"
-              onClick={onIgnore}
-            >
-              Ignore
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button
-              className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
-              disabled={isFinished}
-              size="sm"
-              variant="secondary"
-              onClick={onIgnore}
-            >
-              Got it
-            </Button>
-            <Button
-              className="h-9 rounded-full px-4 text-xs font-semibold text-brand-ink/60 hover:text-brand-ink active:scale-[0.98]"
-              disabled={isFinished}
-              size="sm"
-              variant="outline"
-              onClick={onIgnore}
-            >
-              Dismiss
-            </Button>
-          </>
-        )}
-      </div>
-    </article>
+            </>
+          ) : (
+            <>
+              <Button
+                className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
+                disabled={isFinished}
+                size="sm"
+                variant="secondary"
+                onClick={onIgnore}
+              >
+                Got it
+              </Button>
+              <Button
+                className="h-9 rounded-full px-4 text-xs font-semibold text-brand-ink/60 hover:text-brand-ink active:scale-[0.98]"
+                disabled={isFinished}
+                size="sm"
+                variant="outline"
+                onClick={onIgnore}
+              >
+                Dismiss
+              </Button>
+            </>
+          )}
+        </div>
+      </article>
+    </div>
   );
 }
 

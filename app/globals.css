@@ -114,6 +114,39 @@ textarea {
   .animate-assistant-details {
     animation: assistant-details-in 220ms ease both;
   }
+
+  .assistant-card-shell {
+    max-height: 900px;
+    opacity: 1;
+    overflow: hidden;
+    transform: translateY(0);
+    transition:
+      max-height 300ms ease,
+      opacity 240ms ease,
+      transform 300ms ease;
+    will-change: max-height, opacity, transform;
+  }
+
+  .assistant-card-shell[data-exiting="true"] {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  .assistant-card-inner {
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      box-shadow 220ms ease,
+      opacity 240ms ease,
+      transform 300ms ease;
+    will-change: opacity, transform;
+  }
+
+  .assistant-card-shell[data-exiting="true"] .assistant-card-inner {
+    opacity: 0;
+    transform: translateX(12px) scale(0.98);
+  }
 }
 
 @keyframes assistant-message-in {
