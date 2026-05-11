@@ -265,14 +265,8 @@ export function IntegrationsPage() {
               const wasSelectedDuringSetup = selectedIntegrations.has(
                 integration.onboardingName,
               );
-              const isUsefulForWorkflow = workflowRecommendedIntegrations.has(
-                integration.onboardingName,
-              );
-              const isRecommended =
-                wasSelectedDuringSetup || isUsefulForWorkflow;
-              const recommendationLabel = wasSelectedDuringSetup
-                ? "Selected during setup"
-                : "Useful for your workflow";
+              const isRecommended = wasSelectedDuringSetup;
+              const recommendationLabel = "Selected during setup";
 
               return (
                 <IntegrationCard
@@ -300,14 +294,8 @@ export function IntegrationsPage() {
               const wasSelectedDuringSetup = selectedIntegrations.has(
                 integration.onboardingName,
               );
-              const isUsefulForWorkflow = workflowRecommendedIntegrations.has(
-                integration.onboardingName,
-              );
-              const isRecommended =
-                wasSelectedDuringSetup || isUsefulForWorkflow;
-              const recommendationLabel = wasSelectedDuringSetup
-                ? "Selected during setup"
-                : "Useful for your workflow";
+              const isRecommended = wasSelectedDuringSetup;
+              const recommendationLabel = "Selected during setup";
 
               return (
                 <IntegrationCard

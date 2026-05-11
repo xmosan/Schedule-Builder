@@ -33,7 +33,7 @@ export function IntegrationCard({
           </div>
           <div className="flex flex-col items-end gap-2">
             {integration.priority === "planned_next" ? (
-              <Badge className="border-brand-ink/20 bg-brand-ink/10 text-brand-ink">
+              <Badge className="border-brand-ink/10 bg-brand-ink text-white">
                 Planned next
               </Badge>
             ) : isRecommended ? (
@@ -48,9 +48,11 @@ export function IntegrationCard({
         </div>
 
         <div className="mt-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-            {integration.category}
-          </p>
+          {integration.status !== "available" ? (
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+              {integration.category}
+            </p>
+          ) : null}
           <h2 className="mt-2 text-xl font-semibold text-brand-ink">
             {integration.name}
           </h2>
@@ -77,7 +79,7 @@ export function IntegrationCard({
             </Link>
           ) : (
             <div className="inline-flex h-11 items-center justify-center px-1 text-sm font-medium text-brand-ink/40">
-              Setup coming later
+              Connection planned
             </div>
           )}
         </div>
