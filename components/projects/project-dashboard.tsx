@@ -1030,12 +1030,8 @@ export function ProjectDashboard() {
                     Projects
                   </div>
                   <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                    Projects
+                    Manage your active work, next actions, and weekly project priorities.
                   </h1>
-                  <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                    Manage your active work, next actions, and weekly project
-                    priorities.
-                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

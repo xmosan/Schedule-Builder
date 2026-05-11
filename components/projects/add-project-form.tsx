@@ -82,20 +82,20 @@ export function AddProjectForm({ onAddProject }: AddProjectFormProps) {
               </p>
             </div>
           </div>
-          <Button
-            className="shrink-0 xl:hidden"
-            size="sm"
-            variant={isExpanded ? "secondary" : "default"}
-            onClick={() => setIsExpanded((current) => !current)}
-          >
-            {isExpanded ? "Close" : "+ Add"}
-          </Button>
+          {!isExpanded ? (
+            <Button
+              className="shrink-0 xl:hidden"
+              size="sm"
+              onClick={() => setIsExpanded(true)}
+            >
+              + Add
+            </Button>
+          ) : null}
         </div>
 
         {!isExpanded ? (
           <p className="mt-4 rounded-[22px] border border-brand-ink/8 bg-white/62 p-4 text-sm leading-6 text-brand-ink/58 xl:hidden">
-            Add a project when you are ready. The form stays tucked away on
-            mobile so your project list is easier to scan.
+            Start with a name, one next action, and a realistic time budget.
           </p>
         ) : null}
 
