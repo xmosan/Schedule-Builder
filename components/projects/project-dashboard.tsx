@@ -34,6 +34,7 @@ import {
 } from "@/lib/projects";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import {
+  deleteProjectForUser,
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
   fetchWeeklyPlanBlocksForUser,
@@ -648,7 +649,29 @@ export function ProjectDashboard() {
     );
   }
 
-  function deleteProject(id: number) {
+  async function deleteProject(id: number) {
+    const projectExists = projects.some((project) => project.id === id);
+
+    if (!projectExists) {
+      return;
+    }
+
+    if (supabase && user && hasLoadedRemoteData && canSyncProjects) {
+      const result = await deleteProjectForUser(supabase, user.id, id);
+
+      if (result.error) {
+        const message = getSchedulerErrorMessage(result.error);
+        setDataMessage(`Project was not removed from Supabase: ${message}`);
+        throw new Error(message);
+      }
+
+      setDataMessage(null);
+    } else {
+      setDataMessage(
+        "Removed locally. Supabase sync will retry when the connection is ready.",
+      );
+    }
+
     setProjects((current) => current.filter((project) => project.id !== id));
   }
 

@@ -115,6 +115,43 @@ textarea {
     animation: assistant-details-in 220ms ease both;
   }
 
+  .animate-project-card {
+    animation: project-card-in 280ms ease both;
+  }
+
+  .project-card-shell {
+    max-height: 1600px;
+    opacity: 1;
+    overflow: hidden;
+    transform: translateY(0);
+    transition:
+      max-height 320ms ease,
+      opacity 240ms ease,
+      transform 320ms ease;
+    will-change: max-height, opacity, transform;
+  }
+
+  .project-card-shell[data-exiting="true"] {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  .project-card-inner {
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      box-shadow 220ms ease,
+      opacity 240ms ease,
+      transform 320ms ease;
+    will-change: opacity, transform;
+  }
+
+  .project-card-shell[data-exiting="true"] .project-card-inner {
+    opacity: 0;
+    transform: translateX(14px) scale(0.985);
+  }
+
   .assistant-card-shell {
     max-height: 900px;
     opacity: 1;
@@ -146,6 +183,18 @@ textarea {
   .assistant-card-shell[data-exiting="true"] .assistant-card-inner {
     opacity: 0;
     transform: translateX(12px) scale(0.98);
+  }
+}
+
+@keyframes project-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

@@ -34,6 +34,9 @@ type ProjectEditDraft = {
 };
 
 type ProjectCardProps = {
+  animationIndex?: number;
+  deleteError?: string;
+  isExiting?: boolean;
   onDeleteProject: (id: number) => void;
   onToggleComplete: (id: number) => void;
   onUpdateProject: (project: Project) => void;
@@ -78,6 +81,9 @@ function updateDraftField<Key extends keyof ProjectEditDraft>(
 }
 
 export function ProjectCard({
+  animationIndex = 0,
+  deleteError,
+  isExiting = false,
   onDeleteProject,
   onToggleComplete,
   onUpdateProject,
@@ -155,12 +161,19 @@ export function ProjectCard({
   }
 
   return (
-    <article
-      className={cn(
-        "group overflow-hidden rounded-[28px] border border-white/75 bg-white/88 p-4 shadow-[0_18px_46px_rgba(18,32,47,0.07)] transition duration-200 hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_24px_56px_rgba(18,32,47,0.1)] sm:rounded-[32px] sm:p-5",
-        project.completed && "bg-white/68 opacity-80",
-      )}
+    <div
+      aria-hidden={isExiting}
+      className="project-card-shell"
+      data-exiting={isExiting ? "true" : "false"}
+      style={{ animationDelay: `${animationIndex * 55}ms` }}
     >
+      <article
+        className={cn(
+          "project-card-inner animate-project-card group overflow-hidden rounded-[28px] border border-white/75 bg-white/88 p-4 shadow-[0_18px_46px_rgba(18,32,47,0.07)] transition duration-200 hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_24px_56px_rgba(18,32,47,0.1)] sm:rounded-[32px] sm:p-5",
+          project.completed && "bg-white/68 opacity-80",
+          isExiting && "pointer-events-none",
+        )}
+      >
       {isEditing ? (
         <form className="space-y-4" onSubmit={handleSave}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -336,6 +349,12 @@ export function ProjectCard({
             </div>
           </div>
 
+          {deleteError ? (
+            <p className="rounded-[20px] border border-brand-coral/20 bg-brand-coral/10 px-4 py-3 text-sm font-medium leading-6 text-brand-coral">
+              {deleteError}
+            </p>
+          ) : null}
+
           {isConfirmingDelete ? (
             <div className="rounded-[22px] border border-brand-coral/20 bg-brand-coral/[0.08] p-4">
               <p className="text-sm font-semibold text-brand-ink">
@@ -347,13 +366,15 @@ export function ProjectCard({
               </p>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                 <Button
-                  className="text-brand-coral hover:text-brand-coral"
+                  className="text-brand-coral transition hover:text-brand-coral active:scale-[0.98]"
+                  disabled={isExiting}
                   variant="outline"
                   onClick={() => onDeleteProject(project.id)}
                 >
-                  Delete project
+                  {isExiting ? "Removing..." : "Delete project"}
                 </Button>
                 <Button
+                  disabled={isExiting}
                   variant="secondary"
                   onClick={() => setIsConfirmingDelete(false)}
                 >
@@ -373,7 +394,8 @@ export function ProjectCard({
                 step. Archive can be added later.
               </p>
               <Button
-                className="mt-3 text-brand-coral hover:text-brand-coral"
+                className="mt-3 text-brand-coral transition hover:text-brand-coral active:scale-[0.98]"
+                disabled={isExiting}
                 size="sm"
                 variant="outline"
                 onClick={() => setIsConfirmingDelete(true)}
@@ -396,6 +418,7 @@ export function ProjectCard({
             <Button
               size="sm"
               variant="outline"
+              disabled={isExiting}
               onClick={() => setIsEditing(true)}
             >
               Edit
@@ -404,6 +427,7 @@ export function ProjectCard({
             <Button
               size="sm"
               variant={project.completed ? "secondary" : "outline"}
+              disabled={isExiting}
               onClick={() => onToggleComplete(project.id)}
             >
               <CheckCircleIcon className="h-4 w-4" />
@@ -413,6 +437,7 @@ export function ProjectCard({
             <Button
               size="sm"
               variant="secondary"
+              disabled={isExiting}
               onClick={() => {
                 setIsShowingMoreActions((current) => !current);
                 setIsConfirmingDelete(false);
@@ -423,6 +448,7 @@ export function ProjectCard({
           </div>
         </div>
       )}
-    </article>
+      </article>
+    </div>
   );
 }

@@ -322,6 +322,23 @@ export async function replaceProjectsForUser(
   return { error: deleteError };
 }
 
+export async function deleteProjectForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: number,
+) {
+  const { error } = await withSupabaseTimeout(
+    supabase
+      .from("projects")
+      .delete()
+      .eq("user_id", userId)
+      .eq("project_id", projectId),
+    "Deleting project from Supabase",
+  );
+
+  return { error };
+}
+
 export async function fetchWeeklyPlanBlocksForUser(
   supabase: SupabaseClient,
   userId: string,

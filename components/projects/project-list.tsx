@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderStackIcon } from "@/components/projects/icons";
 import { ProjectCard } from "@/components/projects/project-card";
 import { Badge } from "@/components/ui/badge";
@@ -13,11 +13,13 @@ type ProjectFilter = "active" | "completed" | "all";
 type ProjectSort = "priority" | "deadline" | "weeklyHours" | "category";
 
 type ProjectListProps = {
-  onDeleteProject: (id: number) => void;
+  onDeleteProject: (id: number) => Promise<void> | void;
   onToggleComplete: (id: number) => void;
   onUpdateProject: (project: Project) => void;
   projects: Project[];
 };
+
+const projectRemovalAnimationMs = 320;
 
 const filterLabels: Record<ProjectFilter, string> = {
   active: "Active",
@@ -101,6 +103,23 @@ function EmptyProjectState({ filter }: { filter: ProjectFilter }) {
   );
 }
 
+function getProjectActionErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return "Please try again in a moment.";
+}
+
 export function ProjectList({
   onDeleteProject,
   onToggleComplete,
@@ -109,6 +128,21 @@ export function ProjectList({
 }: ProjectListProps) {
   const [filter, setFilter] = useState<ProjectFilter>("active");
   const [sortBy, setSortBy] = useState<ProjectSort>("priority");
+  const [deleteErrors, setDeleteErrors] = useState<Record<number, string>>({});
+  const [exitingProjectIds, setExitingProjectIds] = useState<
+    Record<number, boolean>
+  >({});
+  const deleteTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>(
+    {},
+  );
+
+  useEffect(() => {
+    return () => {
+      Object.values(deleteTimers.current).forEach((timerId) => {
+        clearTimeout(timerId);
+      });
+    };
+  }, []);
 
   const activeProjects = useMemo(
     () => sortProjects(projects.filter((project) => !project.completed), sortBy),
@@ -125,6 +159,44 @@ export function ProjectList({
     (shouldShowActive ? activeProjects.length : 0) +
     (shouldShowCompleted ? completedProjects.length : 0);
   const hasProjects = projects.length > 0;
+
+  function deleteProjectWithAnimation(projectId: number) {
+    if (exitingProjectIds[projectId]) {
+      return;
+    }
+
+    setDeleteErrors((current) => {
+      const next = { ...current };
+      delete next[projectId];
+      return next;
+    });
+    setExitingProjectIds((current) => ({ ...current, [projectId]: true }));
+
+    deleteTimers.current[projectId] = setTimeout(() => {
+      void Promise.resolve(onDeleteProject(projectId))
+        .then(() => {
+          setExitingProjectIds((current) => {
+            const next = { ...current };
+            delete next[projectId];
+            return next;
+          });
+        })
+        .catch((error: unknown) => {
+          setExitingProjectIds((current) => {
+            const next = { ...current };
+            delete next[projectId];
+            return next;
+          });
+          setDeleteErrors((current) => ({
+            ...current,
+            [projectId]: `Project could not be removed: ${getProjectActionErrorMessage(error)}`,
+          }));
+        })
+        .finally(() => {
+          delete deleteTimers.current[projectId];
+        });
+    }, projectRemovalAnimationMs);
+  }
 
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
@@ -194,11 +266,14 @@ export function ProjectList({
                 </div>
 
                 {activeProjects.length > 0 ? (
-                  activeProjects.map((project) => (
+                  activeProjects.map((project, index) => (
                     <ProjectCard
                       key={project.id}
+                      animationIndex={index}
+                      deleteError={deleteErrors[project.id]}
+                      isExiting={Boolean(exitingProjectIds[project.id])}
                       project={project}
-                      onDeleteProject={onDeleteProject}
+                      onDeleteProject={deleteProjectWithAnimation}
                       onToggleComplete={onToggleComplete}
                       onUpdateProject={onUpdateProject}
                     />
@@ -224,11 +299,14 @@ export function ProjectList({
 
                 <div className="mt-3 space-y-3 sm:space-y-4">
                   {completedProjects.length > 0 ? (
-                    completedProjects.map((project) => (
+                    completedProjects.map((project, index) => (
                       <ProjectCard
                         key={project.id}
+                        animationIndex={index}
+                        deleteError={deleteErrors[project.id]}
+                        isExiting={Boolean(exitingProjectIds[project.id])}
                         project={project}
-                        onDeleteProject={onDeleteProject}
+                        onDeleteProject={deleteProjectWithAnimation}
                         onToggleComplete={onToggleComplete}
                         onUpdateProject={onUpdateProject}
                       />
