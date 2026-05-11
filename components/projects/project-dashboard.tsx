@@ -35,6 +35,7 @@ import {
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import {
   deleteProjectForUser,
+  deleteWeeklyPlanBlockForUser,
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
   fetchWeeklyPlanBlocksForUser,
@@ -679,7 +680,29 @@ export function ProjectDashboard() {
     setPlanBlocks((current) => [...current, block]);
   }
 
-  function removeWeeklyPlanBlock(id: string) {
+  async function removeWeeklyPlanBlock(id: string) {
+    const blockExists = planBlocks.some((block) => block.id === id);
+
+    if (!blockExists) {
+      return;
+    }
+
+    if (supabase && user && hasLoadedRemoteData && canSyncWeeklyPlan) {
+      const result = await deleteWeeklyPlanBlockForUser(supabase, user.id, id);
+
+      if (result.error) {
+        const message = getSchedulerErrorMessage(result.error);
+        setDataMessage(`Weekly plan block was not removed from Supabase: ${message}`);
+        throw new Error(message);
+      }
+
+      setDataMessage(null);
+    } else {
+      setDataMessage(
+        "Removed locally. Supabase sync will retry when the connection is ready.",
+      );
+    }
+
     setPlanBlocks((current) => current.filter((block) => block.id !== id));
   }
 
@@ -1093,14 +1116,14 @@ export function ProjectDashboard() {
               <div className="max-w-3xl">
                 <div className="eyebrow-chip">
                   <CalendarIcon className="h-4 w-4" />
-                  Weekly Plan
+                  Planning Board
                 </div>
                 <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                  Turn priorities into scheduled work blocks.
+                  Weekly Plan
                 </h1>
                 <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                  Build your Monday-to-Sunday plan, then export it to your
-                  calendar when you&apos;re ready.
+                  Turn project priorities into scheduled work blocks for the
+                  week.
                 </p>
               </div>
             </section>

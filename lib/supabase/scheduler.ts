@@ -424,6 +424,23 @@ export async function replaceWeeklyPlanBlocksForUser(
   return { error: deleteError };
 }
 
+export async function deleteWeeklyPlanBlockForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  blockId: string,
+) {
+  const { error } = await withSupabaseTimeout(
+    supabase
+      .from("weekly_plan_blocks")
+      .delete()
+      .eq("user_id", userId)
+      .eq("block_id", blockId),
+    "Deleting weekly plan block from Supabase",
+  );
+
+  return { error };
+}
+
 export async function fetchWorkShiftsForUser(
   supabase: SupabaseClient,
   userId: string,

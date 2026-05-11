@@ -119,6 +119,10 @@ textarea {
     animation: project-card-in 280ms ease both;
   }
 
+  .animate-weekly-block {
+    animation: weekly-block-in 260ms ease both;
+  }
+
   .project-card-shell {
     max-height: 1600px;
     opacity: 1;
@@ -184,12 +188,57 @@ textarea {
     opacity: 0;
     transform: translateX(12px) scale(0.98);
   }
+
+  .weekly-block-shell {
+    max-height: 520px;
+    opacity: 1;
+    overflow: hidden;
+    transform: translateY(0);
+    transition:
+      max-height 300ms ease,
+      opacity 220ms ease,
+      transform 300ms ease;
+    will-change: max-height, opacity, transform;
+  }
+
+  .weekly-block-shell[data-exiting="true"] {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  .weekly-block-inner {
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      box-shadow 220ms ease,
+      opacity 220ms ease,
+      transform 300ms ease;
+    will-change: opacity, transform;
+  }
+
+  .weekly-block-shell[data-exiting="true"] .weekly-block-inner {
+    opacity: 0;
+    transform: translateX(10px) scale(0.985);
+  }
 }
 
 @keyframes project-card-in {
   from {
     opacity: 0;
     transform: translateY(10px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes weekly-block-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
   }
 
   to {

@@ -1,8 +1,13 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
-import { CalendarIcon, ClockIcon, PlusIcon } from "@/components/projects/icons";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  CalendarIcon,
+  ClockIcon,
+  PlusIcon,
+  TargetIcon,
+} from "@/components/projects/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,7 +28,7 @@ import {
 
 type WeeklyPlanSectionProps = {
   onAddBlock: (block: WeeklyPlanBlock) => void;
-  onRemoveBlock: (id: string) => void;
+  onRemoveBlock: (id: string) => Promise<void> | void;
   planBlocks: WeeklyPlanBlock[];
   projects: Project[];
 };
@@ -34,6 +39,8 @@ type WeeklyPlanDraftState = {
   plannedTask: string;
   estimatedHours: string;
 };
+
+const weeklyBlockRemovalAnimationMs = 300;
 
 function getInitialDraft(projects: Project[]): WeeklyPlanDraftState {
   const firstProject = projects[0];
@@ -46,6 +53,39 @@ function getInitialDraft(projects: Project[]): WeeklyPlanDraftState {
   };
 }
 
+function normalizeBlockPart(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getBlockIdentityKey({
+  day,
+  plannedTask,
+  projectName,
+}: Pick<WeeklyPlanBlock, "day" | "plannedTask" | "projectName">) {
+  return [
+    day,
+    normalizeBlockPart(projectName),
+    normalizeBlockPart(plannedTask),
+  ].join(":");
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return "Please try again in a moment.";
+}
+
 export function WeeklyPlanSection({
   onAddBlock,
   onRemoveBlock,
@@ -55,12 +95,22 @@ export function WeeklyPlanSection({
   const [draft, setDraft] = useState<WeeklyPlanDraftState>(() =>
     getInitialDraft(projects),
   );
+  const [duplicateWarningKey, setDuplicateWarningKey] = useState<string | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
+  const [exitingBlockIds, setExitingBlockIds] = useState<
+    Record<string, boolean>
+  >({});
   const [exportWeekStart, setExportWeekStart] = useState("");
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [projectFocusMessage, setProjectFocusMessage] = useState<string | null>(
     null,
+  );
+  const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
+  const removeTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {},
   );
 
   useEffect(() => {
@@ -83,6 +133,14 @@ export function WeeklyPlanSection({
 
   useEffect(() => {
     setExportWeekStart(getCurrentWeekMondayInputValue());
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      Object.values(removeTimers.current).forEach((timerId) => {
+        clearTimeout(timerId);
+      });
+    };
   }, []);
 
   useEffect(() => {
@@ -117,6 +175,11 @@ export function WeeklyPlanSection({
     setError(null);
   }, [projects]);
 
+  const selectedProject = useMemo(
+    () => projects.find((project) => String(project.id) === draft.projectId),
+    [draft.projectId, projects],
+  );
+
   const totalPlannedHours = useMemo(() => {
     return planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0);
   }, [planBlocks]);
@@ -134,34 +197,54 @@ export function WeeklyPlanSection({
     }, {} as Record<WeekDay, WeeklyPlanBlock[]>);
   }, [planBlocks]);
 
+  const draftDuplicateKey =
+    selectedProject && draft.plannedTask.trim()
+      ? getBlockIdentityKey({
+          day: draft.day,
+          plannedTask: draft.plannedTask,
+          projectName: selectedProject.name,
+        })
+      : null;
+  const hasDuplicateDraft = Boolean(
+    draftDuplicateKey &&
+      planBlocks.some(
+        (block) => getBlockIdentityKey(block) === draftDuplicateKey,
+      ),
+  );
+  const isConfirmingDuplicate = Boolean(
+    draftDuplicateKey &&
+      hasDuplicateDraft &&
+      duplicateWarningKey === draftDuplicateKey,
+  );
   const canAddBlock =
     draft.projectId.length > 0 &&
     draft.plannedTask.trim().length > 0 &&
     Number(draft.estimatedHours) > 0;
 
-  function handleProjectChange(projectId: string) {
-    const selectedProject = projects.find(
-      (project) => String(project.id) === projectId,
-    );
-
-    setDraft((current) => ({
-      ...current,
-      projectId,
-      plannedTask: selectedProject?.nextAction ?? "",
-    }));
-    setProjectFocusMessage(null);
+  function clearDraftWarnings() {
+    setDuplicateWarningKey(null);
 
     if (error) {
       setError(null);
     }
   }
 
+  function handleProjectChange(projectId: string) {
+    const nextProject = projects.find(
+      (project) => String(project.id) === projectId,
+    );
+
+    setDraft((current) => ({
+      ...current,
+      projectId,
+      plannedTask: nextProject?.nextAction ?? "",
+    }));
+    setProjectFocusMessage(null);
+    clearDraftWarnings();
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
-    const selectedProject = projects.find(
-      (project) => String(project.id) === draft.projectId,
-    );
 
     if (!selectedProject) {
       setError("Add a project first, then schedule a weekly work block.");
@@ -180,12 +263,26 @@ export function WeeklyPlanSection({
       return;
     }
 
+    const nextBlockKey = getBlockIdentityKey(planBlock);
+
+    if (
+      planBlocks.some((block) => getBlockIdentityKey(block) === nextBlockKey) &&
+      duplicateWarningKey !== nextBlockKey
+    ) {
+      setDuplicateWarningKey(nextBlockKey);
+      setError(
+        "A similar block already exists for that day. Click again if you still want to add another copy.",
+      );
+      return;
+    }
+
     onAddBlock(planBlock);
     setDraft((current) => ({
       ...current,
       plannedTask: selectedProject.nextAction,
       estimatedHours: "1",
     }));
+    setDuplicateWarningKey(null);
     setError(null);
   }
 
@@ -231,56 +328,319 @@ export function WeeklyPlanSection({
     );
   }
 
+  function removeBlockWithAnimation(blockId: string) {
+    if (exitingBlockIds[blockId]) {
+      return;
+    }
+
+    setRemoveErrors((current) => {
+      const next = { ...current };
+      delete next[blockId];
+      return next;
+    });
+    setExitingBlockIds((current) => ({ ...current, [blockId]: true }));
+
+    removeTimers.current[blockId] = setTimeout(() => {
+      void Promise.resolve(onRemoveBlock(blockId))
+        .then(() => {
+          setExitingBlockIds((current) => {
+            const next = { ...current };
+            delete next[blockId];
+            return next;
+          });
+        })
+        .catch((removeError: unknown) => {
+          setExitingBlockIds((current) => {
+            const next = { ...current };
+            delete next[blockId];
+            return next;
+          });
+          setRemoveErrors((current) => ({
+            ...current,
+            [blockId]: `Block could not be removed: ${getErrorMessage(removeError)}`,
+          }));
+        })
+        .finally(() => {
+          delete removeTimers.current[blockId];
+        });
+    }, weeklyBlockRemovalAnimationMs);
+  }
+
   return (
-    <section className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-6">
-      <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
-        <CardContent className="p-4 sm:p-6">
-          <div className="flex items-center gap-3">
-            <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
-              <CalendarIcon className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
-                Weekly Plan
-              </h2>
-              <p className="text-sm text-brand-ink/60">
-                Turn project priorities into concrete work blocks for the week.
-              </p>
-            </div>
+    <section className="grid items-start gap-5 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="min-w-0 space-y-5 sm:space-y-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="metric-card">
+            <p className="text-sm text-brand-ink/55">Planned hours</p>
+            <p className="mt-2 text-2xl font-semibold text-brand-ink">
+              {formatEstimatedHours(totalPlannedHours)}
+            </p>
           </div>
-
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <div className="metric-card p-4">
-              <p className="text-sm text-brand-ink/55">Planned hours</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-ink">
-                {totalPlannedHours}
-              </p>
-            </div>
-            <div className="metric-card p-4">
-              <p className="text-sm text-brand-ink/55">Days filled</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-ink">
-                {filledDays}
-              </p>
-            </div>
+          <div className="metric-card">
+            <p className="text-sm text-brand-ink/55">Days filled</p>
+            <p className="mt-2 text-2xl font-semibold text-brand-ink">
+              {filledDays}
+            </p>
           </div>
+          <div className="metric-card">
+            <p className="text-sm text-brand-ink/55">Work blocks</p>
+            <p className="mt-2 text-2xl font-semibold text-brand-ink">
+              {planBlocks.length}
+            </p>
+          </div>
+          <div className="metric-card">
+            <p className="text-sm text-brand-ink/55">Projects ready</p>
+            <p className="mt-2 text-2xl font-semibold text-brand-ink">
+              {projects.filter((project) => !project.completed).length}
+            </p>
+          </div>
+        </div>
 
-          <div className="mt-6 rounded-[24px] border border-brand-ink/8 bg-white/70 p-4">
+        <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+          <CardContent className="p-4 sm:p-6">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
+                <PlusIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                  Plan a work block
+                </h2>
+                <p className="text-sm leading-6 text-brand-ink/60">
+                  Choose a day, project, task, and realistic time estimate.
+                </p>
+              </div>
+            </div>
+
+            <form
+              className="mt-5 grid gap-4 lg:grid-cols-[160px_minmax(0,1fr)]"
+              onSubmit={handleSubmit}
+            >
+              <div>
+                <label className="field-label" htmlFor="plan-day">
+                  Day
+                </label>
+                <Select
+                  id="plan-day"
+                  value={draft.day}
+                  onChange={(event) => {
+                    setDraft((current) => ({
+                      ...current,
+                      day: event.target.value as WeekDay,
+                    }));
+                    clearDraftWarnings();
+                  }}
+                >
+                  {weekDays.map((day) => (
+                    <option key={day} value={day}>
+                      {day}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <div>
+                <label className="field-label" htmlFor="plan-project">
+                  Project
+                </label>
+                <Select
+                  id="plan-project"
+                  value={draft.projectId}
+                  onChange={(event) => handleProjectChange(event.target.value)}
+                  disabled={projects.length === 0}
+                >
+                  {projects.length > 0 ? (
+                    projects.map((project) => (
+                      <option key={project.id} value={String(project.id)}>
+                        {project.name}
+                        {project.completed ? " (done)" : ""}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No projects yet</option>
+                  )}
+                </Select>
+              </div>
+
+              <div className="lg:col-span-2">
+                <label className="field-label" htmlFor="plan-task">
+                  Planned task
+                </label>
+                <Input
+                  id="plan-task"
+                  placeholder="Draft the next deliverable"
+                  value={draft.plannedTask}
+                  onChange={(event) => {
+                    setDraft((current) => ({
+                      ...current,
+                      plannedTask: event.target.value,
+                    }));
+                    clearDraftWarnings();
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="field-label" htmlFor="plan-hours">
+                  Estimated time
+                </label>
+                <Input
+                  id="plan-hours"
+                  type="number"
+                  min="0.5"
+                  step="0.5"
+                  inputMode="decimal"
+                  placeholder="1"
+                  value={draft.estimatedHours}
+                  onChange={(event) => {
+                    setDraft((current) => ({
+                      ...current,
+                      estimatedHours: event.target.value,
+                    }));
+                    clearDraftWarnings();
+                  }}
+                />
+              </div>
+
+              <div className="flex items-end">
+                <Button className="w-full" type="submit" disabled={!canAddBlock}>
+                  <PlusIcon className="h-4 w-4" />
+                  {isConfirmingDuplicate
+                    ? "Add similar block anyway"
+                    : "Add work block"}
+                </Button>
+              </div>
+
+              {projectFocusMessage ? (
+                <p className="rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal lg:col-span-2">
+                  {projectFocusMessage}
+                </p>
+              ) : null}
+
+              {error ? (
+                <p className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral lg:col-span-2">
+                  {error}
+                </p>
+              ) : null}
+            </form>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+          {weekDays.map((day) => {
+            const dayBlocks = blocksByDay[day];
+            const dayHours = dayBlocks.reduce(
+              (sum, block) => sum + block.estimatedHours,
+              0,
+            );
+
+            return (
+              <Card
+                key={day}
+                className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]"
+              >
+                <CardContent className="p-4 sm:p-5">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold text-brand-ink">
+                        {day}
+                      </h3>
+                      <p className="text-sm leading-6 text-brand-ink/55">
+                        {dayBlocks.length} block{dayBlocks.length === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <Badge variant="subtle">
+                      {formatEstimatedHours(dayHours)}
+                    </Badge>
+                  </div>
+
+                  <div className="space-y-3">
+                    {dayBlocks.length > 0 ? (
+                      dayBlocks.map((block, index) => (
+                        <div
+                          key={block.id}
+                          className="weekly-block-shell"
+                          data-exiting={
+                            exitingBlockIds[block.id] ? "true" : "false"
+                          }
+                        >
+                          <div
+                            className="weekly-block-inner animate-weekly-block rounded-[22px] border border-brand-ink/8 bg-white/78 p-4"
+                            style={{ animationDelay: `${index * 45}ms` }}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="rounded-2xl bg-brand-ink/5 p-2 text-brand-ink/60">
+                                <TargetIcon className="h-4 w-4" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-semibold text-brand-ink">
+                                  {block.projectName}
+                                </p>
+                                <p className="mt-1 text-sm leading-6 text-brand-ink/66">
+                                  {block.plannedTask}
+                                </p>
+                              </div>
+                            </div>
+
+                            {removeErrors[block.id] ? (
+                              <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-xs font-medium leading-5 text-brand-coral">
+                                {removeErrors[block.id]}
+                              </p>
+                            ) : null}
+
+                            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <span className="inline-flex items-center gap-2 rounded-full bg-brand-ink/[0.035] px-3 py-1.5 text-sm font-semibold text-brand-ink/58">
+                                <ClockIcon className="h-4 w-4" />
+                                {formatEstimatedHours(block.estimatedHours)}
+                              </span>
+                              <Button
+                                className="w-full text-brand-ink/62 hover:text-brand-ink sm:w-auto"
+                                disabled={Boolean(exitingBlockIds[block.id])}
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => removeBlockWithAnimation(block.id)}
+                              >
+                                {exitingBlockIds[block.id]
+                                  ? "Removing..."
+                                  : "Remove"}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/55 p-4 text-sm leading-6 text-brand-ink/55">
+                        No planned work blocks yet. Add one when this day needs
+                        dedicated focus.
+                      </p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+
+      <aside className="min-w-0 xl:sticky xl:top-6">
+        <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
                 <CalendarIcon className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-brand-ink">
-                  Export to Calendar
-                </h3>
+                <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                  Export your weekly plan
+                </h2>
                 <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-                  Import this file into Apple Calendar, Google Calendar, or
+                  Download an .ics file for Apple Calendar, Google Calendar, or
                   Outlook.
                 </p>
               </div>
             </div>
 
-            <div className="mt-4">
+            <div className="mt-5">
               <label className="field-label" htmlFor="export-week-start">
                 Week start date
               </label>
@@ -295,19 +655,20 @@ export function WeeklyPlanSection({
                 }}
               />
               <p className="mt-2 text-sm leading-6 text-brand-ink/55">
-                Choose the Monday for this weekly plan. Blocks are exported
-                from 9:00 AM in the order shown for each day.
+                Choose the Monday for this weekly plan. Until start times are
+                added, exported blocks begin at 9:00 AM in each day&apos;s
+                order.
               </p>
             </div>
 
             {exportError ? (
-              <p className="mt-3 text-sm font-medium leading-6 text-brand-coral">
+              <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-sm font-medium leading-6 text-brand-coral">
                 {exportError}
               </p>
             ) : null}
 
             {exportMessage ? (
-              <p className="mt-3 text-sm font-medium leading-6 text-brand-teal">
+              <p className="mt-3 rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-3 py-2 text-sm font-medium leading-6 text-brand-teal">
                 {exportMessage}
               </p>
             ) : null}
@@ -319,174 +680,9 @@ export function WeeklyPlanSection({
             >
               Export to Calendar
             </Button>
-          </div>
-
-          <form className="mt-5 space-y-4 sm:space-y-5" onSubmit={handleSubmit}>
-            <div>
-              <label className="field-label" htmlFor="plan-day">
-                Day
-              </label>
-              <Select
-                id="plan-day"
-                value={draft.day}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    day: event.target.value as WeekDay,
-                  }))
-                }
-              >
-                {weekDays.map((day) => (
-                  <option key={day} value={day}>
-                    {day}
-                  </option>
-                ))}
-              </Select>
-            </div>
-
-            <div>
-              <label className="field-label" htmlFor="plan-project">
-                Project
-              </label>
-              <Select
-                id="plan-project"
-                value={draft.projectId}
-                onChange={(event) => handleProjectChange(event.target.value)}
-                disabled={projects.length === 0}
-              >
-                {projects.length > 0 ? (
-                  projects.map((project) => (
-                    <option key={project.id} value={String(project.id)}>
-                      {project.name}
-                      {project.completed ? " (done)" : ""}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">No projects yet</option>
-                )}
-              </Select>
-            </div>
-
-            {projectFocusMessage ? (
-              <p className="rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
-                {projectFocusMessage}
-              </p>
-            ) : null}
-
-            <div>
-              <label className="field-label" htmlFor="plan-task">
-                Planned task / next action
-              </label>
-              <Input
-                id="plan-task"
-                placeholder="Draft the next deliverable"
-                value={draft.plannedTask}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    plannedTask: event.target.value,
-                  }))
-                }
-              />
-            </div>
-
-            <div>
-              <label className="field-label" htmlFor="plan-hours">
-                Estimated time
-              </label>
-              <Input
-                id="plan-hours"
-                type="number"
-                min="0.5"
-                step="0.5"
-                inputMode="decimal"
-                placeholder="1"
-                value={draft.estimatedHours}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    estimatedHours: event.target.value,
-                  }))
-                }
-              />
-            </div>
-
-            {error ? (
-              <p className="text-sm font-medium text-brand-coral">{error}</p>
-            ) : null}
-
-            <Button className="w-full" type="submit" disabled={!canAddBlock}>
-              <PlusIcon className="h-4 w-4" />
-              Add weekly block
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-        {weekDays.map((day) => {
-          const dayBlocks = blocksByDay[day];
-
-          return (
-            <Card
-              key={day}
-              className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]"
-            >
-              <CardContent className="p-4 sm:p-5">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="font-semibold text-brand-ink">{day}</h3>
-                    <p className="text-sm text-brand-ink/55">
-                      {dayBlocks.length} block{dayBlocks.length === 1 ? "" : "s"}
-                    </p>
-                  </div>
-                  <Badge variant="subtle">
-                    {formatEstimatedHours(
-                      dayBlocks.reduce((sum, block) => sum + block.estimatedHours, 0),
-                    )}
-                  </Badge>
-                </div>
-
-                <div className="space-y-3">
-                  {dayBlocks.length > 0 ? (
-                    dayBlocks.map((block) => (
-                      <div
-                        key={block.id}
-                        className="rounded-[22px] border border-brand-ink/8 bg-white/78 p-4"
-                      >
-                        <p className="text-sm font-semibold text-brand-ink">
-                          {block.projectName}
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-brand-ink/66">
-                          {block.plannedTask}
-                        </p>
-                        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                          <span className="inline-flex items-center gap-2 text-sm text-brand-ink/55">
-                            <ClockIcon className="h-4 w-4" />
-                            {formatEstimatedHours(block.estimatedHours)}
-                          </span>
-                          <Button
-                            className="w-full sm:w-auto"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => onRemoveBlock(block.id)}
-                          >
-                            Remove
-                          </Button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/55 p-4 text-sm leading-6 text-brand-ink/55">
-                      No planned work blocks yet.
-                    </p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+          </CardContent>
+        </Card>
+      </aside>
     </section>
   );
 }
