@@ -110,6 +110,10 @@ textarea {
   .animate-assistant-card {
     animation: assistant-card-in 300ms ease both;
   }
+
+  .animate-assistant-details {
+    animation: assistant-details-in 220ms ease both;
+  }
 }
 
 @keyframes assistant-message-in {
@@ -133,6 +137,20 @@ textarea {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes assistant-details-in {
+  from {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    max-height: 500px;
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

@@ -22,7 +22,13 @@ import { cn } from "@/lib/utils";
 
 type AssistantStatus = "loading" | "ready" | "signed_out" | "error";
 type ChatRole = "assistant" | "user";
-type ActionStatus = "pending" | "ignored" | "applying" | "applied" | "error";
+type ActionStatus =
+  | "pending"
+  | "dismissing"
+  | "removed"
+  | "applying"
+  | "applied"
+  | "error";
 
 type ChatMessage = {
   id: string;
@@ -47,6 +53,15 @@ type ActionState = {
   message?: string;
   status: ActionStatus;
 };
+
+type AssistantNotice = {
+  id: string;
+  message: string;
+  tone: "error" | "success";
+};
+
+const cardExitDelayMs = 300;
+const applySuccessExitDelayMs = 700;
 
 const examplePrompts = [
   "Plan my week",
@@ -114,6 +129,10 @@ function isActionableSuggestion(suggestion: AssistantSuggestion) {
 
 function isEditableSuggestion(suggestion: AssistantSuggestion) {
   return isActionableSuggestion(suggestion);
+}
+
+function isActionVisible(actionState?: ActionState) {
+  return actionState?.status !== "removed";
 }
 
 function getActions(response?: AssistantPlanReviewResponse) {
@@ -271,7 +290,9 @@ function ActionCard({
   const isEditing = actionState.editing;
   const [showDetails, setShowDetails] = useState(false);
   const isFinished =
-    actionState.status === "applied" || actionState.status === "ignored";
+    actionState.status === "applied" ||
+    actionState.status === "dismissing" ||
+    actionState.status === "removed";
   const detailItems = [
     suggestion.rationale ? { label: "Why this helps", value: suggestion.rationale } : null,
     suggestion.plannedTask ? { label: "Task", value: suggestion.plannedTask } : null,
@@ -283,9 +304,10 @@ function ActionCard({
   return (
     <article
       className={cn(
-        "animate-assistant-card rounded-[20px] border border-brand-ink/10 bg-white p-4 shadow-[0_14px_34px_rgba(18,32,47,0.07)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(18,32,47,0.1)]",
+        "animate-assistant-card rounded-[20px] border border-brand-ink/10 bg-white p-4 shadow-[0_14px_34px_rgba(18,32,47,0.07)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(18,32,47,0.1)]",
         actionState.status === "applied" && "border-brand-teal/20 bg-brand-teal/5",
-        actionState.status === "ignored" && "opacity-60 grayscale-[20%]",
+        actionState.status === "dismissing" &&
+          "pointer-events-none -translate-y-2 scale-[0.98] opacity-0",
         actionState.status === "error" && "border-brand-coral/20 bg-brand-coral/5",
       )}
       style={{ animationDelay: `${index * 70}ms` }}
@@ -311,11 +333,6 @@ function ActionCard({
             {actionState.status === "applied" && (
               <span className="text-[11px] font-semibold text-brand-teal">
                 Applied
-              </span>
-            )}
-            {actionState.status === "ignored" && (
-              <span className="text-[11px] font-semibold text-brand-ink/50">
-                Dismissed
               </span>
             )}
           </div>
@@ -412,7 +429,7 @@ function ActionCard({
             {showDetails ? "Hide details" : "Details"}
           </button>
           {showDetails ? (
-            <div className="mt-2 space-y-2 rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] p-3">
+            <div className="animate-assistant-details mt-2 space-y-2 overflow-hidden rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] p-3">
               {detailItems.map((item) => (
                 <div key={item.label}>
                   <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
@@ -519,9 +536,13 @@ function ChatBubble({
 }) {
   const isUser = message.role === "user";
   const actions = getActions(message.response);
-  const actionCount = actions.length;
-  const actionableActions = actions.filter(isActionableSuggestion);
-  const insightActions = actions.filter(
+  const visibleActions = actions.filter((suggestion) =>
+    isActionVisible(actionStates[suggestion.id]),
+  );
+  const visibleActionCount = visibleActions.length;
+  const hasHandledAllSuggestions = actions.length > 0 && visibleActionCount === 0;
+  const actionableActions = visibleActions.filter(isActionableSuggestion);
+  const insightActions = visibleActions.filter(
     (suggestion) => !isActionableSuggestion(suggestion),
   );
 
@@ -562,8 +583,14 @@ function ChatBubble({
           )}
         </div>
 
-        {!isUser && !message.isStreaming && actionCount > 0 ? (
+        {!isUser && !message.isStreaming && actions.length > 0 ? (
           <div className="mt-2 w-full space-y-4">
+            {hasHandledAllSuggestions ? (
+              <div className="animate-assistant-card rounded-[20px] border border-brand-teal/20 bg-brand-teal/10 p-4 text-sm font-semibold leading-6 text-brand-teal">
+                You’re all set. Ask for another plan whenever you’re ready.
+              </div>
+            ) : null}
+
             {actionableActions.length > 0 ? (
               <section>
                 <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
@@ -571,7 +598,7 @@ function ChatBubble({
                     Suggested next steps
                   </h4>
                   <span className="text-xs text-brand-ink/40">
-                    Review before applying
+                    {actionableActions.length} remaining
                   </span>
                 </div>
                 <div className="grid gap-3">
@@ -605,7 +632,7 @@ function ChatBubble({
                     Helpful notes
                   </h4>
                   <span className="text-xs text-brand-ink/40">
-                    Nothing changes from these notes
+                    {insightActions.length} remaining
                   </span>
                 </div>
                 <div className="grid gap-3">
@@ -646,6 +673,7 @@ export function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [context, setContext] = useState<AssistantContextSummary | undefined>();
   const [actionStates, setActionStates] = useState<Record<string, ActionState>>({});
+  const [assistantNotices, setAssistantNotices] = useState<AssistantNotice[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -937,6 +965,44 @@ export function AssistantPage() {
     }));
   }
 
+  function addAssistantNotice(
+    message: string,
+    tone: AssistantNotice["tone"] = "success",
+  ) {
+    const noticeId = createId("notice");
+
+    setAssistantNotices((current) => [
+      ...current.slice(-2),
+      {
+        id: noticeId,
+        message,
+        tone,
+      },
+    ]);
+
+    window.setTimeout(() => {
+      setAssistantNotices((current) =>
+        current.filter((notice) => notice.id !== noticeId),
+      );
+    }, 3500);
+  }
+
+  function removeSuggestionAfterAnimation(suggestionId: string) {
+    updateActionState(suggestionId, {
+      editing: false,
+      message: undefined,
+      status: "dismissing",
+    });
+
+    window.setTimeout(() => {
+      updateActionState(suggestionId, {
+        editing: false,
+        message: undefined,
+        status: "removed",
+      });
+    }, cardExitDelayMs);
+  }
+
   function updateSuggestion(
     messageId: string,
     suggestionId: string,
@@ -1107,10 +1173,10 @@ export function AssistantPage() {
 
   async function applySuggestion(suggestion: AssistantSuggestion) {
     if (!isActionableSuggestion(suggestion)) {
-      updateActionState(suggestion.id, {
-        message: "This one is guidance only, so there is nothing to apply.",
-        status: "ignored",
-      });
+      addAssistantNotice(
+        "That note is informational, so there is nothing to apply.",
+        "error",
+      );
       return;
     }
 
@@ -1129,6 +1195,23 @@ export function AssistantPage() {
         message: result?.message ?? response.message,
         status: result?.status === "applied" ? "applied" : "error",
       });
+
+      if (result?.status === "applied") {
+        addAssistantNotice(result.message || "Suggestion applied.");
+
+        window.setTimeout(() => {
+          removeSuggestionAfterAnimation(suggestion.id);
+        }, applySuccessExitDelayMs);
+        return;
+      }
+
+      if (result?.status === "skipped") {
+        addAssistantNotice(
+          result.message || "This suggestion cannot be applied automatically.",
+          "error",
+        );
+        return;
+      }
     } catch (applyError) {
       updateActionState(suggestion.id, {
         message: getErrorMessage(applyError),
@@ -1138,11 +1221,7 @@ export function AssistantPage() {
   }
 
   function ignoreSuggestion(suggestionId: string) {
-    updateActionState(suggestionId, {
-      editing: false,
-      message: undefined,
-      status: "ignored",
-    });
+    removeSuggestionAfterAnimation(suggestionId);
   }
 
   function toggleEdit(suggestionId: string) {
@@ -1192,6 +1271,7 @@ export function AssistantPage() {
                   if (confirm("Clear your conversation history?")) {
                     setMessages([]);
                     setActionStates({});
+                    setAssistantNotices([]);
                     setError(null);
                   }
                 }}
@@ -1246,6 +1326,24 @@ export function AssistantPage() {
                   onUpdateSuggestion={updateSuggestion}
                 />
               ))}
+
+              {assistantNotices.length > 0 ? (
+                <div className="mx-auto grid w-full max-w-md gap-2">
+                  {assistantNotices.map((notice) => (
+                    <div
+                      key={notice.id}
+                      className={cn(
+                        "animate-assistant-card rounded-2xl border px-4 py-3 text-sm font-semibold leading-6 shadow-sm",
+                        notice.tone === "success"
+                          ? "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
+                          : "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
+                      )}
+                    >
+                      {notice.message}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
 
               {error ? (
                 <div className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-center text-sm leading-6 text-brand-coral">
