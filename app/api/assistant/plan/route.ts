@@ -6,6 +6,9 @@ import {
   createAssistantPlanningContext,
   createContextOnlyAssistantResponse,
   createFallbackAssistantResponse,
+  filterAssistantSuggestions,
+  hasPlanningIntent,
+  isGreetingPrompt,
   normalizeAssistantSuggestions,
   type AssistantPlanReviewResponse,
   type AssistantPlanningContext,
@@ -36,7 +39,7 @@ const assistantResponseJsonSchema = {
     },
     suggestions: {
       type: "array",
-      maxItems: 8,
+      maxItems: 4,
       items: {
         type: "object",
         additionalProperties: false,
@@ -161,7 +164,7 @@ async function getAuthenticatedUser(
 
   if (!accessToken) {
     return NextResponse.json(
-      { error: "Sign in before using AI Plan Review." },
+      { error: "Sign in before using Planning Assistant." },
       { status: 401 },
     );
   }
@@ -228,9 +231,19 @@ function createAiPrompt(
   profile: PlannerProfile | null,
 ) {
   return [
-    "You are Schedule Builder's AI Plan Review assistant.",
+    "You are Schedule Builder's friendly planning assistant.",
     "Return JSON only matching the provided schema.",
-    "Return a friendly plain-language message first, then reviewable planning suggestions.",
+    "Return a short, natural plain-language message first, then only the strongest reviewable planning suggestions.",
+    "Sound like a helpful planning coach, not a system report.",
+    "Do not repeat the same opening phrase every time.",
+    "If the user is only greeting you, reply conversationally and return zero suggestions.",
+    "If the user request is vague, ask one useful follow-up question and return zero or one suggestion.",
+    "If the user asks a general question, answer briefly first before proposing schedule changes.",
+    "Only generate suggestion cards when the user is asking for planning help.",
+    "Limit suggestions to 2-4 high-quality items by default.",
+    "Return at most 2 warning-style suggestions.",
+    "Avoid duplicate or near-duplicate cards.",
+    "Separate insights in the message from actions in the suggestions.",
     "Do not claim anything was saved.",
     "Do not create calendar events.",
     "Do not mark projects done.",
@@ -242,6 +255,8 @@ function createAiPrompt(
     "Allowed suggestion types only: suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
     "Every suggestion must include id, type, title, description, confidence, rationale, and severity.",
     "For optional fields that do not apply, return an empty string or 0.",
+    "For suggested_weekly_block cards, include projectName, day, estimatedHours, and plannedTask.",
+    "For suggested_next_action cards, include projectName and proposedNextAction.",
     "",
     `User request: ${prompt}`,
     "",
@@ -349,17 +364,16 @@ async function createOpenAiSuggestions(
     parsed.suggestions,
     assistantPlanningSuggestionTypes as readonly AssistantSuggestionType[],
   );
-
-  if (suggestions.length === 0) {
-    throw new Error("OpenAI returned no valid safe suggestions.");
-  }
+  const filteredSuggestions = filterAssistantSuggestions(suggestions);
 
   return {
     message:
       typeof parsed.message === "string" && parsed.message.trim()
         ? parsed.message.trim()
-        : "Generated safe review suggestions. Nothing has been saved automatically.",
-    suggestions,
+        : filteredSuggestions.length > 0
+          ? "Here’s the focused version I’d start with. Review the suggestions and only apply the ones that fit."
+          : "I can help with that. Tell me what feels most urgent or what kind of plan you want to build, and I’ll keep the next step simple.",
+    suggestions: filteredSuggestions,
   };
 }
 
@@ -424,6 +438,10 @@ export async function POST(request: NextRequest) {
     message: fallbackMessage,
   };
 
+  if (isGreetingPrompt(prompt) || !hasPlanningIntent(prompt)) {
+    return NextResponse.json(fallbackWithWarning);
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json(fallbackWithWarning);
   }
@@ -442,7 +460,7 @@ export async function POST(request: NextRequest) {
       suggestions: aiResponse.suggestions,
     } satisfies AssistantPlanReviewResponse);
   } catch (error) {
-    const fallbackMessage = `${fallbackWithWarning.message} I had trouble reaching the AI model, so I used the built-in planning rules instead. ${getErrorMessage(error)}`;
+    const fallbackMessage = `${fallbackWithWarning.message} I had trouble getting the full assistant response, so I used a simpler planning check for now. ${getErrorMessage(error)}`;
 
     return NextResponse.json({
       ...fallbackWithWarning,

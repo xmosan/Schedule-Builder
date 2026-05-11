@@ -1,23 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  CalendarIcon,
-  CheckCircleIcon,
   FolderStackIcon,
   TargetIcon,
 } from "@/components/projects/icons";
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   type AssistantApplyResponse,
   type AssistantContextSummary,
   type AssistantPlanReviewResponse,
   type AssistantSuggestion,
-  type AssistantSuggestionSeverity,
   type AssistantSuggestionType,
 } from "@/lib/assistant";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
@@ -43,24 +39,34 @@ type ActionState = {
 
 const examplePrompts = [
   "Plan my week",
-  "Find overload",
-  "Create work blocks",
-  "Suggest Top 3",
-  "Balance school/work",
+  "Balance school and work",
+  "Find open time",
+  "Create study blocks",
+  "Suggest my Top 3",
 ];
 
 const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
-  suggested_weekly_block: "Suggested action",
-  suggested_next_action: "Next action idea",
-  workload_warning: "Workload warning",
-  missing_deadline_warning: "Missing deadline",
-  unclear_project_warning: "Clarify project",
+  suggested_weekly_block: "Schedule idea",
+  suggested_next_action: "Next action",
+  workload_warning: "Workload note",
+  missing_deadline_warning: "Deadline note",
+  unclear_project_warning: "Clarity note",
 };
 
-const severityStyles: Record<AssistantSuggestionSeverity, string> = {
-  important: "border-brand-coral/18 bg-brand-coral/8 text-brand-coral",
-  warning: "border-[#e7c783] bg-[#fff8e6] text-[#8a5d0a]",
-  info: "border-brand-teal/18 bg-brand-teal/8 text-brand-teal",
+const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
+  suggested_weekly_block: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
+  suggested_next_action: "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
+  workload_warning: "border-[#e7c783] bg-[#fff8e6] text-[#8a5d0a]",
+  missing_deadline_warning: "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
+  unclear_project_warning: "border-brand-ink/10 bg-brand-ink/5 text-brand-ink/70",
+};
+
+const suggestionMarkerStyles: Record<AssistantSuggestionType, string> = {
+  suggested_weekly_block: "bg-brand-teal",
+  suggested_next_action: "bg-brand-ocean",
+  workload_warning: "bg-[#c99725]",
+  missing_deadline_warning: "bg-brand-coral",
+  unclear_project_warning: "bg-brand-ink/50",
 };
 
 function createId(prefix: string) {
@@ -154,6 +160,7 @@ function updateSuggestionInResponse(
 
 function ActionCard({
   actionState,
+  index,
   onApply,
   onIgnore,
   onToggleEdit,
@@ -161,6 +168,7 @@ function ActionCard({
   suggestion,
 }: {
   actionState: ActionState;
+  index: number;
   onApply: () => void;
   onIgnore: () => void;
   onToggleEdit: () => void;
@@ -169,49 +177,84 @@ function ActionCard({
 }) {
   const canApply = isActionableSuggestion(suggestion);
   const isEditing = actionState.editing;
+  const [showDetails, setShowDetails] = useState(false);
   const isFinished =
     actionState.status === "applied" || actionState.status === "ignored";
+  const detailItems = [
+    suggestion.rationale ? { label: "Why this helps", value: suggestion.rationale } : null,
+    suggestion.plannedTask ? { label: "Task", value: suggestion.plannedTask } : null,
+    suggestion.proposedNextAction
+      ? { label: "Suggested next action", value: suggestion.proposedNextAction }
+      : null,
+  ].filter((item): item is { label: string; value: string } => item !== null);
 
   return (
     <article
       className={cn(
-        "rounded-[16px] border border-brand-ink/10 bg-white p-3 shadow-sm transition-opacity",
+        "animate-assistant-card rounded-[20px] border border-brand-ink/10 bg-white p-4 shadow-[0_14px_34px_rgba(18,32,47,0.07)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(18,32,47,0.1)]",
         actionState.status === "applied" && "border-brand-teal/20 bg-brand-teal/5",
-        actionState.status === "ignored" && "opacity-50 grayscale-[30%]",
+        actionState.status === "ignored" && "opacity-60 grayscale-[20%]",
         actionState.status === "error" && "border-brand-coral/20 bg-brand-coral/5",
       )}
+      style={{ animationDelay: `${index * 70}ms` }}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            "mt-1 h-2.5 w-2.5 shrink-0 rounded-full",
+            suggestionMarkerStyles[suggestion.type],
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
             <Badge
-              className={cn("border px-2 py-0.5 text-[10px]", severityStyles[suggestion.severity])}
+              className={cn(
+                "border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em]",
+                suggestionTypeStyles[suggestion.type],
+              )}
               variant="subtle"
             >
               {suggestionTypeLabels[suggestion.type]}
             </Badge>
-            {actionState.status === "applied" && <Badge variant="subtle" className="text-[10px]">Applied</Badge>}
-            {actionState.status === "ignored" && <Badge variant="subtle" className="text-[10px]">Ignored</Badge>}
+            {actionState.status === "applied" && (
+              <span className="text-[11px] font-semibold text-brand-teal">
+                Applied
+              </span>
+            )}
+            {actionState.status === "ignored" && (
+              <span className="text-[11px] font-semibold text-brand-ink/50">
+                Dismissed
+              </span>
+            )}
           </div>
-          <h3 className="text-sm font-semibold text-brand-ink">
+          <h3 className="text-base font-semibold tracking-[-0.01em] text-brand-ink">
             {suggestion.title}
           </h3>
-          <p className="mt-1 text-sm leading-5 text-brand-ink/60">
+          <p className="mt-1.5 text-sm leading-6 text-brand-ink/70">
             {suggestion.description}
           </p>
         </div>
       </div>
 
       {(suggestion.projectName || suggestion.day || suggestion.estimatedHours) && !isEditing ? (
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-brand-ink/60">
+        <div className="mt-4 grid gap-2 text-xs text-brand-ink/60 sm:grid-cols-3">
           {suggestion.projectName && (
-            <div><span className="font-medium text-brand-ink/40">Project:</span> <span className="font-semibold text-brand-ink">{suggestion.projectName}</span></div>
+            <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+              <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Project</span>
+              <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.projectName}</span>
+            </div>
           )}
           {suggestion.day && (
-            <div><span className="font-medium text-brand-ink/40">Day:</span> <span className="font-semibold text-brand-ink">{suggestion.day}</span></div>
+            <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+              <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Day</span>
+              <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.day}</span>
+            </div>
           )}
           {suggestion.estimatedHours && (
-            <div><span className="font-medium text-brand-ink/40">Time:</span> <span className="font-semibold text-brand-ink">{suggestion.estimatedHours}h</span></div>
+            <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+              <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Time</span>
+              <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.estimatedHours}h</span>
+            </div>
           )}
         </div>
       ) : null}
@@ -255,7 +298,7 @@ function ActionCard({
           )}
           {suggestion.plannedTask !== undefined && (
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Task Details</span>
+              <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Task</span>
               <textarea
                 className="w-full resize-y rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm leading-5"
                 rows={2}
@@ -267,12 +310,38 @@ function ActionCard({
         </div>
       ) : null}
 
+      {detailItems.length > 0 && !isEditing ? (
+        <div className="mt-3">
+          <button
+            className="text-xs font-semibold text-brand-ink/50 hover:text-brand-ink"
+            type="button"
+            onClick={() => setShowDetails((current) => !current)}
+          >
+            {showDetails ? "Hide details" : "Details"}
+          </button>
+          {showDetails ? (
+            <div className="mt-2 space-y-2 rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] p-3">
+              {detailItems.map((item) => (
+                <div key={item.label}>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+                    {item.label}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-brand-ink/70">
+                    {item.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {actionState.message && (
         <p className={cn(
           "mt-3 rounded-xl border p-2 text-xs leading-5",
           actionState.status === "error"
-            ? "border-brand-coral/20 bg-brand-coral/8 text-brand-coral"
-            : "border-brand-teal/18 bg-brand-teal/8 text-brand-teal"
+            ? "border-brand-coral/20 bg-brand-coral/10 text-brand-coral"
+            : "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
         )}>
           {actionState.message}
         </p>
@@ -282,7 +351,7 @@ function ActionCard({
         {isActionableSuggestion(suggestion) ? (
           <>
             <Button
-              className="h-8 px-4 text-xs"
+              className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
               disabled={!canApply || isFinished || actionState.status === "applying"}
               size="sm"
               onClick={onApply}
@@ -291,7 +360,7 @@ function ActionCard({
             </Button>
             {isEditableSuggestion(suggestion) && (
               <Button
-                className="h-8 px-3 text-xs"
+                className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
                 disabled={isFinished || actionState.status === "applying"}
                 size="sm"
                 variant="outline"
@@ -301,7 +370,7 @@ function ActionCard({
               </Button>
             )}
             <Button
-              className="h-8 px-3 text-xs text-brand-ink/60 hover:text-brand-ink"
+              className="h-9 rounded-full px-4 text-xs font-semibold text-brand-ink/60 hover:text-brand-ink active:scale-[0.98]"
               disabled={isFinished || actionState.status === "applying"}
               size="sm"
               variant="secondary"
@@ -313,7 +382,7 @@ function ActionCard({
         ) : (
           <>
             <Button
-              className="h-8 px-4 text-xs"
+              className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
               disabled={isFinished}
               size="sm"
               variant="secondary"
@@ -322,7 +391,7 @@ function ActionCard({
               Got it
             </Button>
             <Button
-              className="h-8 px-3 text-xs text-brand-ink/60 hover:text-brand-ink"
+              className="h-9 rounded-full px-4 text-xs font-semibold text-brand-ink/60 hover:text-brand-ink active:scale-[0.98]"
               disabled={isFinished}
               size="sm"
               variant="outline"
@@ -359,22 +428,22 @@ function ChatBubble({
   const isUser = message.role === "user";
   const actions = getActions(message.response);
   const actionCount = actions.length;
-  
-  // Count warnings (severity: warning or important) vs normal suggestions
-  const warningCount = actions.filter(a => a.severity === 'warning' || a.severity === 'important').length;
-  const suggestionCount = actionCount - warningCount;
+  const actionableActions = actions.filter(isActionableSuggestion);
+  const insightActions = actions.filter(
+    (suggestion) => !isActionableSuggestion(suggestion),
+  );
 
   return (
-    <div className={cn("flex w-full gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
+    <div className={cn("animate-assistant-message flex w-full gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
       {!isUser && (
         <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-teal/10">
           <TargetIcon className="h-4 w-4 text-brand-teal" />
         </div>
       )}
-      <div className={cn("flex max-w-[92%] flex-col gap-2 sm:max-w-[85%]", isUser ? "items-end" : "items-start")}>
+      <div className={cn("flex max-w-[90%] flex-col gap-2 sm:max-w-[82%]", isUser ? "items-end" : "items-start")}>
         <div
           className={cn(
-            "rounded-2xl px-4 py-3 sm:px-5 sm:py-3.5",
+            "rounded-[22px] px-4 py-3 sm:px-5 sm:py-3.5",
             isUser
               ? "bg-brand-ink text-white shadow-sm"
               : "border border-brand-ink/5 bg-white text-brand-ink shadow-sm",
@@ -386,34 +455,74 @@ function ChatBubble({
         </div>
 
         {!isUser && actionCount > 0 ? (
-          <div className="mt-1 w-full">
-            <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
-              <h4 className="text-[11px] font-semibold text-brand-ink/80">
-                Proposed Actions
-              </h4>
-              <span className="text-[10px] text-brand-ink/40">•</span>
-              <span className="text-[10px] text-brand-ink/50">Nothing changes unless you apply a suggestion.</span>
-            </div>
-            <div className="grid gap-2">
-            {actions.map((suggestion) => (
-              <ActionCard
-                key={suggestion.id}
-                actionState={
-                  actionStates[suggestion.id] ?? {
-                    editing: false,
-                    status: "pending",
-                  }
-                }
-                suggestion={suggestion}
-                onApply={() => onApply(suggestion)}
-                onIgnore={() => onIgnore(suggestion.id)}
-                onToggleEdit={() => onToggleEdit(suggestion.id)}
-                onUpdate={(patch) =>
-                  onUpdateSuggestion(message.id, suggestion.id, patch)
-                }
-              />
-            ))}
-            </div>
+          <div className="mt-2 w-full space-y-4">
+            {actionableActions.length > 0 ? (
+              <section>
+                <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+                  <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
+                    Suggested next steps
+                  </h4>
+                  <span className="text-xs text-brand-ink/40">
+                    Review before applying
+                  </span>
+                </div>
+                <div className="grid gap-3">
+                  {actionableActions.map((suggestion, index) => (
+                    <ActionCard
+                      key={suggestion.id}
+                      actionState={
+                        actionStates[suggestion.id] ?? {
+                          editing: false,
+                          status: "pending",
+                        }
+                      }
+                      index={index}
+                      suggestion={suggestion}
+                      onApply={() => onApply(suggestion)}
+                      onIgnore={() => onIgnore(suggestion.id)}
+                      onToggleEdit={() => onToggleEdit(suggestion.id)}
+                      onUpdate={(patch) =>
+                        onUpdateSuggestion(message.id, suggestion.id, patch)
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            {insightActions.length > 0 ? (
+              <section>
+                <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+                  <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
+                    Helpful notes
+                  </h4>
+                  <span className="text-xs text-brand-ink/40">
+                    Nothing changes from these notes
+                  </span>
+                </div>
+                <div className="grid gap-3">
+                  {insightActions.map((suggestion, index) => (
+                    <ActionCard
+                      key={suggestion.id}
+                      actionState={
+                        actionStates[suggestion.id] ?? {
+                          editing: false,
+                          status: "pending",
+                        }
+                      }
+                      index={actionableActions.length + index}
+                      suggestion={suggestion}
+                      onApply={() => onApply(suggestion)}
+                      onIgnore={() => onIgnore(suggestion.id)}
+                      onToggleEdit={() => onToggleEdit(suggestion.id)}
+                      onUpdate={(patch) =>
+                        onUpdateSuggestion(message.id, suggestion.id, patch)
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -751,7 +860,7 @@ export function AssistantPage() {
   function ignoreSuggestion(suggestionId: string) {
     updateActionState(suggestionId, {
       editing: false,
-      message: "Ignored. Nothing changed in your schedule.",
+      message: undefined,
       status: "ignored",
     });
   }
@@ -774,19 +883,22 @@ export function AssistantPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden pb-[60px] sm:pb-0 bg-brand-background">
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-brand-mist pb-[calc(5.75rem+env(safe-area-inset-bottom))] md:pb-0">
       <SchedulerNav />
 
-      <main className="mx-auto flex w-full max-w-4xl flex-1 min-h-0 flex-col gap-4 px-4 pt-4 pb-4 sm:px-6 sm:py-8 md:gap-6">
+      <main className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4 px-4 pb-3 pt-4 sm:px-6 sm:py-8 md:gap-6">
         
         {/* Assistant Header Card */}
         <section className="panel shrink-0 flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink sm:text-2xl">
               Planning Assistant
             </h1>
             <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-              Ask naturally. Review suggested changes before anything is added.
+              Ask for help planning your week, projects, work blocks, or priorities.
+            </p>
+            <p className="mt-2 text-xs font-semibold text-brand-teal">
+              Nothing is added to your schedule unless you approve it.
             </p>
           </div>
           <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
@@ -821,16 +933,16 @@ export function AssistantPage() {
                     <TargetIcon className="h-6 w-6 text-brand-teal" />
                   </div>
                   <h2 className="mb-2 text-xl font-semibold text-brand-ink sm:text-2xl">
-                    What would you like to plan today?
+                    What would you like to plan?
                   </h2>
                   <p className="mb-8 max-w-md text-sm text-brand-ink/60">
-                    Ask the assistant to plan your week, balance your workload, or turn projects into schedule blocks.
+                    Ask Schedule Builder to organize your week, balance work and projects, or turn goals into time blocks.
                   </p>
                   <div className="flex max-w-lg flex-wrap justify-center gap-2.5">
                     {examplePrompts.map((example) => (
                       <button
                         key={example}
-                        className="rounded-full border border-brand-ink/10 bg-white px-4 py-2 text-sm font-semibold text-brand-ink/70 shadow-sm transition-all hover:border-brand-teal/30 hover:text-brand-ink active:scale-95"
+                        className="rounded-full border border-brand-ink/10 bg-white px-4 py-2 text-sm font-semibold text-brand-ink/70 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-teal/30 hover:text-brand-ink active:scale-95"
                         type="button"
                         onClick={() => {
                           setPrompt(example);
@@ -857,7 +969,10 @@ export function AssistantPage() {
 
               {isSubmitting ? (
                 <div className="flex justify-start">
-                  <div className="flex h-[44px] items-center rounded-2xl border border-white/60 bg-white/84 px-4 shadow-sm">
+                  <div className="flex h-[44px] items-center gap-3 rounded-2xl border border-white/60 bg-white/90 px-4 shadow-sm">
+                    <span className="text-sm font-semibold text-brand-ink/60">
+                      Thinking through your schedule
+                    </span>
                     <div className="flex gap-1.5">
                       <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40"></div>
                       <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]"></div>
@@ -868,7 +983,7 @@ export function AssistantPage() {
               ) : null}
 
               {error ? (
-                <div className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/8 p-4 text-center text-sm leading-6 text-brand-coral">
+                <div className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-center text-sm leading-6 text-brand-coral">
                   {error}
                 </div>
               ) : null}
@@ -878,7 +993,7 @@ export function AssistantPage() {
           </div>
 
           {/* Chat Composer */}
-          <div className="shrink-0 bg-brand-background/90 backdrop-blur-md pt-4 pb-2 sm:pb-4 border-t border-brand-ink/5">
+          <div className="shrink-0 border-t border-brand-ink/5 bg-brand-mist/90 pb-2 pt-4 backdrop-blur-md sm:pb-4">
             {status === "signed_out" ? (
               <div className="text-center">
                 <p className="text-sm font-semibold text-brand-ink">
@@ -896,6 +1011,22 @@ export function AssistantPage() {
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="mx-auto max-w-3xl">
+                {hasMessages ? (
+                  <div className="-mx-4 mb-3 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:px-0">
+                    <div className="flex min-w-max gap-2 sm:min-w-0 sm:flex-wrap">
+                      {examplePrompts.map((example) => (
+                        <button
+                          key={example}
+                          className="whitespace-nowrap rounded-full border border-brand-ink/10 bg-white/80 px-3.5 py-2 text-xs font-semibold text-brand-ink/60 shadow-sm hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
+                          type="button"
+                          onClick={() => setPrompt(example)}
+                        >
+                          {example}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-col gap-3 rounded-[24px] border border-brand-ink/10 bg-white p-2 shadow-sm focus-within:border-brand-teal/30 sm:flex-row sm:items-end sm:rounded-full sm:p-2.5">
                   <div className="relative flex-1">
                     <textarea
@@ -903,7 +1034,7 @@ export function AssistantPage() {
                       className="min-h-[44px] w-full resize-none bg-transparent px-4 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/40 focus:outline-none sm:min-h-[48px] sm:text-base max-h-[160px] overflow-y-auto"
                       disabled={isBusy}
                       maxLength={2000}
-                      placeholder="Ask Schedule Builder to help plan..."
+                      placeholder="Ask me to plan your week..."
                       rows={1}
                       value={prompt}
                       onChange={(event) => setPrompt(event.target.value)}
@@ -931,4 +1062,3 @@ export function AssistantPage() {
     </div>
   );
 }
-

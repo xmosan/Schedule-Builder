@@ -93,6 +93,21 @@ export type AssistantApplyResponse = {
   results: AssistantApplyResult[];
 };
 
+const maxDefaultAssistantCards = 4;
+const maxDefaultWarningCards = 2;
+
+const greetingPattern = /^(hey|hello|hi|salam|assalamu alaikum|yo|sup|good morning|good afternoon|good evening)[\s!.?]*$/i;
+const planningIntentPattern =
+  /\b(plan|schedule|week|weekly|block|blocks|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time)\b/i;
+
+export function isGreetingPrompt(prompt: string) {
+  return greetingPattern.test(prompt.trim());
+}
+
+export function hasPlanningIntent(prompt: string) {
+  return planningIntentPattern.test(prompt.trim());
+}
+
 function isSuggestionType(
   value: unknown,
   allowedTypes: readonly AssistantSuggestionType[] = assistantSuggestionTypes,
@@ -113,6 +128,87 @@ function isWeekDay(value: unknown): value is WeekDay {
 
 function createSuggestionId(prefix: string, index: number) {
   return `${prefix}-${index + 1}`;
+}
+
+function getSuggestionPriority(suggestion: AssistantSuggestion) {
+  if (suggestion.type === "suggested_weekly_block") {
+    return 5;
+  }
+
+  if (suggestion.type === "suggested_next_action") {
+    return 4;
+  }
+
+  if (suggestion.type === "workload_warning") {
+    return 3;
+  }
+
+  if (suggestion.type === "missing_deadline_warning") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function getSuggestionDedupeKey(suggestion: AssistantSuggestion) {
+  const projectName = suggestion.projectName?.toLowerCase().trim() ?? "";
+  const titleRoot = suggestion.title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .slice(0, 5)
+    .join(" ");
+
+  return `${suggestion.type}:${projectName}:${suggestion.day ?? ""}:${titleRoot}`;
+}
+
+export function filterAssistantSuggestions(
+  suggestions: AssistantSuggestion[],
+  options: {
+    maxCards?: number;
+    maxWarnings?: number;
+  } = {},
+) {
+  const maxCards = options.maxCards ?? maxDefaultAssistantCards;
+  const maxWarnings = options.maxWarnings ?? maxDefaultWarningCards;
+  const seenKeys = new Set<string>();
+  let warningCount = 0;
+
+  return [...suggestions]
+    .sort((first, second) => {
+      const priorityDifference =
+        getSuggestionPriority(second) - getSuggestionPriority(first);
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+
+      return second.confidence - first.confidence;
+    })
+    .filter((suggestion) => {
+      const key = getSuggestionDedupeKey(suggestion);
+
+      if (seenKeys.has(key)) {
+        return false;
+      }
+
+      const isWarning =
+        suggestion.type === "workload_warning" ||
+        suggestion.type === "missing_deadline_warning" ||
+        suggestion.type === "unclear_project_warning";
+
+      if (isWarning) {
+        if (warningCount >= maxWarnings) {
+          return false;
+        }
+
+        warningCount += 1;
+      }
+
+      seenKeys.add(key);
+      return true;
+    })
+    .slice(0, maxCards);
 }
 
 function getLeastLoadedDay(
@@ -292,6 +388,57 @@ export function normalizeAssistantSuggestions(
     .slice(0, 8);
 }
 
+function createAssistantResponseFromSuggestions({
+  activeProjects,
+  context,
+  message,
+  source = "fallback",
+  suggestions,
+}: {
+  activeProjects: Project[];
+  context: AssistantPlanningContext;
+  message: string;
+  source?: AssistantSource;
+  suggestions: AssistantSuggestion[];
+}): AssistantPlanReviewResponse {
+  const filteredSuggestions = filterAssistantSuggestions(
+    suggestions.sort((first, second) => {
+      if (first.projectName && second.projectName) {
+        const firstProject = activeProjects.find(
+          (project) => project.name === first.projectName,
+        );
+        const secondProject = activeProjects.find(
+          (project) => project.name === second.projectName,
+        );
+
+        return (
+          (secondProject ? priorityScore[secondProject.priority] : 0) -
+          (firstProject ? priorityScore[firstProject.priority] : 0)
+        );
+      }
+
+      return 0;
+    }),
+  );
+
+  return {
+    actions: filteredSuggestions,
+    assistantMessage: message,
+    context: {
+      activeProjectsCount: context.activeProjectsCount,
+      plannedWeeklyHours: context.plannedWeeklyHours,
+      plannerType: context.plannerType,
+      totalWeeklyBlockHours: context.totalWeeklyBlockHours,
+      weeklyBlocksCount: context.weeklyBlocksCount,
+      workScheduleHours: context.workScheduleHours,
+      workShiftsCount: context.workShiftsCount,
+    },
+    message,
+    source,
+    suggestions: filteredSuggestions,
+  };
+}
+
 export function createContextOnlyAssistantResponse(
   context: AssistantPlanningContext,
 ): AssistantPlanReviewResponse {
@@ -320,6 +467,30 @@ export function createFallbackAssistantResponse(
   context: AssistantPlanningContext,
   prompt: string,
 ): AssistantPlanReviewResponse {
+  if (isGreetingPrompt(prompt)) {
+    const message =
+      "Hey — I can help you plan your week, balance your workload, or turn projects into schedule blocks. What would you like to work on?";
+
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message,
+      suggestions: [],
+    });
+  }
+
+  if (!hasPlanningIntent(prompt)) {
+    const message =
+      "I can help with that. If you want, tell me what you are trying to plan or what feels messy right now, and I’ll turn it into a few practical next steps.";
+
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message,
+      suggestions: [],
+    });
+  }
+
   const suggestions: AssistantSuggestion[] = [];
   const activeProjects = sortProjectsForFocus(context.projects);
   const existingBlockProjectNames = new Set(
@@ -328,7 +499,7 @@ export function createFallbackAssistantResponse(
   const highPriorityUnscheduledProjects = activeProjects
     .filter((project) => project.priority === "High")
     .filter((project) => !existingBlockProjectNames.has(project.name.toLowerCase()))
-    .slice(0, 3);
+    .slice(0, 2);
 
   highPriorityUnscheduledProjects.forEach((project, index) => {
     const day = getLeastLoadedDay([
@@ -372,7 +543,7 @@ export function createFallbackAssistantResponse(
 
   activeProjects
     .filter((project) => !project.deadline.trim())
-    .slice(0, 3)
+    .slice(0, 2)
     .forEach((project) => {
       suggestions.push({
         id: createSuggestionId("missing-deadline", suggestions.length),
@@ -392,7 +563,7 @@ export function createFallbackAssistantResponse(
 
   activeProjects
     .filter((project) => project.nextAction.trim().length < 8)
-    .slice(0, 3)
+    .slice(0, 1)
     .forEach((project) => {
       suggestions.push({
         id: createSuggestionId("next-action", suggestions.length),
@@ -464,7 +635,9 @@ export function createFallbackAssistantResponse(
     }
   });
 
-  if (suggestions.length === 0) {
+  const hasNoObviousFindings = suggestions.length === 0;
+
+  if (hasNoObviousFindings) {
     suggestions.push({
       id: "fallback-good-shape",
       type: "workload_warning",
@@ -476,87 +649,23 @@ export function createFallbackAssistantResponse(
         "I did not find obvious missing deadlines, overloaded days, or high-priority projects without weekly blocks.",
       rationale:
         prompt.trim().length > 0
-          ? "The rule-based fallback reviewed your current projects and weekly plan."
+          ? "I checked your current projects and weekly plan for obvious planning gaps."
           : "Ask for a specific planning review to get more targeted suggestions.",
       severity: "info",
     });
   }
 
   const assistantMessage =
-    suggestions.length > 0
-      ? "I found a few planning ideas. Review the actions below and apply only the ones you want."
-      : "Your plan looks workable from what I can see. You can ask me for a more specific review if you want.";
+    hasNoObviousFindings
+      ? "Your plan looks pretty workable from what I can see. If you want a sharper review, ask me to focus on deadlines, open time, or your Top 3."
+      : suggestions.length > 0
+      ? "Absolutely — I’d keep this focused. I picked the highest-impact next steps first so your plan stays realistic instead of crowded."
+      : "Tell me what feels most important, and I’ll help turn it into a simple plan.";
 
-  return {
-    actions: suggestions
-      .sort((first, second) => {
-        const severityScore: Record<AssistantSuggestionSeverity, number> = {
-          important: 3,
-          warning: 2,
-          info: 1,
-        };
-
-        if (severityScore[second.severity] !== severityScore[first.severity]) {
-          return severityScore[second.severity] - severityScore[first.severity];
-        }
-
-        if (first.projectName && second.projectName) {
-          const firstProject = activeProjects.find(
-            (project) => project.name === first.projectName,
-          );
-          const secondProject = activeProjects.find(
-            (project) => project.name === second.projectName,
-          );
-
-          return (
-            (secondProject ? priorityScore[secondProject.priority] : 0) -
-            (firstProject ? priorityScore[firstProject.priority] : 0)
-          );
-        }
-
-        return 0;
-      })
-      .slice(0, 8),
-    assistantMessage,
-    context: {
-      activeProjectsCount: context.activeProjectsCount,
-      plannedWeeklyHours: context.plannedWeeklyHours,
-      plannerType: context.plannerType,
-      totalWeeklyBlockHours: context.totalWeeklyBlockHours,
-      weeklyBlocksCount: context.weeklyBlocksCount,
-      workScheduleHours: context.workScheduleHours,
-      workShiftsCount: context.workShiftsCount,
-    },
+  return createAssistantResponseFromSuggestions({
+    activeProjects,
+    context,
     message: assistantMessage,
-    source: "fallback",
-    suggestions: suggestions
-      .sort((first, second) => {
-        const severityScore: Record<AssistantSuggestionSeverity, number> = {
-          important: 3,
-          warning: 2,
-          info: 1,
-        };
-
-        if (severityScore[second.severity] !== severityScore[first.severity]) {
-          return severityScore[second.severity] - severityScore[first.severity];
-        }
-
-        if (first.projectName && second.projectName) {
-          const firstProject = activeProjects.find(
-            (project) => project.name === first.projectName,
-          );
-          const secondProject = activeProjects.find(
-            (project) => project.name === second.projectName,
-          );
-
-          return (
-            (secondProject ? priorityScore[secondProject.priority] : 0) -
-            (firstProject ? priorityScore[firstProject.priority] : 0)
-          );
-        }
-
-        return 0;
-      })
-      .slice(0, 8),
-  };
+    suggestions,
+  });
 }
