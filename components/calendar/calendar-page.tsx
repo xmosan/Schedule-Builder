@@ -13,8 +13,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   buildCalendarDays,
+  buildCalendarMonth,
+  calendarWeekDays,
   getPlanBlockTimeLabel,
   type CalendarDaySchedule,
+  type CalendarMonthDaySchedule,
 } from "@/lib/calendar";
 import type { Project } from "@/lib/projects";
 import {
@@ -34,6 +37,7 @@ import {
 } from "@/lib/work-schedule";
 
 type CalendarStatus = "loading" | "ready" | "signed_out" | "error";
+type CalendarView = "week" | "month";
 
 type CalendarFilters = {
   deadlines: boolean;
@@ -70,6 +74,8 @@ const filterItems: Array<{
     label: "Flexible blocks",
   },
 ];
+
+const visibleMonthEventLimit = 3;
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -128,6 +134,65 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
     scheduledHours,
     workShifts,
   };
+}
+
+function getMonthEventRows(
+  day: CalendarMonthDaySchedule,
+  filters: CalendarFilters,
+) {
+  const visibleDay = getVisibleDayData(day, filters);
+  const rows: Array<{
+    detail: string;
+    id: string;
+    label: string;
+    tone: "work" | "plan" | "deadline" | "flexible";
+  }> = [
+    ...visibleDay.workShifts.map((shift) => ({
+      detail: formatWorkShiftRange(shift),
+      id: `work-${shift.id}`,
+      label: "Work shift",
+      tone: "work" as const,
+    })),
+    ...visibleDay.planBlocks.map((block) => ({
+      detail: block.startTime ? getPlanBlockTimeLabel(block) : "Flexible",
+      id: `plan-${block.id}`,
+      label: "Plan block",
+      tone: block.startTime ? ("plan" as const) : ("flexible" as const),
+    })),
+    ...visibleDay.deadlines.map((deadline) => ({
+      detail: deadline.projectName,
+      id: `deadline-${deadline.projectId}-${deadline.deadlineText}`,
+      label: "Deadline",
+      tone: "deadline" as const,
+    })),
+  ];
+
+  return {
+    rows,
+    visibleDay,
+  };
+}
+
+function getMonthEventToneClass(
+  tone: "work" | "plan" | "deadline" | "flexible",
+) {
+  if (tone === "work") {
+    return "border-brand-ocean/16 bg-brand-ocean/[0.075] text-brand-ocean";
+  }
+
+  if (tone === "deadline") {
+    return "border-brand-coral/16 bg-brand-coral/[0.08] text-brand-coral";
+  }
+
+  if (tone === "flexible") {
+    return "border-brand-teal/12 bg-brand-teal/[0.045] text-brand-teal/78";
+  }
+
+  return "border-brand-teal/14 bg-brand-teal/[0.075] text-brand-teal";
+}
+
+function addMonthsToDate(date: Date, amount: number) {
+  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
 }
 
 function WorkShiftEvent({ shift }: { shift: WorkShift }) {
@@ -197,6 +262,252 @@ function DeadlineEvent({
   );
 }
 
+function MonthEventChip({
+  detail,
+  label,
+  tone,
+}: {
+  detail: string;
+  label: string;
+  tone: "work" | "plan" | "deadline" | "flexible";
+}) {
+  return (
+    <div
+      className={`truncate rounded-xl border px-2 py-1 text-[11px] font-semibold ${getMonthEventToneClass(
+        tone,
+      )}`}
+    >
+      <span>{label}</span>
+      <span className="text-brand-ink/42"> • </span>
+      <span className="font-medium">{detail}</span>
+    </div>
+  );
+}
+
+function MonthEventDot({
+  tone,
+}: {
+  tone: "work" | "plan" | "deadline" | "flexible";
+}) {
+  const dotClass =
+    tone === "work"
+      ? "bg-brand-ocean"
+      : tone === "deadline"
+        ? "bg-brand-coral"
+        : tone === "flexible"
+          ? "bg-brand-teal/45"
+          : "bg-brand-teal";
+
+  return (
+    <span
+      aria-hidden="true"
+      className={`h-1.5 w-1.5 rounded-full ${dotClass}`}
+    />
+  );
+}
+
+function MonthDayDetail({
+  day,
+  filters,
+  status,
+}: {
+  day: CalendarMonthDaySchedule | null;
+  filters: CalendarFilters;
+  status: CalendarStatus;
+}) {
+  if (!day) {
+    return null;
+  }
+
+  const visibleDay = getVisibleDayData(day, filters);
+
+  return (
+    <Card className="rounded-[30px] border-white/70 bg-white/86">
+      <CardContent className="p-4 sm:p-6">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/42">
+              Selected day
+            </p>
+            <h3 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+              {day.day}, {day.dateLabel}
+            </h3>
+          </div>
+          <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
+            {formatHours(visibleDay.scheduledHours)}
+          </Badge>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {status === "loading" ? (
+            <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
+              Loading calendar...
+            </div>
+          ) : null}
+
+          {status !== "loading" && !visibleDay.hasEvents ? (
+            <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4">
+              <p className="text-sm font-semibold text-brand-ink/70">
+                Open day
+              </p>
+              <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                No work shifts, plan blocks, or deadlines yet.
+              </p>
+            </div>
+          ) : null}
+
+          {visibleDay.workShifts.map((shift) => (
+            <WorkShiftEvent key={shift.id} shift={shift} />
+          ))}
+
+          {visibleDay.planBlocks.map((block) => (
+            <PlanBlockEvent key={block.id} block={block} />
+          ))}
+
+          {visibleDay.deadlines.map((deadline) => (
+            <DeadlineEvent
+              key={`${deadline.projectId}-${deadline.deadlineText}`}
+              deadlineText={deadline.deadlineText}
+              projectName={deadline.projectName}
+            />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CalendarMonthView({
+  filters,
+  monthCalendar,
+  selectedMonthDay,
+  selectedMonthIso,
+  setSelectedMonthIso,
+  status,
+}: {
+  filters: CalendarFilters;
+  monthCalendar: ReturnType<typeof buildCalendarMonth>;
+  selectedMonthDay: CalendarMonthDaySchedule | null;
+  selectedMonthIso: string | null;
+  setSelectedMonthIso: (isoDate: string) => void;
+  status: CalendarStatus;
+}) {
+  return (
+    <section className="flex flex-col gap-4">
+      <Card className="overflow-hidden rounded-[32px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
+        <CardContent className="p-3 sm:p-5 lg:p-6">
+          <div className="mb-4 flex flex-col gap-2 px-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+                {monthCalendar.monthLabel}
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                Weekly plan blocks are shown on the current week. Work shifts
+                repeat on matching weekdays.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-7 gap-1 sm:gap-2">
+            {calendarWeekDays.map((day) => (
+              <div
+                key={day}
+                className="px-1 pb-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-brand-ink/38 sm:text-xs"
+              >
+                {day.slice(0, 3)}
+              </div>
+            ))}
+
+            {monthCalendar.days.map((day) => {
+              const { rows, visibleDay } = getMonthEventRows(day, filters);
+              const visibleRows = rows.slice(0, visibleMonthEventLimit);
+              const hiddenCount = Math.max(0, rows.length - visibleRows.length);
+              const isSelected =
+                day.isCurrentMonth &&
+                (selectedMonthIso === day.isoDate ||
+                  (!selectedMonthIso &&
+                    selectedMonthDay?.isoDate === day.isoDate));
+
+              return (
+                <button
+                  key={day.isoDate}
+                  aria-label={`${day.day}, ${day.dateLabel}`}
+                  className={`min-h-[78px] rounded-[20px] border p-2 text-left transition sm:min-h-[150px] sm:rounded-[24px] sm:p-3 ${
+                    day.isCurrentMonth
+                      ? "border-brand-ink/8 bg-white/82 hover:border-brand-teal/20 hover:bg-brand-teal/[0.035]"
+                      : "border-transparent bg-brand-ink/[0.025] text-brand-ink/26"
+                  } ${
+                    isSelected
+                      ? "border-brand-teal/30 bg-brand-teal/[0.055] shadow-[0_12px_28px_rgba(20,121,110,0.08)]"
+                      : ""
+                  }`}
+                  disabled={!day.isCurrentMonth}
+                  type="button"
+                  onClick={() => setSelectedMonthIso(day.isoDate)}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span
+                      className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold ${
+                        day.isToday
+                          ? "bg-brand-ink text-white"
+                          : day.isCurrentMonth
+                            ? "text-brand-ink/72"
+                            : "text-brand-ink/28"
+                      }`}
+                    >
+                      {day.dayNumber}
+                    </span>
+                    {visibleDay.scheduledHours > 0 && day.isCurrentMonth ? (
+                      <span className="hidden rounded-full bg-brand-ink/[0.045] px-2 py-1 text-[10px] font-semibold text-brand-ink/46 sm:inline-flex">
+                        {formatHours(visibleDay.scheduledHours)}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-3 hidden flex-col gap-1.5 sm:flex">
+                    {visibleRows.map((row) => (
+                      <MonthEventChip
+                        key={row.id}
+                        detail={row.detail}
+                        label={row.label}
+                        tone={row.tone}
+                      />
+                    ))}
+                    {hiddenCount > 0 ? (
+                      <span className="rounded-xl bg-brand-ink/[0.045] px-2 py-1 text-[11px] font-semibold text-brand-ink/48">
+                        +{hiddenCount} more
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {day.isCurrentMonth && rows.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-1 sm:hidden">
+                      {visibleRows.map((row) => (
+                        <MonthEventDot key={row.id} tone={row.tone} />
+                      ))}
+                      {hiddenCount > 0 ? (
+                        <span className="text-[10px] font-semibold text-brand-ink/42">
+                          +{hiddenCount}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <MonthDayDetail
+        day={selectedMonthDay}
+        filters={filters}
+        status={status}
+      />
+    </section>
+  );
+}
+
 export function CalendarPage() {
   const [status, setStatus] = useState<CalendarStatus>(
     isSupabaseConfigured() ? "loading" : "signed_out",
@@ -205,6 +516,9 @@ export function CalendarPage() {
   const [planBlocks, setPlanBlocks] = useState<WeeklyPlanBlock[]>([]);
   const [workShifts, setWorkShifts] = useState<WorkShift[]>([]);
   const [filters, setFilters] = useState<CalendarFilters>(defaultFilters);
+  const [view, setView] = useState<CalendarView>("week");
+  const [monthDate, setMonthDate] = useState(() => new Date());
+  const [selectedMonthIso, setSelectedMonthIso] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -260,11 +574,7 @@ export function CalendarPage() {
           workResult.error,
         ].filter(Boolean);
 
-        setError(
-          errors.length > 0
-            ? getMissingTableMessage(errors[0])
-            : null,
-        );
+        setError(errors.length > 0 ? getMissingTableMessage(errors[0]) : null);
       } catch (loadError) {
         if (!isActive) {
           return;
@@ -292,7 +602,18 @@ export function CalendarPage() {
     [planBlocks, projects, workShifts],
   );
 
-  const summary = useMemo(() => {
+  const monthCalendar = useMemo(
+    () =>
+      buildCalendarMonth({
+        monthDate,
+        planBlocks,
+        projects,
+        workShifts,
+      }),
+    [monthDate, planBlocks, projects, workShifts],
+  );
+
+  const weekSummary = useMemo(() => {
     const workHours = workShifts.reduce(
       (sum, shift) => sum + getWorkShiftDurationHours(shift),
       0,
@@ -317,11 +638,96 @@ export function CalendarPage() {
     };
   }, [calendar.days, planBlocks, workShifts]);
 
+  const monthSummary = useMemo(() => {
+    const currentMonthDays = monthCalendar.days.filter(
+      (day) => day.isCurrentMonth,
+    );
+    const visibleDays = currentMonthDays.map((day) =>
+      getVisibleDayData(day, filters),
+    );
+    const workShiftDays = visibleDays.filter(
+      (day) => day.workShifts.length > 0,
+    ).length;
+    const plannedBlocks = visibleDays.reduce(
+      (sum, day) => sum + day.planBlocks.length,
+      0,
+    );
+    const deadlines = visibleDays.reduce(
+      (sum, day) => sum + day.deadlines.length,
+      0,
+    );
+    const openDays = visibleDays.filter((day) => !day.hasEvents).length;
+
+    return {
+      deadlines,
+      openDays,
+      plannedBlocks,
+      workShiftDays,
+    };
+  }, [filters, monthCalendar.days]);
+
+  const summaryCards =
+    view === "week"
+      ? [
+          {
+            label: "Work hours",
+            value: formatHours(weekSummary.workHours),
+          },
+          {
+            label: "Project hours",
+            value: formatEstimatedHours(weekSummary.plannedProjectHours),
+          },
+          {
+            label: "Days committed",
+            value: weekSummary.daysWithCommitments,
+          },
+          {
+            label: "Open days",
+            value: weekSummary.openDays,
+          },
+        ]
+      : [
+          {
+            label: "Work shift days",
+            value: monthSummary.workShiftDays,
+          },
+          {
+            label: "Plan blocks",
+            value: monthSummary.plannedBlocks,
+          },
+          {
+            label: "Deadlines",
+            value: monthSummary.deadlines,
+          },
+          {
+            label: "Open days",
+            value: monthSummary.openDays,
+          },
+        ];
+
+  const selectedMonthDay =
+    monthCalendar.days.find(
+      (day) => day.isCurrentMonth && day.isoDate === selectedMonthIso,
+    ) ??
+    monthCalendar.days.find((day) => day.isCurrentMonth && day.isToday) ??
+    monthCalendar.days.find((day) => day.isCurrentMonth) ??
+    null;
+
   function toggleFilter(key: keyof CalendarFilters) {
     setFilters((current) => ({
       ...current,
       [key]: !current[key],
     }));
+  }
+
+  function changeMonth(amount: number) {
+    setMonthDate((current) => addMonthsToDate(current, amount));
+    setSelectedMonthIso(null);
+  }
+
+  function returnToCurrentMonth() {
+    setMonthDate(new Date());
+    setSelectedMonthIso(null);
   }
 
   return (
@@ -341,47 +747,73 @@ export function CalendarPage() {
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
                 See work shifts, planned blocks, and project deadlines in one
-                weekly view.
+                calendar view.
               </p>
-              <p className="mt-3 inline-flex rounded-full border border-brand-ink/8 bg-white/72 px-4 py-2 text-sm font-semibold text-brand-ink/62">
-                {calendar.weekRangeLabel}
-              </p>
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                <div className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/78 p-1 shadow-[0_12px_28px_rgba(18,32,47,0.06)]">
+                  {(["week", "month"] as const).map((nextView) => (
+                    <button
+                      key={nextView}
+                      aria-pressed={view === nextView}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                        view === nextView
+                          ? "bg-brand-ink text-white shadow-[0_10px_24px_rgba(18,32,47,0.16)]"
+                          : "text-brand-ink/58 hover:bg-brand-ink/5 hover:text-brand-ink"
+                      }`}
+                      type="button"
+                      onClick={() => setView(nextView)}
+                    >
+                      {nextView === "week" ? "Week" : "Month"}
+                    </button>
+                  ))}
+                </div>
+
+                <p className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/72 px-4 py-2 text-sm font-semibold text-brand-ink/62">
+                  {view === "week"
+                    ? calendar.weekRangeLabel
+                    : monthCalendar.monthLabel}
+                </p>
+
+                {view === "month" ? (
+                  <div className="inline-flex w-fit flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-brand-ink/10 bg-white/76 px-3 py-2 text-sm font-semibold text-brand-ink/62 hover:bg-white hover:text-brand-ink"
+                      type="button"
+                      onClick={() => changeMonth(-1)}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      className="rounded-full border border-brand-teal/15 bg-brand-teal/8 px-3 py-2 text-sm font-semibold text-brand-teal hover:bg-brand-teal/12"
+                      type="button"
+                      onClick={returnToCurrentMonth}
+                    >
+                      This month
+                    </button>
+                    <button
+                      className="rounded-full border border-brand-ink/10 bg-white/76 px-3 py-2 text-sm font-semibold text-brand-ink/62 hover:bg-white hover:text-brand-ink"
+                      type="button"
+                      onClick={() => changeMonth(1)}
+                    >
+                      Next
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <Card className="rounded-[26px] border-white/70 bg-white/88">
               <CardContent className="grid grid-cols-2 gap-3 p-4 sm:p-5">
-                <div className="rounded-[22px] bg-white/70 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
-                    Work hours
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
-                    {formatHours(summary.workHours)}
-                  </p>
-                </div>
-                <div className="rounded-[22px] bg-white/70 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
-                    Project hours
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
-                    {formatEstimatedHours(summary.plannedProjectHours)}
-                  </p>
-                </div>
-                <div className="rounded-[22px] bg-white/70 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
-                    Days committed
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
-                    {summary.daysWithCommitments}
-                  </p>
-                </div>
-                <div className="rounded-[22px] bg-white/70 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
-                    Open days
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
-                    {summary.openDays}
-                  </p>
-                </div>
+                {summaryCards.map((card) => (
+                  <div key={card.label} className="rounded-[22px] bg-white/70 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+                      {card.label}
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
+                      {card.value}
+                    </p>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </div>
@@ -480,91 +912,108 @@ export function CalendarPage() {
               </Card>
             </section>
 
-            <section className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
-              {calendar.days.map((day) => {
-                const visibleDay = getVisibleDayData(day, filters);
+            {view === "week" ? (
+              <section className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
+                {calendar.days.map((day) => {
+                  const visibleDay = getVisibleDayData(day, filters);
 
-                return (
-                  <Card
-                    key={day.day}
-                    className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)] sm:rounded-[34px]"
-                  >
-                    <CardContent className="flex h-full flex-col p-4 sm:p-5 lg:p-6">
-                      <div className="mb-4 flex flex-col gap-3 border-b border-brand-ink/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-                            {day.day}
-                          </h2>
-                          <p className="mt-1 text-sm font-medium text-brand-ink/50">
-                            {day.dateLabel}
-                          </p>
+                  return (
+                    <Card
+                      key={day.day}
+                      className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)] sm:rounded-[34px]"
+                    >
+                      <CardContent className="flex h-full flex-col p-4 sm:p-5 lg:p-6">
+                        <div className="mb-4 flex flex-col gap-3 border-b border-brand-ink/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+                              {day.day}
+                            </h2>
+                            <p className="mt-1 text-sm font-medium text-brand-ink/50">
+                              {day.dateLabel}
+                            </p>
+                          </div>
+                          <Badge
+                            className="bg-brand-teal/8 text-brand-teal"
+                            variant="subtle"
+                          >
+                            {formatHours(visibleDay.scheduledHours)}
+                          </Badge>
                         </div>
-                        <Badge
-                          className="bg-brand-teal/8 text-brand-teal"
-                          variant="subtle"
-                        >
-                          {formatHours(visibleDay.scheduledHours)}
-                        </Badge>
-                      </div>
 
-                      <div className="flex flex-1 flex-col gap-3">
-                        {status === "loading" ? (
-                          <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
-                            Loading calendar...
-                          </div>
-                        ) : null}
+                        <div className="flex flex-1 flex-col gap-3">
+                          {status === "loading" ? (
+                            <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
+                              Loading calendar...
+                            </div>
+                          ) : null}
 
-                        {status !== "loading" && !visibleDay.hasEvents ? (
-                          <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4">
-                            <p className="text-sm font-semibold text-brand-ink/70">
-                              Open day
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                              No work shifts, plan blocks, or deadlines yet.
-                            </p>
-                          </div>
-                        ) : null}
+                          {status !== "loading" && !visibleDay.hasEvents ? (
+                            <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4">
+                              <p className="text-sm font-semibold text-brand-ink/70">
+                                Open day
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                                No work shifts, plan blocks, or deadlines yet.
+                              </p>
+                            </div>
+                          ) : null}
 
-                        {visibleDay.workShifts.map((shift) => (
-                          <WorkShiftEvent key={shift.id} shift={shift} />
-                        ))}
+                          {visibleDay.workShifts.map((shift) => (
+                            <WorkShiftEvent key={shift.id} shift={shift} />
+                          ))}
 
-                        {visibleDay.planBlocks.map((block) => (
-                          <PlanBlockEvent key={block.id} block={block} />
-                        ))}
+                          {visibleDay.planBlocks.map((block) => (
+                            <PlanBlockEvent key={block.id} block={block} />
+                          ))}
 
-                        {visibleDay.deadlines.map((deadline) => (
-                          <DeadlineEvent
-                            key={`${deadline.projectId}-${deadline.deadlineText}`}
-                            deadlineText={deadline.deadlineText}
-                            projectName={deadline.projectName}
-                          />
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </section>
+                          {visibleDay.deadlines.map((deadline) => (
+                            <DeadlineEvent
+                              key={`${deadline.projectId}-${deadline.deadlineText}`}
+                              deadlineText={deadline.deadlineText}
+                              projectName={deadline.projectName}
+                            />
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </section>
+            ) : (
+              <CalendarMonthView
+                filters={filters}
+                monthCalendar={monthCalendar}
+                selectedMonthDay={selectedMonthDay}
+                selectedMonthIso={selectedMonthIso}
+                setSelectedMonthIso={setSelectedMonthIso}
+                status={status}
+              />
+            )}
 
-            {filters.deadlines && calendar.upcomingDeadlines.length > 0 ? (
+            {filters.deadlines &&
+            (view === "week"
+              ? calendar.upcomingDeadlines.length
+              : monthCalendar.upcomingDeadlines.length) > 0 ? (
               <Card className="rounded-[30px] border-white/70 bg-white/86">
                 <CardContent className="p-4 sm:p-6">
                   <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
                     Upcoming deadline notes
                   </h2>
                   <p className="mt-2 text-sm leading-6 text-brand-ink/58">
-                    These deadline labels are useful, but not specific enough to
-                    place on a calendar day yet.
+                    These deadline labels are useful, but not specific enough
+                    to place on this {view === "week" ? "week" : "month"} yet.
                   </p>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    {calendar.upcomingDeadlines.map((deadline) => (
-                      <DeadlineEvent
-                        key={`${deadline.projectId}-${deadline.deadlineText}`}
-                        deadlineText={deadline.deadlineText}
-                        projectName={deadline.projectName}
-                      />
-                    ))}
+                    {(view === "week"
+                      ? calendar.upcomingDeadlines
+                      : monthCalendar.upcomingDeadlines
+                    ).map((deadline) => (
+                        <DeadlineEvent
+                          key={`${deadline.projectId}-${deadline.deadlineText}`}
+                          deadlineText={deadline.deadlineText}
+                          projectName={deadline.projectName}
+                        />
+                      ))}
                   </div>
                 </CardContent>
               </Card>

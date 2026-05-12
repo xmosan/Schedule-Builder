@@ -24,12 +24,32 @@ export type CalendarDaySchedule = {
   workShifts: WorkShift[];
 };
 
+export type CalendarMonthDaySchedule = CalendarDaySchedule & {
+  dayNumber: number;
+  isCurrentMonth: boolean;
+  isToday: boolean;
+};
+
 type BuildCalendarDaysOptions = {
   planBlocks: WeeklyPlanBlock[];
   projects: Project[];
   weekStart?: Date;
   workShifts: WorkShift[];
 };
+
+type BuildCalendarMonthOptions = BuildCalendarDaysOptions & {
+  monthDate?: Date;
+};
+
+export const calendarWeekDays = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const satisfies readonly WeekDay[];
 
 const jsDayToWeekDay: Record<number, WeekDay> = {
   0: "Sunday",
@@ -88,6 +108,13 @@ function toIsoDate(date: Date) {
 function isSameWeekDate(date: Date, weekDates: CalendarDaySchedule[]) {
   const isoDate = toIsoDate(date);
   return weekDates.some((weekDate) => weekDate.isoDate === isoDate);
+}
+
+function isSameMonthDate(date: Date, monthDate: Date) {
+  return (
+    date.getFullYear() === monthDate.getFullYear() &&
+    date.getMonth() === monthDate.getMonth()
+  );
 }
 
 function formatDateLabel(date: Date) {
@@ -197,6 +224,10 @@ function parseDeadlineDate(value: string, weekStart: Date) {
   );
 }
 
+function getExactDeadlineDate(value: string, referenceDate: Date) {
+  return parseDeadlineDate(value, referenceDate);
+}
+
 function getDeadlineWeekDay(value: string, weekDates: CalendarDaySchedule[]) {
   const normalizedValue = value.trim().toLowerCase();
   const matchedDay = weekDays.find((day) =>
@@ -235,7 +266,14 @@ export function getCurrentWeekStart(referenceDate = new Date()) {
   return addDays(localDate, mondayOffset);
 }
 
-export function getWeekDates(weekStart = getCurrentWeekStart()) {
+export function getCurrentMonthStart(referenceDate = new Date()) {
+  const localDate = toLocalDate(referenceDate);
+  return new Date(localDate.getFullYear(), localDate.getMonth(), 1);
+}
+
+export function getWeekDates(
+  weekStart = getCurrentWeekStart(),
+): CalendarDaySchedule[] {
   return weekDays.map((day, index) => {
     const date = addDays(weekStart, index);
 
@@ -248,6 +286,38 @@ export function getWeekDates(weekStart = getCurrentWeekStart()) {
       planBlocks: [],
       workShifts: [],
     } satisfies CalendarDaySchedule;
+  });
+}
+
+export function getMonthLabel(monthDate = getCurrentMonthStart()) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+  }).format(monthDate);
+}
+
+export function getMonthDates(
+  monthDate = getCurrentMonthStart(),
+): CalendarMonthDaySchedule[] {
+  const monthStart = getCurrentMonthStart(monthDate);
+  const gridStart = addDays(monthStart, -monthStart.getDay());
+  const todayIsoDate = toIsoDate(new Date());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = addDays(gridStart, index);
+
+    return {
+      date,
+      dateLabel: formatDateLabel(date),
+      day: getWeekDayFromDate(date),
+      dayNumber: date.getDate(),
+      deadlines: [],
+      isCurrentMonth: isSameMonthDate(date, monthStart),
+      isToday: toIsoDate(date) === todayIsoDate,
+      isoDate: toIsoDate(date),
+      planBlocks: [],
+      workShifts: [],
+    } satisfies CalendarMonthDaySchedule;
   });
 }
 
@@ -327,6 +397,92 @@ export function buildCalendarDays({
     days,
     upcomingDeadlines,
     weekRangeLabel: getWeekRangeLabel(weekDates),
+  };
+}
+
+export function buildCalendarMonth({
+  monthDate = getCurrentMonthStart(),
+  planBlocks,
+  projects,
+  weekStart = getCurrentWeekStart(),
+  workShifts,
+}: BuildCalendarMonthOptions) {
+  const monthStart = getCurrentMonthStart(monthDate);
+  const monthDates = getMonthDates(monthStart);
+  const currentWeekDates = getWeekDates(weekStart);
+  const currentWeekDatesByIso = new Map(
+    currentWeekDates.map((weekDate) => [weekDate.isoDate, weekDate]),
+  );
+  const upcomingDeadlines: CalendarDeadline[] = [];
+
+  const days = monthDates.map((monthDay) => {
+    if (!monthDay.isCurrentMonth) {
+      return monthDay;
+    }
+
+    const weekDate = currentWeekDatesByIso.get(monthDay.isoDate);
+    const dayPlanBlocks = weekDate
+      ? planBlocks
+          .filter((block) => block.day === weekDate.day)
+          .sort((first, second) => {
+            const firstStart = parseStartTimeToMinutes(first.startTime);
+            const secondStart = parseStartTimeToMinutes(second.startTime);
+
+            if (firstStart !== null && secondStart !== null) {
+              return firstStart - secondStart;
+            }
+
+            if (firstStart !== null) {
+              return -1;
+            }
+
+            if (secondStart !== null) {
+              return 1;
+            }
+
+            return first.projectName.localeCompare(second.projectName);
+          })
+      : [];
+
+    const dayWorkShifts = workShifts
+      .filter((shift) => shift.day === monthDay.day)
+      .sort((first, second) => first.startTime.localeCompare(second.startTime));
+
+    return {
+      ...monthDay,
+      planBlocks: dayPlanBlocks,
+      workShifts: dayWorkShifts,
+    };
+  });
+
+  projects
+    .filter((project) => !project.completed && !isIgnorableDeadline(project.deadline))
+    .forEach((project) => {
+      const deadline: CalendarDeadline = {
+        deadlineText: project.deadline,
+        projectId: project.id,
+        projectName: project.name,
+      };
+      const deadlineDate = getExactDeadlineDate(project.deadline, monthStart);
+
+      if (deadlineDate && isSameMonthDate(deadlineDate, monthStart)) {
+        const matchedDay = days.find(
+          (day) => day.isoDate === toIsoDate(deadlineDate),
+        );
+
+        if (matchedDay) {
+          matchedDay.deadlines.push(deadline);
+          return;
+        }
+      }
+
+      upcomingDeadlines.push(deadline);
+    });
+
+  return {
+    days,
+    monthLabel: getMonthLabel(monthStart),
+    upcomingDeadlines,
   };
 }
 
