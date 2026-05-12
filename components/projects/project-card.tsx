@@ -389,10 +389,6 @@ export function ProjectCard({
               <p className="text-sm font-semibold text-brand-ink">
                 More options
               </p>
-              <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                Delete is tucked away here so it takes an intentional extra
-                step. Archive can be added later.
-              </p>
               <Button
                 className="mt-3 text-brand-coral transition hover:text-brand-coral active:scale-[0.98]"
                 disabled={isExiting}
