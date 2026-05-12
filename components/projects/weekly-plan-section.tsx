@@ -21,6 +21,8 @@ import type { Project } from "@/lib/projects";
 import {
   createWeeklyPlanBlock,
   formatEstimatedHours,
+  formatStartTime,
+  parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
   type WeeklyPlanBlock,
@@ -38,6 +40,7 @@ type WeeklyPlanDraftState = {
   projectId: string;
   plannedTask: string;
   estimatedHours: string;
+  startTime: string;
 };
 
 const weeklyBlockRemovalAnimationMs = 300;
@@ -50,6 +53,7 @@ function getInitialDraft(projects: Project[]): WeeklyPlanDraftState {
     projectId: firstProject ? String(firstProject.id) : "",
     plannedTask: firstProject?.nextAction ?? "",
     estimatedHours: "1",
+    startTime: "",
   };
 }
 
@@ -95,6 +99,7 @@ export function WeeklyPlanSection({
   const [draft, setDraft] = useState<WeeklyPlanDraftState>(() =>
     getInitialDraft(projects),
   );
+  const [isAddFormOpen, setIsAddFormOpen] = useState(false);
   const [duplicateWarningKey, setDuplicateWarningKey] = useState<string | null>(
     null,
   );
@@ -192,7 +197,29 @@ export function WeeklyPlanSection({
 
   const blocksByDay = useMemo(() => {
     return weekDays.reduce<Record<WeekDay, WeeklyPlanBlock[]>>((acc, day) => {
-      acc[day] = planBlocks.filter((block) => block.day === day);
+      acc[day] = planBlocks
+        .map((block, index) => ({
+          block,
+          index,
+          startMinutes: parseStartTimeToMinutes(block.startTime),
+        }))
+        .filter(({ block }) => block.day === day)
+        .sort((first, second) => {
+          if (first.startMinutes !== null && second.startMinutes !== null) {
+            return first.startMinutes - second.startMinutes || first.index - second.index;
+          }
+
+          if (first.startMinutes !== null) {
+            return -1;
+          }
+
+          if (second.startMinutes !== null) {
+            return 1;
+          }
+
+          return first.index - second.index;
+        })
+        .map(({ block }) => block);
       return acc;
     }, {} as Record<WeekDay, WeeklyPlanBlock[]>);
   }, [planBlocks]);
@@ -216,10 +243,13 @@ export function WeeklyPlanSection({
       hasDuplicateDraft &&
       duplicateWarningKey === draftDuplicateKey,
   );
+  const hasValidDraftStartTime =
+    !draft.startTime.trim() || parseStartTimeToMinutes(draft.startTime) !== null;
   const canAddBlock =
     draft.projectId.length > 0 &&
     draft.plannedTask.trim().length > 0 &&
-    Number(draft.estimatedHours) > 0;
+    Number(draft.estimatedHours) > 0 &&
+    hasValidDraftStartTime;
 
   function clearDraftWarnings() {
     setDuplicateWarningKey(null);
@@ -251,11 +281,17 @@ export function WeeklyPlanSection({
       return;
     }
 
+    if (!hasValidDraftStartTime) {
+      setError("Choose a valid start time or leave the start time blank.");
+      return;
+    }
+
     const planBlock = createWeeklyPlanBlock({
       day: draft.day,
       projectName: selectedProject.name,
       plannedTask: draft.plannedTask,
       estimatedHours: draft.estimatedHours,
+      startTime: draft.startTime,
     });
 
     if (!planBlock) {
@@ -281,7 +317,9 @@ export function WeeklyPlanSection({
       ...current,
       plannedTask: selectedProject.nextAction,
       estimatedHours: "1",
+      startTime: "",
     }));
+    setIsAddFormOpen(false);
     setDuplicateWarningKey(null);
     setError(null);
   }
@@ -367,8 +405,7 @@ export function WeeklyPlanSection({
   }
 
   return (
-    <section className="grid items-start gap-5 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="min-w-0 space-y-5 sm:space-y-6">
+    <section className="space-y-5 sm:space-y-6">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <div className="metric-card">
             <p className="text-sm text-brand-ink/55">Planned hours</p>
@@ -398,22 +435,38 @@ export function WeeklyPlanSection({
 
         <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
           <CardContent className="p-4 sm:p-6">
-            <div className="flex items-start gap-3">
-              <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
-                <PlusIcon className="h-5 w-5" />
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
+                  <PlusIcon className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                    Plan a work block
+                  </h2>
+                  <p className="text-sm leading-6 text-brand-ink/60">
+                    Choose a day, project, task, start time, and realistic time
+                    estimate.
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
-                  Plan a work block
-                </h2>
-                <p className="text-sm leading-6 text-brand-ink/60">
-                  Choose a day, project, task, and realistic time estimate.
-                </p>
-              </div>
+              <Button
+                aria-expanded={isAddFormOpen}
+                className="w-full sm:hidden"
+                size="sm"
+                type="button"
+                variant="outline"
+                onClick={() => setIsAddFormOpen((current) => !current)}
+              >
+                <PlusIcon className="h-4 w-4" />
+                {isAddFormOpen ? "Close form" : "Add work block"}
+              </Button>
             </div>
 
             <form
-              className="mt-5 grid gap-4 lg:grid-cols-[160px_minmax(0,1fr)]"
+              className={`mt-5 gap-4 lg:grid-cols-[160px_minmax(0,1fr)_170px] ${
+                isAddFormOpen ? "grid" : "hidden sm:grid"
+              }`}
               onSubmit={handleSubmit}
             >
               <div>
@@ -462,6 +515,25 @@ export function WeeklyPlanSection({
                 </Select>
               </div>
 
+              <div>
+                <label className="field-label" htmlFor="plan-start-time">
+                  Start time
+                  <span className="font-normal text-brand-ink/45"> optional</span>
+                </label>
+                <Input
+                  id="plan-start-time"
+                  type="time"
+                  value={draft.startTime}
+                  onChange={(event) => {
+                    setDraft((current) => ({
+                      ...current,
+                      startTime: event.target.value,
+                    }));
+                    clearDraftWarnings();
+                  }}
+                />
+              </div>
+
               <div className="lg:col-span-2">
                 <label className="field-label" htmlFor="plan-task">
                   Planned task
@@ -502,7 +574,7 @@ export function WeeklyPlanSection({
                 />
               </div>
 
-              <div className="flex items-end">
+              <div className="flex items-end lg:col-span-3">
                 <Button className="w-full" type="submit" disabled={!canAddBlock}>
                   <PlusIcon className="h-4 w-4" />
                   {isConfirmingDuplicate
@@ -512,13 +584,13 @@ export function WeeklyPlanSection({
               </div>
 
               {projectFocusMessage ? (
-                <p className="rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal lg:col-span-2">
+                <p className="rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal lg:col-span-3">
                   {projectFocusMessage}
                 </p>
               ) : null}
 
               {error ? (
-                <p className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral lg:col-span-2">
+                <p className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral lg:col-span-3">
                   {error}
                 </p>
               ) : null}
@@ -526,7 +598,7 @@ export function WeeklyPlanSection({
           </CardContent>
         </Card>
 
-        <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
           {weekDays.map((day) => {
             const dayBlocks = blocksByDay[day];
             const dayHours = dayBlocks.reduce(
@@ -537,19 +609,19 @@ export function WeeklyPlanSection({
             return (
               <Card
                 key={day}
-                className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]"
+                className="overflow-hidden rounded-[30px] border-white/70 bg-white/86 shadow-[0_18px_45px_rgba(18,32,47,0.07)] sm:rounded-[34px]"
               >
                 <CardContent className="p-4 sm:p-5">
-                  <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="mb-4 flex items-start justify-between gap-3 border-b border-brand-ink/8 pb-4">
                     <div>
-                      <h3 className="text-lg font-semibold text-brand-ink">
+                      <h3 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink">
                         {day}
                       </h3>
-                      <p className="text-sm leading-6 text-brand-ink/55">
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/55">
                         {dayBlocks.length} block{dayBlocks.length === 1 ? "" : "s"}
                       </p>
                     </div>
-                    <Badge variant="subtle">
+                    <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
                       {formatEstimatedHours(dayHours)}
                     </Badge>
                   </div>
@@ -565,21 +637,33 @@ export function WeeklyPlanSection({
                           }
                         >
                           <div
-                            className="weekly-block-inner animate-weekly-block rounded-[22px] border border-brand-ink/8 bg-white/78 p-4"
+                            className="weekly-block-inner animate-weekly-block rounded-[24px] border border-brand-ink/8 bg-gradient-to-br from-white via-white to-brand-mist/55 p-4 shadow-[0_12px_28px_rgba(18,32,47,0.055)]"
                             style={{ animationDelay: `${index * 45}ms` }}
                           >
-                            <div className="flex items-start gap-3">
-                              <div className="rounded-2xl bg-brand-ink/5 p-2 text-brand-ink/60">
-                                <TargetIcon className="h-4 w-4" />
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex min-w-0 items-start gap-3">
+                                <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
+                                  <TargetIcon className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-brand-ink">
+                                    {block.projectName}
+                                  </p>
+                                  <p className="mt-1 text-sm leading-6 text-brand-ink/68">
+                                    {block.plannedTask}
+                                  </p>
+                                </div>
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm font-semibold text-brand-ink">
-                                  {block.projectName}
-                                </p>
-                                <p className="mt-1 text-sm leading-6 text-brand-ink/66">
-                                  {block.plannedTask}
-                                </p>
-                              </div>
+                              <Button
+                                aria-label={`Remove ${block.projectName} from ${day}`}
+                                className="h-9 shrink-0 px-3 text-xs text-brand-ink/50 hover:bg-brand-coral/10 hover:text-brand-coral"
+                                disabled={Boolean(exitingBlockIds[block.id])}
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => removeBlockWithAnimation(block.id)}
+                              >
+                                {exitingBlockIds[block.id] ? "..." : "Remove"}
+                              </Button>
                             </div>
 
                             {removeErrors[block.id] ? (
@@ -588,31 +672,29 @@ export function WeeklyPlanSection({
                               </p>
                             ) : null}
 
-                            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                              <span className="inline-flex items-center gap-2 rounded-full bg-brand-ink/[0.035] px-3 py-1.5 text-sm font-semibold text-brand-ink/58">
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <span className="inline-flex items-center gap-2 rounded-full bg-brand-teal/[0.075] px-3 py-1.5 text-xs font-semibold text-brand-teal">
+                                <ClockIcon className="h-4 w-4" />
+                                {formatStartTime(block.startTime)}
+                              </span>
+                              <span className="inline-flex items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58">
                                 <ClockIcon className="h-4 w-4" />
                                 {formatEstimatedHours(block.estimatedHours)}
                               </span>
-                              <Button
-                                className="w-full text-brand-ink/62 hover:text-brand-ink sm:w-auto"
-                                disabled={Boolean(exitingBlockIds[block.id])}
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => removeBlockWithAnimation(block.id)}
-                              >
-                                {exitingBlockIds[block.id]
-                                  ? "Removing..."
-                                  : "Remove"}
-                              </Button>
                             </div>
                           </div>
                         </div>
                       ))
                     ) : (
-                      <p className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/55 p-4 text-sm leading-6 text-brand-ink/55">
-                        No planned work blocks yet. Add one when this day needs
-                        dedicated focus.
-                      </p>
+                      <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/55 p-4">
+                        <p className="text-sm font-semibold text-brand-ink/70">
+                          Open day
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                          Add a focused block when this day needs dedicated
+                          planning time.
+                        </p>
+                      </div>
                     )}
                   </div>
                 </CardContent>
@@ -620,9 +702,7 @@ export function WeeklyPlanSection({
             );
           })}
         </div>
-      </div>
 
-      <aside className="min-w-0 xl:sticky xl:top-6">
         <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
           <CardContent className="p-4 sm:p-6">
             <div className="flex items-start gap-3">
@@ -655,9 +735,9 @@ export function WeeklyPlanSection({
                 }}
               />
               <p className="mt-2 text-sm leading-6 text-brand-ink/55">
-                Choose the Monday for this weekly plan. Until start times are
-                added, exported blocks begin at 9:00 AM in each day&apos;s
-                order.
+                Choose the Monday for this weekly plan. Blocks with start times
+                export at their scheduled time. Blocks without start times use
+                the default 9:00 AM order.
               </p>
             </div>
 
@@ -682,7 +762,6 @@ export function WeeklyPlanSection({
             </Button>
           </CardContent>
         </Card>
-      </aside>
     </section>
   );
 }

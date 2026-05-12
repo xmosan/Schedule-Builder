@@ -1114,11 +1114,7 @@ export function ProjectDashboard() {
           <>
             <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
               <div className="max-w-3xl">
-                <div className="eyebrow-chip">
-                  <CalendarIcon className="h-4 w-4" />
-                  Planning Board
-                </div>
-                <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
+                <h1 className="text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
                   Weekly Plan
                 </h1>
                 <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">

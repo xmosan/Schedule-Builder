@@ -34,10 +34,14 @@ create table if not exists public.weekly_plan_blocks (
   project_name text not null,
   planned_task text not null,
   estimated_hours double precision not null check (estimated_hours > 0),
+  start_time time null,
   inserted_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now()),
   primary key (user_id, block_id)
 );
+
+alter table public.weekly_plan_blocks
+add column if not exists start_time time null;
 
 create table if not exists public.planner_profiles (
   user_id uuid primary key references auth.users (id) on delete cascade,

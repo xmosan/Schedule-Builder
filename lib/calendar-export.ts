@@ -1,5 +1,7 @@
 import {
   formatEstimatedHours,
+  formatStartTime,
+  parseStartTimeToMinutes,
   weekDays,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
@@ -126,8 +128,34 @@ export function generateWeeklyPlanIcs(
   const nowStamp = formatIcsUtcDateTime(new Date());
   const eventLines: string[] = [];
   let exportedCount = 0;
+  const orderedBlocks = blocks
+    .map((block, index) => ({
+      block,
+      index,
+      dayOffset: weekDays.indexOf(block.day),
+      startMinutes: parseStartTimeToMinutes(block.startTime),
+    }))
+    .sort((first, second) => {
+      if (first.dayOffset !== second.dayOffset) {
+        return first.dayOffset - second.dayOffset;
+      }
 
-  blocks.forEach((block, index) => {
+      if (first.startMinutes !== null && second.startMinutes !== null) {
+        return first.startMinutes - second.startMinutes || first.index - second.index;
+      }
+
+      if (first.startMinutes !== null) {
+        return -1;
+      }
+
+      if (second.startMinutes !== null) {
+        return 1;
+      }
+
+      return first.index - second.index;
+    });
+
+  orderedBlocks.forEach(({ block }, index) => {
     const dayOffset = weekDays.indexOf(block.day);
     const durationMinutes = Math.round(block.estimatedHours * 60);
 
@@ -148,15 +176,21 @@ export function generateWeeklyPlanIcs(
     }
 
     const eventDate = addDays(weekStartDate, dayOffset);
-    const startMinutes = nextStartByDay.get(block.day) ?? defaultDayStartMinutes;
+    const explicitStartMinutes = parseStartTimeToMinutes(block.startTime);
+    const startMinutes =
+      explicitStartMinutes ?? nextStartByDay.get(block.day) ?? defaultDayStartMinutes;
     const endMinutes = startMinutes + durationMinutes;
-    nextStartByDay.set(block.day, endMinutes);
+
+    if (explicitStartMinutes === null) {
+      nextStartByDay.set(block.day, endMinutes);
+    }
 
     const startDate = setMinutesFromStartOfDay(eventDate, startMinutes);
     const endDate = setMinutesFromStartOfDay(eventDate, endMinutes);
     const summary = `Schedule Builder: ${block.projectName}`;
     const description = [
       `Planned task: ${block.plannedTask}`,
+      `Start time: ${formatStartTime(block.startTime)}`,
       `Estimated duration: ${formatEstimatedHours(block.estimatedHours)}`,
       "Exported from Schedule Builder.",
     ].join("\n");

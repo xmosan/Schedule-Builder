@@ -24,6 +24,7 @@ export type WeeklyPlanBlock = {
   projectName: string;
   plannedTask: string;
   estimatedHours: number;
+  startTime?: string;
 };
 
 export type WeeklyPlanBlockDraft = {
@@ -31,10 +32,50 @@ export type WeeklyPlanBlockDraft = {
   projectName: string;
   plannedTask: string;
   estimatedHours: string;
+  startTime?: string;
 };
 
 function isWeekDay(value: unknown): value is WeekDay {
   return typeof value === "string" && weekDays.includes(value as WeekDay);
+}
+
+export function normalizeStartTime(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const match = value.trim().match(/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return `${match[1]}:${match[2]}`;
+}
+
+export function parseStartTimeToMinutes(value: unknown) {
+  const normalizedTime = normalizeStartTime(value);
+
+  if (!normalizedTime) {
+    return null;
+  }
+
+  const [hours, minutes] = normalizedTime.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+export function formatStartTime(value: unknown) {
+  const normalizedTime = normalizeStartTime(value);
+
+  if (!normalizedTime) {
+    return "Flexible";
+  }
+
+  const [rawHours, minutes] = normalizedTime.split(":").map(Number);
+  const period = rawHours >= 12 ? "PM" : "AM";
+  const displayHours = rawHours % 12 || 12;
+
+  return `${displayHours}:${String(minutes).padStart(2, "0")} ${period}`;
 }
 
 function isWeeklyPlanBlock(value: unknown): value is WeeklyPlanBlock {
@@ -43,6 +84,10 @@ function isWeeklyPlanBlock(value: unknown): value is WeeklyPlanBlock {
   }
 
   const candidate = value as Partial<WeeklyPlanBlock>;
+  const hasValidStartTime =
+    candidate.startTime == null ||
+    candidate.startTime === "" ||
+    normalizeStartTime(candidate.startTime) !== null;
 
   return (
     typeof candidate.id === "string" &&
@@ -52,7 +97,8 @@ function isWeeklyPlanBlock(value: unknown): value is WeeklyPlanBlock {
     typeof candidate.plannedTask === "string" &&
     typeof candidate.estimatedHours === "number" &&
     Number.isFinite(candidate.estimatedHours) &&
-    candidate.estimatedHours > 0
+    candidate.estimatedHours > 0 &&
+    hasValidStartTime
   );
 }
 
@@ -60,23 +106,31 @@ export function createWeeklyPlanBlock(
   draft: WeeklyPlanBlockDraft,
 ): WeeklyPlanBlock | null {
   const estimatedHours = Number(draft.estimatedHours);
+  const startTime = normalizeStartTime(draft.startTime ?? "");
 
   if (
     !draft.projectName.trim() ||
     !draft.plannedTask.trim() ||
     !Number.isFinite(estimatedHours) ||
-    estimatedHours <= 0
+    estimatedHours <= 0 ||
+    (draft.startTime?.trim() && !startTime)
   ) {
     return null;
   }
 
-  return {
+  const block: WeeklyPlanBlock = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     day: draft.day,
     projectName: draft.projectName.trim(),
     plannedTask: draft.plannedTask.trim(),
     estimatedHours,
   };
+
+  if (startTime) {
+    block.startTime = startTime;
+  }
+
+  return block;
 }
 
 export function parseStoredWeeklyPlan(

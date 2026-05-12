@@ -401,6 +401,7 @@ function createAiPrompt(
         projectName: block.projectName,
         plannedTask: block.plannedTask,
         estimatedHours: block.estimatedHours,
+        startTime: block.startTime ?? null,
       })),
     ),
     "",
@@ -465,6 +466,7 @@ function createAssistantMessagePrompt(
         projectName: block.projectName,
         plannedTask: block.plannedTask,
         estimatedHours: block.estimatedHours,
+        startTime: block.startTime ?? null,
       })),
       workShifts: context.workShifts.map((shift) => ({
         day: shift.day,

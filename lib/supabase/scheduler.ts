@@ -10,7 +10,11 @@ import {
   type ScheduleIntensity,
 } from "@/lib/onboarding";
 import type { Project, ProjectCategory, ProjectPriority } from "@/lib/projects";
-import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
+import {
+  normalizeStartTime,
+  type WeekDay,
+  type WeeklyPlanBlock,
+} from "@/lib/weekly-plan";
 import type { WorkShift, WorkShiftDraft } from "@/lib/work-schedule";
 
 type SchedulerSyncError = Error | PostgrestError;
@@ -38,6 +42,7 @@ type WeeklyPlanBlockRow = {
   project_name: string;
   planned_task: string;
   estimated_hours: number;
+  start_time?: string | null;
 };
 
 type PlannerProfileRow = {
@@ -63,6 +68,21 @@ type WorkShiftRow = {
 function createTimeoutError(operation: string) {
   return new Error(
     `${operation} timed out. Using the local scheduler cache for now.`,
+  );
+}
+
+function isMissingWeeklyPlanStartTimeColumn(error: unknown) {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+
+  return (
+    typeof candidate.message === "string" &&
+    candidate.message.includes("start_time") &&
+    (candidate.message.includes("weekly_plan_blocks") ||
+      candidate.code === "PGRST204")
   );
 }
 
@@ -118,13 +138,20 @@ function mapProjectToRow(userId: string, project: Project, index: number): Proje
 }
 
 function mapWeeklyPlanRowToBlock(row: WeeklyPlanBlockRow): WeeklyPlanBlock {
-  return {
+  const block: WeeklyPlanBlock = {
     id: row.block_id,
     day: row.day,
     projectName: row.project_name,
     plannedTask: row.planned_task,
     estimatedHours: row.estimated_hours,
   };
+  const startTime = normalizeStartTime(row.start_time ?? "");
+
+  if (startTime) {
+    block.startTime = startTime;
+  }
+
+  return block;
 }
 
 function mapWeeklyPlanBlockToRow(
@@ -132,6 +159,23 @@ function mapWeeklyPlanBlockToRow(
   block: WeeklyPlanBlock,
   index: number,
 ): WeeklyPlanBlockRow {
+  return {
+    user_id: userId,
+    block_id: block.id,
+    sort_index: index,
+    day: block.day,
+    project_name: block.projectName,
+    planned_task: block.plannedTask,
+    estimated_hours: block.estimatedHours,
+    start_time: block.startTime ?? null,
+  };
+}
+
+function mapWeeklyPlanBlockToLegacyRow(
+  userId: string,
+  block: WeeklyPlanBlock,
+  index: number,
+): Omit<WeeklyPlanBlockRow, "start_time"> {
   return {
     user_id: userId,
     block_id: block.id,
@@ -343,16 +387,33 @@ export async function fetchWeeklyPlanBlocksForUser(
   supabase: SupabaseClient,
   userId: string,
 ) {
-  const result = await withSupabaseTimeout(
+  type WeeklyPlanFetchResult = {
+    data: unknown[] | null;
+    error: SchedulerSyncError | null;
+  };
+  let result: WeeklyPlanFetchResult = await withSupabaseTimeout(
     supabase
       .from("weekly_plan_blocks")
       .select(
-        "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours",
+        "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours, start_time",
       )
       .eq("user_id", userId)
       .order("sort_index", { ascending: true }),
     "Loading weekly plan from Supabase",
   );
+
+  if (isMissingWeeklyPlanStartTimeColumn(result.error)) {
+    result = await withSupabaseTimeout(
+      supabase
+        .from("weekly_plan_blocks")
+        .select(
+          "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours",
+        )
+        .eq("user_id", userId)
+        .order("sort_index", { ascending: true }),
+      "Loading weekly plan from Supabase",
+    );
+  }
 
   return {
     data:
@@ -388,7 +449,7 @@ export async function replaceWeeklyPlanBlocksForUser(
     return { error };
   }
 
-  const { error: upsertError } = await withSupabaseTimeout(
+  let { error: upsertError } = await withSupabaseTimeout(
     supabase.from("weekly_plan_blocks").upsert(
       planBlocks.map((block, index) =>
         mapWeeklyPlanBlockToRow(userId, block, index),
@@ -397,6 +458,20 @@ export async function replaceWeeklyPlanBlocksForUser(
     ),
     "Saving weekly plan to Supabase",
   );
+
+  if (isMissingWeeklyPlanStartTimeColumn(upsertError)) {
+    const retryResult = await withSupabaseTimeout(
+      supabase.from("weekly_plan_blocks").upsert(
+        planBlocks.map((block, index) =>
+          mapWeeklyPlanBlockToLegacyRow(userId, block, index),
+        ),
+        { onConflict: "user_id,block_id" },
+      ),
+      "Saving weekly plan to Supabase",
+    );
+
+    upsertError = retryResult.error;
+  }
 
   if (upsertError) {
     return { error: upsertError };
