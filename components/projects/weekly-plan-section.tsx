@@ -235,6 +235,20 @@ export function WeeklyPlanSection({
     }, {} as Record<WeekDay, WeeklyPlanBlock[]>);
   }, [planBlocks]);
 
+  const duplicateCountsByBlockId = useMemo(() => {
+    const countsByKey = new Map<string, number>();
+
+    planBlocks.forEach((block) => {
+      const blockKey = getBlockIdentityKey(block);
+      countsByKey.set(blockKey, (countsByKey.get(blockKey) ?? 0) + 1);
+    });
+
+    return planBlocks.reduce<Record<string, number>>((acc, block) => {
+      acc[block.id] = countsByKey.get(getBlockIdentityKey(block)) ?? 1;
+      return acc;
+    }, {});
+  }, [planBlocks]);
+
   const draftDuplicateKey =
     selectedProject && draft.plannedTask.trim()
       ? getBlockIdentityKey({
@@ -474,6 +488,7 @@ export function WeeklyPlanSection({
     day: WeekDay,
     index: number,
     isTimed: boolean,
+    duplicateCount: number,
   ) {
     return (
       <div
@@ -483,7 +498,7 @@ export function WeeklyPlanSection({
       >
         <div
           className={cn(
-            "weekly-block-inner animate-weekly-block rounded-[22px] border p-3.5 shadow-[0_12px_28px_rgba(18,32,47,0.045)]",
+            "weekly-block-inner animate-weekly-block rounded-[24px] border p-4 shadow-[0_12px_28px_rgba(18,32,47,0.045)]",
             isTimed
               ? "border-brand-teal/14 bg-gradient-to-br from-white via-white to-brand-teal/[0.055]"
               : "border-brand-ink/8 bg-gradient-to-br from-white via-white to-brand-mist/55",
@@ -493,7 +508,7 @@ export function WeeklyPlanSection({
           <div className="flex items-start gap-3">
             <div
               className={cn(
-                "mt-0.5 rounded-2xl p-2",
+                "mt-0.5 hidden rounded-2xl p-2 sm:block",
                 isTimed
                   ? "bg-brand-teal/10 text-brand-teal"
                   : "bg-brand-ink/[0.045] text-brand-ink/52",
@@ -504,7 +519,7 @@ export function WeeklyPlanSection({
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-brand-ink">
+                  <p className="text-base font-semibold tracking-[-0.02em] text-brand-ink">
                     {block.projectName}
                   </p>
                   <p className="mt-1 text-sm leading-6 text-brand-ink/68">
@@ -547,6 +562,11 @@ export function WeeklyPlanSection({
                 <span className="inline-flex items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58">
                   {formatEstimatedHours(block.estimatedHours)}
                 </span>
+                {duplicateCount > 1 ? (
+                  <span className="inline-flex items-center rounded-full border border-brand-coral/15 bg-brand-coral/[0.06] px-3 py-1.5 text-xs font-semibold text-brand-coral">
+                    Similar block appears {duplicateCount} times
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -779,8 +799,8 @@ export function WeeklyPlanSection({
         </div>
       </div>
 
-      <Card className="rounded-[28px] border-white/70 bg-white/78 sm:rounded-[32px]">
-        <CardContent className="p-4 sm:p-6">
+      <Card className="rounded-[24px] border-white/70 bg-white/78 sm:rounded-[28px]">
+        <CardContent className="p-4 sm:p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
@@ -811,15 +831,11 @@ export function WeeklyPlanSection({
 
           {isAddFormOpen ? (
             renderBlockForm("quick", true)
-          ) : (
-            <div className="mt-4 rounded-[22px] border border-dashed border-brand-ink/10 bg-white/55 p-4 text-sm leading-6 text-brand-ink/58">
-              Each day card has its own add button for visual planning.
-            </div>
-          )}
+          ) : null}
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <div className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
         {weekDays.map((day) => {
           const dayBlocks = blocksByDay[day];
           const timedBlocks = dayBlocks.filter(
@@ -836,28 +852,66 @@ export function WeeklyPlanSection({
           return (
             <Card
               key={day}
-              className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/86 shadow-[0_18px_45px_rgba(18,32,47,0.07)] sm:rounded-[34px]"
+              className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)] sm:rounded-[34px]"
             >
-              <CardContent className="flex h-full flex-col p-4 sm:p-5 xl:p-3 2xl:p-4">
-                <div className="mb-4 flex items-start justify-between gap-3 border-b border-brand-ink/8 pb-4">
+              <CardContent className="flex h-full flex-col p-4 sm:p-5 lg:p-6">
+                <div className="mb-4 flex flex-col gap-4 border-b border-brand-ink/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h3 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink">
                       {day}
                     </h3>
-                    <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                      {dayBlocks.length} block
-                      {dayBlocks.length === 1 ? "" : "s"}
-                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant="subtle">
+                        {dayBlocks.length} block
+                        {dayBlocks.length === 1 ? "" : "s"}
+                      </Badge>
+                      <Badge
+                        className="bg-brand-teal/8 text-brand-teal"
+                        variant="subtle"
+                      >
+                        {formatEstimatedHours(dayHours)}
+                      </Badge>
+                    </div>
                   </div>
-                  <Badge
-                    className="bg-brand-teal/8 text-brand-teal"
-                    variant="subtle"
-                  >
-                    {formatEstimatedHours(dayHours)}
-                  </Badge>
+                  {activeDayForm === day ? (
+                    <Button
+                      className="h-10 px-4 text-sm sm:w-auto"
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setActiveDayForm(null)}
+                    >
+                      Close
+                    </Button>
+                  ) : (
+                    <Button
+                      className="w-full border-dashed sm:w-auto"
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                      onClick={() => openDayForm(day)}
+                    >
+                      <PlusIcon className="h-4 w-4" />
+                      Add to {day}
+                    </Button>
+                  )}
                 </div>
 
-                <div className="flex flex-1 flex-col gap-3">
+                <div className="flex flex-1 flex-col gap-4">
+                  {activeDayForm === day ? (
+                    <div className="rounded-[24px] border border-brand-teal/18 bg-brand-teal/[0.045] p-3 sm:p-4">
+                      <div>
+                        <p className="text-sm font-semibold text-brand-ink">
+                          Add to {day}
+                        </p>
+                        <p className="text-xs leading-5 text-brand-ink/52">
+                          Pick a project, task, time, and duration.
+                        </p>
+                      </div>
+                      {renderBlockForm(day, false)}
+                    </div>
+                  ) : null}
+
                   {dayBlocks.length > 0 ? (
                     <div className="space-y-4">
                       {timedBlocks.length > 0 ? (
@@ -870,7 +924,13 @@ export function WeeklyPlanSection({
                           </div>
                           <div className="space-y-2">
                             {timedBlocks.map((block, index) =>
-                              renderPlanBlock(block, day, index, true),
+                              renderPlanBlock(
+                                block,
+                                day,
+                                index,
+                                true,
+                                duplicateCountsByBlockId[block.id] ?? 1,
+                              ),
                             )}
                           </div>
                         </div>
@@ -891,6 +951,7 @@ export function WeeklyPlanSection({
                                 day,
                                 timedBlocks.length + index,
                                 false,
+                                duplicateCountsByBlockId[block.id] ?? 1,
                               ),
                             )}
                           </div>
@@ -906,42 +967,6 @@ export function WeeklyPlanSection({
                         Add a focused block when this day needs structure.
                       </p>
                     </div>
-                  )}
-
-                  {activeDayForm === day ? (
-                    <div className="rounded-[24px] border border-brand-teal/18 bg-brand-teal/[0.045] p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-brand-ink">
-                            Add to {day}
-                          </p>
-                          <p className="text-xs leading-5 text-brand-ink/52">
-                            Pick a project, task, time, and duration.
-                          </p>
-                        </div>
-                        <Button
-                          className="h-9 px-3 text-xs"
-                          size="sm"
-                          type="button"
-                          variant="secondary"
-                          onClick={() => setActiveDayForm(null)}
-                        >
-                          Close
-                        </Button>
-                      </div>
-                      {renderBlockForm(day, false)}
-                    </div>
-                  ) : (
-                    <Button
-                      className="w-full border-dashed"
-                      size="sm"
-                      type="button"
-                      variant="outline"
-                      onClick={() => openDayForm(day)}
-                    >
-                      <PlusIcon className="h-4 w-4" />
-                      Add to {day}
-                    </Button>
                   )}
                 </div>
               </CardContent>
