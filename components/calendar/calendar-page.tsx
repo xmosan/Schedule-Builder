@@ -75,7 +75,7 @@ const filterItems: Array<{
   },
 ];
 
-const visibleMonthEventLimit = 3;
+type MonthIndicatorTone = "work" | "plan" | "deadline" | "flexible";
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -136,46 +136,71 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
   };
 }
 
-function getMonthEventRows(
+function getMonthEventSummary(
   day: CalendarMonthDaySchedule,
   filters: CalendarFilters,
 ) {
   const visibleDay = getVisibleDayData(day, filters);
-  const rows: Array<{
-    detail: string;
+  const timedPlanBlocks = visibleDay.planBlocks.filter(
+    (block) => block.startTime,
+  );
+  const flexiblePlanBlocks = visibleDay.planBlocks.filter(
+    (block) => !block.startTime,
+  );
+  const indicators: Array<{
+    count: number;
     id: string;
     label: string;
-    tone: "work" | "plan" | "deadline" | "flexible";
-  }> = [
-    ...visibleDay.workShifts.map((shift) => ({
-      detail: formatWorkShiftRange(shift),
-      id: `work-${shift.id}`,
-      label: "Work shift",
-      tone: "work" as const,
-    })),
-    ...visibleDay.planBlocks.map((block) => ({
-      detail: block.startTime ? getPlanBlockTimeLabel(block) : "Flexible",
-      id: `plan-${block.id}`,
-      label: "Plan block",
-      tone: block.startTime ? ("plan" as const) : ("flexible" as const),
-    })),
-    ...visibleDay.deadlines.map((deadline) => ({
-      detail: deadline.projectName,
-      id: `deadline-${deadline.projectId}-${deadline.deadlineText}`,
+    tone: MonthIndicatorTone;
+  }> = [];
+
+  if (visibleDay.workShifts.length > 0) {
+    indicators.push({
+      count: visibleDay.workShifts.length,
+      id: "work",
+      label: "Work",
+      tone: "work",
+    });
+  }
+
+  if (timedPlanBlocks.length > 0) {
+    indicators.push({
+      count: timedPlanBlocks.length,
+      id: "plan",
+      label: "Plan",
+      tone: "plan",
+    });
+  }
+
+  if (flexiblePlanBlocks.length > 0) {
+    indicators.push({
+      count: flexiblePlanBlocks.length,
+      id: "flexible",
+      label: "Flexible",
+      tone: "flexible",
+    });
+  }
+
+  if (visibleDay.deadlines.length > 0) {
+    indicators.push({
+      count: visibleDay.deadlines.length,
+      id: "deadline",
       label: "Deadline",
-      tone: "deadline" as const,
-    })),
-  ];
+      tone: "deadline",
+    });
+  }
 
   return {
-    rows,
+    indicators,
+    totalItems:
+      visibleDay.workShifts.length +
+      visibleDay.planBlocks.length +
+      visibleDay.deadlines.length,
     visibleDay,
   };
 }
 
-function getMonthEventToneClass(
-  tone: "work" | "plan" | "deadline" | "flexible",
-) {
+function getMonthEventToneClass(tone: MonthIndicatorTone) {
   if (tone === "work") {
     return "border-brand-ocean/16 bg-brand-ocean/[0.075] text-brand-ocean";
   }
@@ -262,33 +287,30 @@ function DeadlineEvent({
   );
 }
 
-function MonthEventChip({
-  detail,
+function MonthIndicatorBadge({
+  count,
   label,
   tone,
 }: {
-  detail: string;
+  count: number;
   label: string;
-  tone: "work" | "plan" | "deadline" | "flexible";
+  tone: MonthIndicatorTone;
 }) {
   return (
-    <div
-      className={`truncate rounded-xl border px-2 py-1 text-[11px] font-semibold ${getMonthEventToneClass(
+    <span
+      className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] font-semibold leading-none ${getMonthEventToneClass(
         tone,
       )}`}
     >
-      <span>{label}</span>
-      <span className="text-brand-ink/42"> • </span>
-      <span className="font-medium">{detail}</span>
-    </div>
+      {label}
+      {count > 1 ? (
+        <span className="ml-1 text-brand-ink/42">{count}</span>
+      ) : null}
+    </span>
   );
 }
 
-function MonthEventDot({
-  tone,
-}: {
-  tone: "work" | "plan" | "deadline" | "flexible";
-}) {
+function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
   const dotClass =
     tone === "work"
       ? "bg-brand-ocean"
@@ -402,8 +424,8 @@ function CalendarMonthView({
                 {monthCalendar.monthLabel}
               </h2>
               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                Weekly plan blocks are shown on the current week. Work shifts
-                repeat on matching weekdays.
+                Weekly plan blocks currently reflect your active weekly plan.
+                Work shifts repeat on matching weekdays.
               </p>
             </div>
           </div>
@@ -419,9 +441,10 @@ function CalendarMonthView({
             ))}
 
             {monthCalendar.days.map((day) => {
-              const { rows, visibleDay } = getMonthEventRows(day, filters);
-              const visibleRows = rows.slice(0, visibleMonthEventLimit);
-              const hiddenCount = Math.max(0, rows.length - visibleRows.length);
+              const { indicators, totalItems } = getMonthEventSummary(
+                day,
+                filters,
+              );
               const isSelected =
                 day.isCurrentMonth &&
                 (selectedMonthIso === day.isoDate ||
@@ -432,7 +455,7 @@ function CalendarMonthView({
                 <button
                   key={day.isoDate}
                   aria-label={`${day.day}, ${day.dateLabel}`}
-                  className={`min-h-[78px] rounded-[20px] border p-2 text-left transition sm:min-h-[150px] sm:rounded-[24px] sm:p-3 ${
+                  className={`min-h-[72px] rounded-[18px] border p-2 text-left transition sm:min-h-[128px] sm:rounded-[24px] sm:p-3 ${
                     day.isCurrentMonth
                       ? "border-brand-ink/8 bg-white/82 hover:border-brand-teal/20 hover:bg-brand-teal/[0.035]"
                       : "border-transparent bg-brand-ink/[0.025] text-brand-ink/26"
@@ -457,39 +480,35 @@ function CalendarMonthView({
                     >
                       {day.dayNumber}
                     </span>
-                    {visibleDay.scheduledHours > 0 && day.isCurrentMonth ? (
+                    {totalItems > 0 && day.isCurrentMonth ? (
                       <span className="hidden rounded-full bg-brand-ink/[0.045] px-2 py-1 text-[10px] font-semibold text-brand-ink/46 sm:inline-flex">
-                        {formatHours(visibleDay.scheduledHours)}
+                        {totalItems} {totalItems === 1 ? "item" : "items"}
                       </span>
                     ) : null}
                   </div>
 
-                  <div className="mt-3 hidden flex-col gap-1.5 sm:flex">
-                    {visibleRows.map((row) => (
-                      <MonthEventChip
-                        key={row.id}
-                        detail={row.detail}
-                        label={row.label}
-                        tone={row.tone}
+                  <div className="mt-3 hidden flex-wrap gap-1.5 sm:flex">
+                    {indicators.map((indicator) => (
+                      <MonthIndicatorBadge
+                        key={indicator.id}
+                        count={indicator.count}
+                        label={indicator.label}
+                        tone={indicator.tone}
                       />
                     ))}
-                    {hiddenCount > 0 ? (
-                      <span className="rounded-xl bg-brand-ink/[0.045] px-2 py-1 text-[11px] font-semibold text-brand-ink/48">
-                        +{hiddenCount} more
-                      </span>
-                    ) : null}
                   </div>
 
-                  {day.isCurrentMonth && rows.length > 0 ? (
+                  {day.isCurrentMonth && indicators.length > 0 ? (
                     <div className="mt-3 flex flex-wrap items-center gap-1 sm:hidden">
-                      {visibleRows.map((row) => (
-                        <MonthEventDot key={row.id} tone={row.tone} />
+                      {indicators.map((indicator) => (
+                        <MonthEventDot
+                          key={indicator.id}
+                          tone={indicator.tone}
+                        />
                       ))}
-                      {hiddenCount > 0 ? (
-                        <span className="text-[10px] font-semibold text-brand-ink/42">
-                          +{hiddenCount}
-                        </span>
-                      ) : null}
+                      <span className="text-[10px] font-semibold text-brand-ink/42">
+                        {totalItems}
+                      </span>
                     </div>
                   ) : null}
                 </button>
@@ -740,7 +759,7 @@ export function CalendarPage() {
             <div className="max-w-3xl">
               <div className="eyebrow-chip">
                 <CalendarIcon className="h-4 w-4" />
-                Calendar
+                Schedule overview
               </div>
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
                 Calendar
