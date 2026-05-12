@@ -7,6 +7,7 @@ import {
   ClockIcon,
   PlusIcon,
   TargetIcon,
+  TrashIcon,
 } from "@/components/projects/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,12 +23,12 @@ import {
   createWeeklyPlanBlock,
   formatEstimatedHours,
   formatStartTime,
-  normalizeStartTime,
   parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
+import { cn } from "@/lib/utils";
 
 type WeeklyPlanSectionProps = {
   onAddBlock: (block: WeeklyPlanBlock) => void;
@@ -68,14 +69,11 @@ function getBlockIdentityKey({
   day,
   plannedTask,
   projectName,
-  startTime,
-}: Pick<WeeklyPlanBlock, "day" | "plannedTask" | "projectName"> &
-  Pick<Partial<WeeklyPlanBlock>, "startTime">) {
+}: Pick<WeeklyPlanBlock, "day" | "plannedTask" | "projectName">) {
   return [
     day,
     normalizeBlockPart(projectName),
     normalizeBlockPart(plannedTask),
-    normalizeStartTime(startTime ?? "") ?? "flexible",
   ].join(":");
 }
 
@@ -216,7 +214,10 @@ export function WeeklyPlanSection({
         .filter(({ block }) => block.day === day)
         .sort((first, second) => {
           if (first.startMinutes !== null && second.startMinutes !== null) {
-            return first.startMinutes - second.startMinutes || first.index - second.index;
+            return (
+              first.startMinutes - second.startMinutes ||
+              first.index - second.index
+            );
           }
 
           if (first.startMinutes !== null) {
@@ -240,7 +241,6 @@ export function WeeklyPlanSection({
           day: draft.day,
           plannedTask: draft.plannedTask,
           projectName: selectedProject.name,
-          startTime: draft.startTime,
         })
       : null;
   const hasDuplicateDraft = Boolean(
@@ -367,7 +367,7 @@ export function WeeklyPlanSection({
       setDuplicateWarningKey(nextBlockKey);
       showFormError(
         target,
-        "A similar block already exists for that day. Click again if you still want to add another copy.",
+        "That day already has this project and task. Edit the existing block, or click Add anyway if you really want another copy.",
       );
       return;
     }
@@ -467,6 +467,92 @@ export function WeeklyPlanSection({
           delete removeTimers.current[blockId];
         });
     }, weeklyBlockRemovalAnimationMs);
+  }
+
+  function renderPlanBlock(
+    block: WeeklyPlanBlock,
+    day: WeekDay,
+    index: number,
+    isTimed: boolean,
+  ) {
+    return (
+      <div
+        key={block.id}
+        className="weekly-block-shell"
+        data-exiting={exitingBlockIds[block.id] ? "true" : "false"}
+      >
+        <div
+          className={cn(
+            "weekly-block-inner animate-weekly-block rounded-[22px] border p-3.5 shadow-[0_12px_28px_rgba(18,32,47,0.045)]",
+            isTimed
+              ? "border-brand-teal/14 bg-gradient-to-br from-white via-white to-brand-teal/[0.055]"
+              : "border-brand-ink/8 bg-gradient-to-br from-white via-white to-brand-mist/55",
+          )}
+          style={{ animationDelay: `${index * 45}ms` }}
+        >
+          <div className="flex items-start gap-3">
+            <div
+              className={cn(
+                "mt-0.5 rounded-2xl p-2",
+                isTimed
+                  ? "bg-brand-teal/10 text-brand-teal"
+                  : "bg-brand-ink/[0.045] text-brand-ink/52",
+              )}
+            >
+              <TargetIcon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-brand-ink">
+                    {block.projectName}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-brand-ink/68">
+                    {block.plannedTask}
+                  </p>
+                </div>
+                <Button
+                  aria-label={`Remove ${block.projectName} from ${day}`}
+                  className="h-8 w-8 shrink-0 rounded-full p-0 text-brand-ink/38 hover:bg-brand-coral/10 hover:text-brand-coral"
+                  disabled={Boolean(exitingBlockIds[block.id])}
+                  size="sm"
+                  title={`Remove ${block.projectName}`}
+                  type="button"
+                  variant="secondary"
+                  onClick={() => removeBlockWithAnimation(block.id)}
+                >
+                  <TrashIcon aria-hidden="true" className="h-4 w-4" />
+                  <span className="sr-only">Remove block</span>
+                </Button>
+              </div>
+
+              {removeErrors[block.id] ? (
+                <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-xs font-medium leading-5 text-brand-coral">
+                  {removeErrors[block.id]}
+                </p>
+              ) : null}
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold",
+                    isTimed
+                      ? "bg-brand-teal/[0.085] text-brand-teal"
+                      : "bg-brand-ink/[0.045] text-brand-ink/58",
+                  )}
+                >
+                  <ClockIcon className="h-4 w-4" />
+                  {formatStartTime(block.startTime)}
+                </span>
+                <span className="inline-flex items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58">
+                  {formatEstimatedHours(block.estimatedHours)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   function renderBlockForm(target: FormTarget, showDayField: boolean) {
@@ -705,8 +791,8 @@ export function WeeklyPlanSection({
                   Quick add block
                 </h2>
                 <p className="text-sm leading-6 text-brand-ink/60">
-                  Prefer the board below for day-by-day planning. Use this
-                  shortcut when you already know the day.
+                  Already know where it goes? Add a block quickly, or use a day
+                  card below.
                 </p>
               </div>
             </div>
@@ -727,153 +813,142 @@ export function WeeklyPlanSection({
             renderBlockForm("quick", true)
           ) : (
             <div className="mt-4 rounded-[22px] border border-dashed border-brand-ink/10 bg-white/55 p-4 text-sm leading-6 text-brand-ink/58">
-              Each day card has its own add button, so you can build the week
-              visually without starting from a big form.
+              Each day card has its own add button for visual planning.
             </div>
           )}
         </CardContent>
       </Card>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-          {weekDays.map((day) => {
-            const dayBlocks = blocksByDay[day];
-            const dayHours = dayBlocks.reduce(
-              (sum, block) => sum + block.estimatedHours,
-              0,
-            );
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        {weekDays.map((day) => {
+          const dayBlocks = blocksByDay[day];
+          const timedBlocks = dayBlocks.filter(
+            (block) => parseStartTimeToMinutes(block.startTime) !== null,
+          );
+          const flexibleBlocks = dayBlocks.filter(
+            (block) => parseStartTimeToMinutes(block.startTime) === null,
+          );
+          const dayHours = dayBlocks.reduce(
+            (sum, block) => sum + block.estimatedHours,
+            0,
+          );
 
-            return (
-              <Card
-                key={day}
-                className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/86 shadow-[0_18px_45px_rgba(18,32,47,0.07)] sm:rounded-[34px]"
-              >
-                <CardContent className="flex h-full flex-col p-4 sm:p-5 xl:p-3 2xl:p-4">
-                  <div className="mb-4 flex items-start justify-between gap-3 border-b border-brand-ink/8 pb-4">
-                    <div>
-                      <h3 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink">
-                        {day}
-                      </h3>
+          return (
+            <Card
+              key={day}
+              className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/86 shadow-[0_18px_45px_rgba(18,32,47,0.07)] sm:rounded-[34px]"
+            >
+              <CardContent className="flex h-full flex-col p-4 sm:p-5 xl:p-3 2xl:p-4">
+                <div className="mb-4 flex items-start justify-between gap-3 border-b border-brand-ink/8 pb-4">
+                  <div>
+                    <h3 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink">
+                      {day}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                      {dayBlocks.length} block
+                      {dayBlocks.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <Badge
+                    className="bg-brand-teal/8 text-brand-teal"
+                    variant="subtle"
+                  >
+                    {formatEstimatedHours(dayHours)}
+                  </Badge>
+                </div>
+
+                <div className="flex flex-1 flex-col gap-3">
+                  {dayBlocks.length > 0 ? (
+                    <div className="space-y-4">
+                      {timedBlocks.length > 0 ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 px-1">
+                            <span className="h-1.5 w-1.5 rounded-full bg-brand-teal" />
+                            <p className="text-[0.68rem] font-bold uppercase tracking-[0.22em] text-brand-teal">
+                              Timed
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            {timedBlocks.map((block, index) =>
+                              renderPlanBlock(block, day, index, true),
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {flexibleBlocks.length > 0 ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 px-1">
+                            <span className="h-1.5 w-1.5 rounded-full bg-brand-ink/30" />
+                            <p className="text-[0.68rem] font-bold uppercase tracking-[0.22em] text-brand-ink/45">
+                              Flexible
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            {flexibleBlocks.map((block, index) =>
+                              renderPlanBlock(
+                                block,
+                                day,
+                                timedBlocks.length + index,
+                                false,
+                              ),
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/55 p-4">
+                      <p className="text-sm font-semibold text-brand-ink/70">
+                        Open day
+                      </p>
                       <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                        {dayBlocks.length} block{dayBlocks.length === 1 ? "" : "s"}
+                        Add a focused block when this day needs structure.
                       </p>
                     </div>
-                    <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
-                      {formatEstimatedHours(dayHours)}
-                    </Badge>
-                  </div>
+                  )}
 
-                  <div className="flex flex-1 flex-col gap-3">
-                    {dayBlocks.length > 0 ? (
-                      dayBlocks.map((block, index) => (
-                        <div
-                          key={block.id}
-                          className="weekly-block-shell"
-                          data-exiting={
-                            exitingBlockIds[block.id] ? "true" : "false"
-                          }
+                  {activeDayForm === day ? (
+                    <div className="rounded-[24px] border border-brand-teal/18 bg-brand-teal/[0.045] p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-brand-ink">
+                            Add to {day}
+                          </p>
+                          <p className="text-xs leading-5 text-brand-ink/52">
+                            Pick a project, task, time, and duration.
+                          </p>
+                        </div>
+                        <Button
+                          className="h-9 px-3 text-xs"
+                          size="sm"
+                          type="button"
+                          variant="secondary"
+                          onClick={() => setActiveDayForm(null)}
                         >
-                          <div
-                            className="weekly-block-inner animate-weekly-block rounded-[24px] border border-brand-ink/8 bg-gradient-to-br from-white via-white to-brand-mist/55 p-4 shadow-[0_12px_28px_rgba(18,32,47,0.055)]"
-                            style={{ animationDelay: `${index * 45}ms` }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex min-w-0 items-start gap-3">
-                                <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
-                                  <TargetIcon className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-semibold text-brand-ink">
-                                    {block.projectName}
-                                  </p>
-                                  <p className="mt-1 text-sm leading-6 text-brand-ink/68">
-                                    {block.plannedTask}
-                                  </p>
-                                </div>
-                              </div>
-                              <Button
-                                aria-label={`Remove ${block.projectName} from ${day}`}
-                                className="h-9 shrink-0 px-3 text-xs text-brand-ink/50 hover:bg-brand-coral/10 hover:text-brand-coral"
-                                disabled={Boolean(exitingBlockIds[block.id])}
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => removeBlockWithAnimation(block.id)}
-                              >
-                                {exitingBlockIds[block.id] ? "..." : "Remove"}
-                              </Button>
-                            </div>
-
-                            {removeErrors[block.id] ? (
-                              <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-xs font-medium leading-5 text-brand-coral">
-                                {removeErrors[block.id]}
-                              </p>
-                            ) : null}
-
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <span className="inline-flex items-center gap-2 rounded-full bg-brand-teal/[0.075] px-3 py-1.5 text-xs font-semibold text-brand-teal">
-                                <ClockIcon className="h-4 w-4" />
-                                {formatStartTime(block.startTime)}
-                              </span>
-                              <span className="inline-flex items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58">
-                                <ClockIcon className="h-4 w-4" />
-                                {formatEstimatedHours(block.estimatedHours)}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/55 p-4">
-                        <p className="text-sm font-semibold text-brand-ink/70">
-                          Open day
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                          Add a focused block when this day needs dedicated
-                          planning time.
-                        </p>
+                          Close
+                        </Button>
                       </div>
-                    )}
-
-                    {activeDayForm === day ? (
-                      <div className="rounded-[24px] border border-brand-teal/18 bg-brand-teal/[0.045] p-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-brand-ink">
-                              Add to {day}
-                            </p>
-                            <p className="text-xs leading-5 text-brand-ink/52">
-                              Pick a project, task, time, and duration.
-                            </p>
-                          </div>
-                          <Button
-                            className="h-9 px-3 text-xs"
-                            size="sm"
-                            type="button"
-                            variant="secondary"
-                            onClick={() => setActiveDayForm(null)}
-                          >
-                            Close
-                          </Button>
-                        </div>
-                        {renderBlockForm(day, false)}
-                      </div>
-                    ) : (
-                      <Button
-                        className="w-full border-dashed"
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                        onClick={() => openDayForm(day)}
-                      >
-                        <PlusIcon className="h-4 w-4" />
-                        Add block
-                      </Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                      {renderBlockForm(day, false)}
+                    </div>
+                  ) : (
+                    <Button
+                      className="w-full border-dashed"
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                      onClick={() => openDayForm(day)}
+                    >
+                      <PlusIcon className="h-4 w-4" />
+                      Add to {day}
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
 
       <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
         <CardContent className="p-4 sm:p-6">

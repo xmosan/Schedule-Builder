@@ -78,3 +78,15 @@ export function PlusIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+export function TrashIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M4.5 6.5h15" />
+      <path d="M9.5 6.5V4.75h5v1.75" />
+      <path d="M7 6.5 7.8 19a2 2 0 0 0 2 1.85h4.4A2 2 0 0 0 16.2 19L17 6.5" />
+      <path d="M10.25 10.5v6" />
+      <path d="M13.75 10.5v6" />
+    </BaseIcon>
+  );
+}
