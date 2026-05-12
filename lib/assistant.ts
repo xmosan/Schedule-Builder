@@ -3,9 +3,13 @@ import type { CalendarDeadline } from "@/lib/calendar";
 import { getProjectDeadlineBuckets } from "@/lib/calendar";
 import {
   getPlannedHours,
+  projectCategories,
   priorityScore,
+  priorityLevels,
   sortProjectsForFocus,
   type Project,
+  type ProjectCategory,
+  type ProjectPriority,
 } from "@/lib/projects";
 import {
   describeWeeklyPlanWorkConflict,
@@ -26,6 +30,7 @@ import {
 } from "@/lib/work-schedule";
 
 export const assistantSuggestionTypes = [
+  "new_project",
   "suggested_weekly_block",
   "suggested_next_action",
   "workload_warning",
@@ -34,6 +39,7 @@ export const assistantSuggestionTypes = [
 ] as const;
 
 export const assistantPlanningSuggestionTypes = [
+  "new_project",
   "suggested_weekly_block",
   "suggested_next_action",
   "workload_warning",
@@ -77,11 +83,15 @@ export type AssistantSuggestion = {
   summary: string;
   rationale: string;
   severity: AssistantSuggestionSeverity;
+  category?: ProjectCategory;
+  deadline?: string;
   projectName?: string;
+  priority?: ProjectPriority;
   day?: WeekDay;
   estimatedHours?: number;
   plannedTask?: string;
   proposedNextAction?: string;
+  weeklyHours?: number;
 };
 
 export type AssistantPlanReviewResponse = {
@@ -127,6 +137,8 @@ const overloadPromptPattern = /\b(overload|overloaded|too much|busy|overlap|conf
 const planWeekPromptPattern = /\b(plan my week|plan this week|weekly plan|week)\b/i;
 const openTimePromptPattern =
   /\b(find open time|open time|open slots|free time|available time|availability)\b/i;
+const projectDraftPromptPattern =
+  /\b(create|add|start|draft|make|save)\b.*\b(project|goal|initiative|class|course|work)\b|\bnew project\b/i;
 
 export function isGreetingPrompt(prompt: string) {
   return greetingPattern.test(prompt.trim());
@@ -172,11 +184,29 @@ function isWeekDay(value: unknown): value is WeekDay {
   return typeof value === "string" && weekDays.includes(value as WeekDay);
 }
 
+function isProjectCategory(value: unknown): value is ProjectCategory {
+  return (
+    typeof value === "string" &&
+    projectCategories.includes(value as ProjectCategory)
+  );
+}
+
+function isProjectPriority(value: unknown): value is ProjectPriority {
+  return (
+    typeof value === "string" &&
+    priorityLevels.includes(value as ProjectPriority)
+  );
+}
+
 function createSuggestionId(prefix: string, index: number) {
   return `${prefix}-${index + 1}`;
 }
 
 function getSuggestionPriority(suggestion: AssistantSuggestion) {
+  if (suggestion.type === "new_project") {
+    return 6;
+  }
+
   if (suggestion.type === "suggested_weekly_block") {
     return 5;
   }
@@ -354,10 +384,20 @@ function normalizeSuggestion(
     summary: description.slice(0, 360),
     rationale: rationale.slice(0, 420),
     severity: isSeverity(candidate.severity) ? candidate.severity : "info",
+    category: isProjectCategory(candidate.category)
+      ? candidate.category
+      : undefined,
+    deadline:
+      typeof candidate.deadline === "string"
+        ? candidate.deadline.trim().slice(0, 120)
+        : undefined,
     projectName:
       typeof candidate.projectName === "string"
         ? candidate.projectName.trim().slice(0, 120)
         : undefined,
+    priority: isProjectPriority(candidate.priority)
+      ? candidate.priority
+      : undefined,
     day: isWeekDay(candidate.day) ? candidate.day : undefined,
     estimatedHours:
       typeof candidate.estimatedHours === "number" &&
@@ -372,6 +412,12 @@ function normalizeSuggestion(
     proposedNextAction:
       typeof candidate.proposedNextAction === "string"
         ? candidate.proposedNextAction.trim().slice(0, 220)
+        : undefined,
+    weeklyHours:
+      typeof candidate.weeklyHours === "number" &&
+      Number.isFinite(candidate.weeklyHours) &&
+      candidate.weeklyHours >= 0
+        ? Math.min(candidate.weeklyHours, 60)
         : undefined,
   };
 }
@@ -577,6 +623,26 @@ function formatDayOptions(days: WeekDay[]) {
   return `${days.slice(0, -1).join(", ")}, or ${days[days.length - 1]}`;
 }
 
+function inferProjectDraftName(prompt: string) {
+  const quotedMatch = prompt.match(/["“”']([^"“”']{2,80})["“”']/);
+
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1].trim();
+  }
+
+  const namedMatch = prompt.match(
+    /\b(?:called|named|for|about)\s+([a-z0-9][a-z0-9\s/&-]{2,60})/i,
+  );
+
+  if (namedMatch?.[1]) {
+    return namedMatch[1]
+      .replace(/\b(before|by|due|with|and then|that|which)\b.*$/i, "")
+      .trim();
+  }
+
+  return "New project";
+}
+
 export function createCalendarConflictSuggestions(
   context: AssistantPlanningContext,
 ) {
@@ -643,6 +709,36 @@ export function createFallbackAssistantResponse(
     .filter((project) => project.priority === "High")
     .filter((project) => !existingBlockProjectNames.has(project.name.toLowerCase()))
     .slice(0, 2);
+
+  if (projectDraftPromptPattern.test(prompt)) {
+    const projectName = inferProjectDraftName(prompt);
+    const alreadyExists = activeProjects.some(
+      (project) => project.name.toLowerCase() === projectName.toLowerCase(),
+    );
+
+    if (!alreadyExists) {
+      const description =
+        "I drafted a project you can review and save. Nothing is added until you apply it.";
+
+      suggestions.push({
+        id: createSuggestionId("new-project", suggestions.length),
+        type: "new_project",
+        title: `Create ${projectName}`,
+        description,
+        confidence: 0.74,
+        summary: description,
+        rationale:
+          "Project drafts need your approval so the assistant never creates work automatically.",
+        severity: "important",
+        category: "Growth",
+        deadline: "",
+        priority: "Medium",
+        projectName,
+        proposedNextAction: "Define the next concrete step",
+        weeklyHours: 2,
+      });
+    }
+  }
 
   highPriorityUnscheduledProjects.forEach((project, index) => {
     const day = getLeastLoadedDay([
@@ -809,6 +905,8 @@ export function createFallbackAssistantResponse(
       ? `I’d look for open time around ${lightPlanningDayText} first. Those days have the lightest mix of plan blocks and fixed commitments right now.`
       : focusPromptPattern.test(prompt) && topProject
       ? `I’d start with ${topProject.name}. It has the strongest priority signal right now, so I’d make the next action visible first and keep the rest of the plan lighter around it.`
+      : projectDraftPromptPattern.test(prompt)
+      ? "I drafted a project card you can review first. If it looks right, apply it and I’ll save it to your Projects list."
       : balancePromptPattern.test(prompt) && workScheduleSummary
       ? `I’d treat your work schedule (${workScheduleSummary}) as locked, then place school or project work on ${lightPlanningDayText} and in smaller evening blocks.`
       : balancePromptPattern.test(prompt)

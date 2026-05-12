@@ -7,7 +7,13 @@ import {
   type AssistantApplyResult,
   type AssistantSuggestion,
 } from "@/lib/assistant";
-import type { Project } from "@/lib/projects";
+import {
+  priorityLevels,
+  projectCategories,
+  type Project,
+  type ProjectCategory,
+  type ProjectPriority,
+} from "@/lib/projects";
 import {
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
@@ -29,6 +35,19 @@ type WeeklyPlanBlockRow = {
   project_name: string;
   planned_task: string;
   estimated_hours: number;
+};
+
+type ProjectRow = {
+  user_id: string;
+  project_id: number;
+  sort_index: number;
+  name: string;
+  category: ProjectCategory;
+  priority: ProjectPriority;
+  deadline: string;
+  next_action: string;
+  weekly_hours: number;
+  completed: boolean;
 };
 
 function getErrorMessage(error: unknown) {
@@ -144,8 +163,34 @@ function createBlockId(suggestionId: string) {
   return `${Date.now()}-${suggestionId}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function createProjectId(currentProjects: Project[]) {
+  const existingIds = new Set(currentProjects.map((project) => project.id));
+  let projectId = Date.now();
+
+  while (existingIds.has(projectId)) {
+    projectId += 1;
+  }
+
+  return projectId;
+}
+
+function isProjectCategory(value: unknown): value is ProjectCategory {
+  return (
+    typeof value === "string" &&
+    projectCategories.includes(value as ProjectCategory)
+  );
+}
+
+function isProjectPriority(value: unknown): value is ProjectPriority {
+  return (
+    typeof value === "string" &&
+    priorityLevels.includes(value as ProjectPriority)
+  );
+}
+
 function validateActionableSuggestion(suggestion: AssistantSuggestion) {
   if (
+    suggestion.type !== "new_project" &&
     suggestion.type !== "suggested_weekly_block" &&
     suggestion.type !== "suggested_next_action"
   ) {
@@ -241,6 +286,88 @@ async function applyWeeklyBlockSuggestion({
       ? `Created a weekly plan block. This day has work shifts (${workRanges.join(", ")}), so place the block outside those hours.`
       : "Created a weekly plan block.",
   );
+}
+
+async function applyNewProjectSuggestion({
+  currentProjects,
+  suggestion,
+  supabase,
+  userId,
+}: {
+  currentProjects: Project[];
+  suggestion: AssistantSuggestion;
+  supabase: SupabaseClient;
+  userId: string;
+}) {
+  const projectName = suggestion.projectName?.trim();
+  const nextAction = suggestion.proposedNextAction?.trim();
+  const weeklyHours = suggestion.weeklyHours ?? suggestion.estimatedHours ?? 0;
+
+  if (!projectName) {
+    return createResult(suggestion, "error", "Project name cannot be empty.");
+  }
+
+  if (findProjectByName(currentProjects, projectName)) {
+    return createResult(
+      suggestion,
+      "error",
+      "A project with this name already exists.",
+    );
+  }
+
+  if (!nextAction) {
+    return createResult(
+      suggestion,
+      "error",
+      "Project next action cannot be empty.",
+    );
+  }
+
+  if (!Number.isFinite(weeklyHours) || weeklyHours < 0) {
+    return createResult(
+      suggestion,
+      "error",
+      "Project weekly hours must be 0 or greater.",
+    );
+  }
+
+  const category = isProjectCategory(suggestion.category)
+    ? suggestion.category
+    : "Must-do";
+  const priority = isProjectPriority(suggestion.priority)
+    ? suggestion.priority
+    : "Medium";
+  const projectId = createProjectId(currentProjects);
+  const row: ProjectRow = {
+    user_id: userId,
+    project_id: projectId,
+    sort_index: currentProjects.length,
+    name: projectName,
+    category,
+    priority,
+    deadline: suggestion.deadline?.trim() ?? "",
+    next_action: nextAction,
+    weekly_hours: weeklyHours,
+    completed: false,
+  };
+  const { error } = await supabase.from("projects").insert(row);
+
+  if (error) {
+    return createResult(suggestion, "error", error.message);
+  }
+
+  currentProjects.push({
+    id: projectId,
+    name: projectName,
+    category,
+    priority,
+    deadline: row.deadline,
+    nextAction,
+    weeklyHours,
+    completed: false,
+  });
+
+  return createResult(suggestion, "applied", "Created the project.");
 }
 
 async function applyNextActionSuggestion({
@@ -409,6 +536,18 @@ export async function POST(request: NextRequest) {
         appliedBlockCount += 1;
       }
 
+      continue;
+    }
+
+    if (item.normalized.type === "new_project") {
+      results.push(
+        await applyNewProjectSuggestion({
+          currentProjects,
+          suggestion: item.normalized,
+          supabase: authResult.supabase,
+          userId: authResult.userId,
+        }),
+      );
       continue;
     }
 

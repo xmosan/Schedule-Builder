@@ -16,6 +16,12 @@ import {
   type AssistantSuggestion,
   type AssistantSuggestionType,
 } from "@/lib/assistant";
+import {
+  priorityLevels,
+  projectCategories,
+  type ProjectCategory,
+  type ProjectPriority,
+} from "@/lib/projects";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { weekDays, type WeekDay } from "@/lib/weekly-plan";
 import { cn } from "@/lib/utils";
@@ -72,6 +78,7 @@ const examplePrompts = [
 ];
 
 const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
+  new_project: "Project draft",
   suggested_weekly_block: "Schedule idea",
   suggested_next_action: "Next action",
   workload_warning: "Workload note",
@@ -80,6 +87,7 @@ const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
 };
 
 const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
+  new_project: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   suggested_weekly_block: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   suggested_next_action: "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
   workload_warning: "border-[#e7c783] bg-[#fff8e6] text-[#8a5d0a]",
@@ -88,6 +96,7 @@ const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
 };
 
 const suggestionMarkerStyles: Record<AssistantSuggestionType, string> = {
+  new_project: "bg-brand-teal",
   suggested_weekly_block: "bg-brand-teal",
   suggested_next_action: "bg-brand-ocean",
   workload_warning: "bg-[#c99725]",
@@ -122,6 +131,7 @@ function getErrorMessage(error: unknown) {
 
 function isActionableSuggestion(suggestion: AssistantSuggestion) {
   return (
+    suggestion.type === "new_project" ||
     suggestion.type === "suggested_weekly_block" ||
     suggestion.type === "suggested_next_action"
   );
@@ -300,6 +310,9 @@ function ActionCard({
     suggestion.proposedNextAction
       ? { label: "Suggested next action", value: suggestion.proposedNextAction }
       : null,
+    suggestion.deadline ? { label: "Deadline", value: suggestion.deadline } : null,
+    suggestion.category ? { label: "Category", value: suggestion.category } : null,
+    suggestion.priority ? { label: "Priority", value: suggestion.priority } : null,
   ].filter((item): item is { label: string; value: string } => item !== null);
 
   return (
@@ -350,12 +363,30 @@ function ActionCard({
           </div>
         </div>
 
-        {(suggestion.projectName || suggestion.day || suggestion.estimatedHours) && !isEditing ? (
+        {(suggestion.projectName ||
+          suggestion.day ||
+          suggestion.estimatedHours ||
+          suggestion.weeklyHours ||
+          suggestion.category ||
+          suggestion.priority) &&
+        !isEditing ? (
           <div className="mt-4 grid gap-2 text-xs text-brand-ink/60 sm:grid-cols-3">
             {suggestion.projectName && (
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
                 <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Project</span>
                 <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.projectName}</span>
+              </div>
+            )}
+            {suggestion.category && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Category</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.category}</span>
+              </div>
+            )}
+            {suggestion.priority && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Priority</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.priority}</span>
               </div>
             )}
             {suggestion.day && (
@@ -370,6 +401,12 @@ function ActionCard({
                 <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.estimatedHours}h</span>
               </div>
             )}
+            {suggestion.weeklyHours !== undefined && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Weekly time</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.weeklyHours}h</span>
+              </div>
+            )}
           </div>
         ) : null}
 
@@ -382,6 +419,48 @@ function ActionCard({
                   className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
                   value={suggestion.projectName ?? ""}
                   onChange={(event) => onUpdate({ projectName: event.target.value })}
+                />
+              </label>
+            )}
+            {suggestion.category !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Category</span>
+                <select
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  value={suggestion.category ?? "Must-do"}
+                  onChange={(event) =>
+                    onUpdate({ category: event.target.value as ProjectCategory })
+                  }
+                >
+                  {projectCategories.map((category) => (
+                    <option key={category} value={category}>{category}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {suggestion.priority !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Priority</span>
+                <select
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  value={suggestion.priority ?? "Medium"}
+                  onChange={(event) =>
+                    onUpdate({ priority: event.target.value as ProjectPriority })
+                  }
+                >
+                  {priorityLevels.map((priority) => (
+                    <option key={priority} value={priority}>{priority}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {suggestion.deadline !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Deadline</span>
+                <input
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  value={suggestion.deadline ?? ""}
+                  onChange={(event) => onUpdate({ deadline: event.target.value })}
                 />
               </label>
             )}
@@ -410,6 +489,17 @@ function ActionCard({
                 />
               </label>
             )}
+            {suggestion.weeklyHours !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Weekly hours</span>
+                <input
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  min="0" step="0.25" type="number"
+                  value={suggestion.weeklyHours ?? 0}
+                  onChange={(event) => onUpdate({ weeklyHours: Number(event.target.value) })}
+                />
+              </label>
+            )}
             {suggestion.plannedTask !== undefined && (
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Task</span>
@@ -418,6 +508,19 @@ function ActionCard({
                   rows={2}
                   value={suggestion.plannedTask ?? ""}
                   onChange={(event) => onUpdate({ plannedTask: event.target.value })}
+                />
+              </label>
+            )}
+            {suggestion.proposedNextAction !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Next action</span>
+                <textarea
+                  className="w-full resize-y rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm leading-5"
+                  rows={2}
+                  value={suggestion.proposedNextAction ?? ""}
+                  onChange={(event) =>
+                    onUpdate({ proposedNextAction: event.target.value })
+                  }
                 />
               </label>
             )}
@@ -470,7 +573,11 @@ function ActionCard({
                 size="sm"
                 onClick={onApply}
               >
-                {actionState.status === "applying" ? "Applying..." : "Apply"}
+                {actionState.status === "applying"
+                  ? "Applying..."
+                  : suggestion.type === "new_project"
+                    ? "Save project"
+                    : "Apply"}
               </Button>
               {isEditableSuggestion(suggestion) && (
                 <Button
@@ -523,16 +630,20 @@ function ActionCard({
 
 function ChatBubble({
   actionStates,
+  isReviewOpen,
   message,
   onApply,
   onIgnore,
+  onOpenReview,
   onToggleEdit,
   onUpdateSuggestion,
 }: {
   actionStates: Record<string, ActionState>;
+  isReviewOpen: boolean;
   message: ChatMessage;
   onApply: (suggestion: AssistantSuggestion) => void;
   onIgnore: (suggestionId: string) => void;
+  onOpenReview: (messageId: string) => void;
   onToggleEdit: (suggestionId: string) => void;
   onUpdateSuggestion: (
     messageId: string,
@@ -597,7 +708,31 @@ function ChatBubble({
               </div>
             ) : null}
 
-            {actionableActions.length > 0 ? (
+            {!hasHandledAllSuggestions && !isReviewOpen ? (
+              <div className="animate-assistant-card rounded-[22px] border border-brand-teal/14 bg-white/92 p-4 shadow-[0_14px_34px_rgba(18,32,47,0.065)]">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-brand-ink">
+                      I found {visibleActionCount} suggested{" "}
+                      {visibleActionCount === 1 ? "change" : "changes"} to review.
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-brand-ink/55">
+                      Nothing changes until you open them and apply one.
+                    </p>
+                  </div>
+                  <Button
+                    className="h-10 rounded-full px-4 text-xs font-semibold"
+                    size="sm"
+                    type="button"
+                    onClick={() => onOpenReview(message.id)}
+                  >
+                    Review changes
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {isReviewOpen && actionableActions.length > 0 ? (
               <section>
                 <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
                   <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
@@ -607,7 +742,7 @@ function ChatBubble({
                     {actionableActions.length} remaining
                   </span>
                 </div>
-                <div className="grid gap-3">
+                <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
                   {actionableActions.map((suggestion, index) => (
                     <ActionCard
                       key={suggestion.id}
@@ -631,7 +766,7 @@ function ChatBubble({
               </section>
             ) : null}
 
-            {insightActions.length > 0 ? (
+            {isReviewOpen && insightActions.length > 0 ? (
               <section>
                 <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
                   <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
@@ -641,7 +776,7 @@ function ChatBubble({
                     {insightActions.length} remaining
                   </span>
                 </div>
-                <div className="grid gap-3">
+                <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
                   {insightActions.map((suggestion, index) => (
                     <ActionCard
                       key={suggestion.id}
@@ -679,7 +814,9 @@ export function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [context, setContext] = useState<AssistantContextSummary | undefined>();
   const [actionStates, setActionStates] = useState<Record<string, ActionState>>({});
+  const [openReviewMessages, setOpenReviewMessages] = useState<Record<string, boolean>>({});
   const [assistantNotices, setAssistantNotices] = useState<AssistantNotice[]>([]);
+  const [isIntroHidden, setIsIntroHidden] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -696,6 +833,7 @@ export function AssistantPage() {
 
   const hasMessages = messages.length > 0;
   const isBusy = isSubmitting || status === "loading";
+  const showIntroCard = !hasMessages && !isIntroHidden;
 
 
   async function requestPlanReview(
@@ -1135,6 +1273,10 @@ export function AssistantPage() {
             : message,
         ),
       );
+      setOpenReviewMessages((current) => ({
+        ...current,
+        [assistantMessageId]: false,
+      }));
       setStatus("ready");
     } catch (submitError) {
       if (
@@ -1253,40 +1395,64 @@ export function AssistantPage() {
 
       <main className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4 px-4 pb-3 pt-4 sm:px-6 sm:py-8 md:gap-6">
         
-        {/* Assistant Header Card */}
-        <section className="panel shrink-0 flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink sm:text-2xl">
-              Planning Assistant
-            </h1>
-            <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-              Ask for help planning your week, projects, work blocks, or priorities.
-            </p>
-            <p className="mt-2 text-xs font-semibold text-brand-teal">
-              Nothing is added to your schedule unless you approve it.
-            </p>
-          </div>
-          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-            <AssistantContextDetails context={context} />
-            {hasMessages && (
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="h-8 rounded-full px-3 text-[11px] font-bold uppercase tracking-wider text-brand-ink/40 hover:text-brand-ink"
+        {showIntroCard ? (
+          <section className="panel shrink-0 p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink sm:text-2xl">
+                  Planning Assistant
+                </h1>
+                <p className="mt-1 text-sm leading-6 text-brand-ink/60">
+                  Ask for help planning your week, projects, work blocks, or priorities.
+                </p>
+                <p className="mt-2 text-xs font-semibold text-brand-teal">
+                  Nothing is added to your schedule unless you approve it.
+                </p>
+              </div>
+              <button
+                aria-label="Hide assistant intro"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-brand-ink/8 bg-white/70 text-lg leading-none text-brand-ink/45 transition hover:bg-white hover:text-brand-ink"
+                type="button"
+                onClick={() => setIsIntroHidden(true)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="mt-4">
+              <AssistantContextDetails context={context} />
+            </div>
+          </section>
+        ) : (
+          <section className="flex shrink-0 items-center justify-between gap-3 px-1">
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold text-brand-ink">
+                Planning Assistant
+              </h1>
+              <p className="truncate text-xs text-brand-ink/50">
+                Nothing changes unless you apply a suggestion.
+              </p>
+            </div>
+            {hasMessages ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 rounded-full px-3 text-[11px] font-bold uppercase tracking-wider text-brand-ink/40 hover:text-brand-ink"
                 onClick={() => {
                   if (confirm("Clear your conversation history?")) {
                     setMessages([]);
                     setActionStates({});
+                    setOpenReviewMessages({});
                     setAssistantNotices([]);
                     setError(null);
+                    setIsIntroHidden(false);
                   }
                 }}
               >
-                Clear Chat
+                Clear
               </Button>
-            )}
-          </div>
-        </section>
+            ) : null}
+          </section>
+        )}
 
         {/* Main Chat Area */}
         <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1325,9 +1491,16 @@ export function AssistantPage() {
                 <ChatBubble
                   key={message.id}
                   actionStates={actionStates}
+                  isReviewOpen={openReviewMessages[message.id] ?? false}
                   message={message}
                   onApply={(suggestion) => void applySuggestion(suggestion)}
                   onIgnore={ignoreSuggestion}
+                  onOpenReview={(messageId) =>
+                    setOpenReviewMessages((current) => ({
+                      ...current,
+                      [messageId]: true,
+                    }))
+                  }
                   onToggleEdit={toggleEdit}
                   onUpdateSuggestion={updateSuggestion}
                 />
