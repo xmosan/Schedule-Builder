@@ -1,4 +1,6 @@
 import type { PlannerType } from "@/lib/onboarding";
+import type { CalendarDeadline } from "@/lib/calendar";
+import { getProjectDeadlineBuckets } from "@/lib/calendar";
 import {
   getPlannedHours,
   priorityScore,
@@ -6,12 +8,19 @@ import {
   type Project,
 } from "@/lib/projects";
 import {
+  describeWeeklyPlanWorkConflict,
+  findWeeklyPlanWorkConflicts,
+  getDayWorkShiftRanges,
+  getWorkHoursByDay,
+  getWorkScheduleSummary,
+  type WeeklyPlanWorkConflict,
+} from "@/lib/schedule-conflicts";
+import {
   weekDays,
   type WeekDay,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 import {
-  formatWorkShiftRange,
   getWorkShiftDurationHours,
   type WorkShift,
 } from "@/lib/work-schedule";
@@ -38,6 +47,9 @@ export type AssistantSource = "ai" | "fallback";
 
 export type AssistantContextSummary = {
   activeProjectsCount: number;
+  calendarConflictCount: number;
+  deadlinesNeedingDatesCount: number;
+  deadlinesWithDatesCount: number;
   plannedWeeklyHours: number;
   plannerType: PlannerType | "Unknown";
   totalWeeklyBlockHours: number;
@@ -47,8 +59,12 @@ export type AssistantContextSummary = {
 };
 
 export type AssistantPlanningContext = AssistantContextSummary & {
+  calendarConflicts: WeeklyPlanWorkConflict[];
+  deadlinesNeedingDates: CalendarDeadline[];
+  deadlinesWithDates: CalendarDeadline[];
   projects: Project[];
   weeklyPlanBlocks: WeeklyPlanBlock[];
+  workScheduleSummary: string | null;
   workShifts: WorkShift[];
 };
 
@@ -104,11 +120,13 @@ const maxDefaultWarningCards = 2;
 const greetingPattern = /^(hey|hello|hi|salam|assalamu alaikum|yo|sup|good morning|good afternoon|good evening)[\s!.?]*$/i;
 const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don't know|not sure|surprise me)[\s!.?]*$/i;
 const planningIntentPattern =
-  /\b(plan|schedule|week|weekly|block|blocks|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study)\b/i;
+  /\b(plan|schedule|week|weekly|block|blocks|overlap|conflict|conflicts|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study)\b/i;
 const focusPromptPattern = /\b(focus|first|top 3|top priority|priorit|what should i do)\b/i;
 const balancePromptPattern = /\bbalance\b/i;
-const overloadPromptPattern = /\b(overload|overloaded|too much|busy)\b/i;
+const overloadPromptPattern = /\b(overload|overloaded|too much|busy|overlap|conflict|conflicts)\b/i;
 const planWeekPromptPattern = /\b(plan my week|plan this week|weekly plan|week)\b/i;
+const openTimePromptPattern =
+  /\b(find open time|open time|open slots|free time|available time|availability)\b/i;
 
 export function isGreetingPrompt(prompt: string) {
   return greetingPattern.test(prompt.trim());
@@ -265,9 +283,7 @@ function getLeastLoadedDay(
 }
 
 function getWorkShiftRangesForDay(workShifts: WorkShift[], day: WeekDay) {
-  return workShifts
-    .filter((shift) => shift.day === day)
-    .map(formatWorkShiftRange);
+  return getDayWorkShiftRanges(workShifts, day);
 }
 
 function createWorkAwareBlockDescription({
@@ -366,8 +382,17 @@ export function createAssistantContextSummary(
   plannerType: PlannerType | "Unknown",
   workShifts: WorkShift[] = [],
 ): AssistantContextSummary {
+  const calendarConflicts = findWeeklyPlanWorkConflicts(
+    weeklyPlanBlocks,
+    workShifts,
+  );
+  const deadlineBuckets = getProjectDeadlineBuckets(projects);
+
   return {
     activeProjectsCount: projects.filter((project) => !project.completed).length,
+    calendarConflictCount: calendarConflicts.length,
+    deadlinesNeedingDatesCount: deadlineBuckets.deadlinesNeedingDates.length,
+    deadlinesWithDatesCount: deadlineBuckets.exactDeadlines.length,
     plannedWeeklyHours: getPlannedHours(projects),
     plannerType,
     totalWeeklyBlockHours: weeklyPlanBlocks.reduce(
@@ -389,6 +414,12 @@ export function createAssistantPlanningContext(
   plannerType: PlannerType | "Unknown",
   workShifts: WorkShift[] = [],
 ): AssistantPlanningContext {
+  const calendarConflicts = findWeeklyPlanWorkConflicts(
+    weeklyPlanBlocks,
+    workShifts,
+  );
+  const deadlineBuckets = getProjectDeadlineBuckets(projects);
+
   return {
     ...createAssistantContextSummary(
       projects,
@@ -396,8 +427,12 @@ export function createAssistantPlanningContext(
       plannerType,
       workShifts,
     ),
+    calendarConflicts,
+    deadlinesNeedingDates: deadlineBuckets.deadlinesNeedingDates,
+    deadlinesWithDates: deadlineBuckets.exactDeadlines,
     projects,
     weeklyPlanBlocks,
+    workScheduleSummary: getWorkScheduleSummary(workShifts),
     workShifts,
   };
 }
@@ -454,6 +489,9 @@ function createAssistantResponseFromSuggestions({
     assistantMessage: message,
     context: {
       activeProjectsCount: context.activeProjectsCount,
+      calendarConflictCount: context.calendarConflictCount,
+      deadlinesNeedingDatesCount: context.deadlinesNeedingDatesCount,
+      deadlinesWithDatesCount: context.deadlinesWithDatesCount,
       plannedWeeklyHours: context.plannedWeeklyHours,
       plannerType: context.plannerType,
       totalWeeklyBlockHours: context.totalWeeklyBlockHours,
@@ -478,6 +516,9 @@ export function createContextOnlyAssistantResponse(
     assistantMessage,
     context: {
       activeProjectsCount: context.activeProjectsCount,
+      calendarConflictCount: context.calendarConflictCount,
+      deadlinesNeedingDatesCount: context.deadlinesNeedingDatesCount,
+      deadlinesWithDatesCount: context.deadlinesWithDatesCount,
       plannedWeeklyHours: context.plannedWeeklyHours,
       plannerType: context.plannerType,
       totalWeeklyBlockHours: context.totalWeeklyBlockHours,
@@ -489,6 +530,73 @@ export function createContextOnlyAssistantResponse(
     source: "fallback",
     suggestions: [],
   };
+}
+
+function getLightPlanningDays(context: AssistantPlanningContext, maxDays = 3) {
+  const workHoursByDay = getWorkHoursByDay(context.workShifts);
+
+  return [...weekDays]
+    .map((day) => {
+      const planHours = context.weeklyPlanBlocks
+        .filter((block) => block.day === day)
+        .reduce((sum, block) => sum + block.estimatedHours, 0);
+      const workHours = workHoursByDay.get(day) ?? 0;
+
+      return {
+        day,
+        totalHours: planHours + workHours,
+        workHours,
+      };
+    })
+    .sort((first, second) => {
+      const totalDifference = first.totalHours - second.totalHours;
+
+      if (totalDifference !== 0) {
+        return totalDifference;
+      }
+
+      return first.workHours - second.workHours;
+    })
+    .slice(0, maxDays)
+    .map((item) => item.day);
+}
+
+function formatDayOptions(days: WeekDay[]) {
+  if (days.length === 0) {
+    return "your lighter days";
+  }
+
+  if (days.length === 1) {
+    return days[0];
+  }
+
+  if (days.length === 2) {
+    return `${days[0]} or ${days[1]}`;
+  }
+
+  return `${days.slice(0, -1).join(", ")}, or ${days[days.length - 1]}`;
+}
+
+export function createCalendarConflictSuggestions(
+  context: AssistantPlanningContext,
+) {
+  return context.calendarConflicts.slice(0, 2).map((conflict, index) => {
+    const description =
+      "This block may overlap with your saved work shift. Review the time before relying on this plan.";
+
+    return {
+      id: createSuggestionId("work-conflict", index),
+      type: "workload_warning",
+      title: `${conflict.day} block may overlap work`,
+      description,
+      confidence: 0.9,
+      summary: description,
+      rationale: describeWeeklyPlanWorkConflict(conflict),
+      severity: "warning",
+      day: conflict.day,
+      projectName: conflict.block.projectName,
+    } satisfies AssistantSuggestion;
+  });
 }
 
 export function createFallbackAssistantResponse(
@@ -525,6 +633,9 @@ export function createFallbackAssistantResponse(
   const suggestions: AssistantSuggestion[] = [];
   const activeProjects = sortProjectsForFocus(context.projects);
   const topProject = activeProjects[0];
+  const lightPlanningDays = getLightPlanningDays(context);
+  const lightPlanningDayText = formatDayOptions(lightPlanningDays);
+  const workScheduleSummary = context.workScheduleSummary;
   const existingBlockProjectNames = new Set(
     context.weeklyPlanBlocks.map((block) => block.projectName.toLowerCase()),
   );
@@ -572,6 +683,8 @@ export function createFallbackAssistantResponse(
       plannedTask: project.nextAction,
     });
   });
+
+  suggestions.push(...createCalendarConflictSuggestions(context));
 
   activeProjects
     .filter((project) => !project.deadline.trim())
@@ -690,12 +803,22 @@ export function createFallbackAssistantResponse(
   const assistantMessage =
     hasNoObviousFindings
       ? "Your plan looks pretty workable from what I can see. If you want a sharper review, ask me to focus on deadlines, open time, or your Top 3."
+      : openTimePromptPattern.test(prompt) && workScheduleSummary
+      ? `Based on your saved work schedule (${workScheduleSummary}), I’d look for open project time around ${lightPlanningDayText} first. I’ll keep any suggestions away from your work hours unless you choose a flexible block.`
+      : openTimePromptPattern.test(prompt)
+      ? `I’d look for open time around ${lightPlanningDayText} first. Those days have the lightest mix of plan blocks and fixed commitments right now.`
       : focusPromptPattern.test(prompt) && topProject
       ? `I’d start with ${topProject.name}. It has the strongest priority signal right now, so I’d make the next action visible first and keep the rest of the plan lighter around it.`
+      : balancePromptPattern.test(prompt) && workScheduleSummary
+      ? `I’d treat your work schedule (${workScheduleSummary}) as locked, then place school or project work on ${lightPlanningDayText} and in smaller evening blocks.`
       : balancePromptPattern.test(prompt)
-      ? "I’d balance this by protecting work or fixed commitments first, then placing one or two high-priority project blocks on your lighter days."
+      ? `I’d balance this by protecting fixed commitments first, then placing one or two high-priority project blocks on ${lightPlanningDayText}.`
+      : overloadPromptPattern.test(prompt) && context.calendarConflicts.length > 0
+      ? "I found at least one timed plan block that may overlap your saved work hours. I won’t move anything automatically, but I’d review those conflicts first before adding more blocks."
       : overloadPromptPattern.test(prompt)
       ? "I checked for pressure points first. The most useful move is to spot days where work plus project blocks are stacked too tightly, then shift one lower-priority block away."
+      : planWeekPromptPattern.test(prompt) && workScheduleSummary
+      ? `Since you work ${workScheduleSummary}, I’d keep project work on ${lightPlanningDayText} or outside those shifts. I picked a few small blocks so the week stays realistic instead of crowded.`
       : planWeekPromptPattern.test(prompt)
       ? "For this week, I’d anchor the plan around your highest-priority active projects and keep the blocks small enough that the schedule still feels doable."
       : suggestions.length > 0

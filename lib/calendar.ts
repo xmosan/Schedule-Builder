@@ -10,6 +10,7 @@ import type { WorkShift } from "@/lib/work-schedule";
 
 export type CalendarDeadline = {
   deadlineText: string;
+  isoDate?: string;
   projectId: number;
   projectName: string;
 };
@@ -124,10 +125,6 @@ function formatDateLabel(date: Date) {
   }).format(date);
 }
 
-function getDateForWeekDay(day: WeekDay, weekDates: CalendarDaySchedule[]) {
-  return weekDates.find((weekDate) => weekDate.day === day) ?? null;
-}
-
 function getWeekDayFromDate(date: Date) {
   return jsDayToWeekDay[date.getDay()];
 }
@@ -228,25 +225,6 @@ function getExactDeadlineDate(value: string, referenceDate: Date) {
   return parseDeadlineDate(value, referenceDate);
 }
 
-function getDeadlineWeekDay(value: string, weekDates: CalendarDaySchedule[]) {
-  const normalizedValue = value.trim().toLowerCase();
-  const matchedDay = weekDays.find((day) =>
-    new RegExp(`\\b${day.toLowerCase()}\\b`).test(normalizedValue),
-  );
-
-  if (matchedDay) {
-    return matchedDay;
-  }
-
-  const parsedDate = parseDeadlineDate(value, weekDates[0]?.date ?? new Date());
-
-  if (!parsedDate || !isSameWeekDate(parsedDate, weekDates)) {
-    return null;
-  }
-
-  return getWeekDayFromDate(parsedDate);
-}
-
 function isIgnorableDeadline(value: string) {
   const normalizedValue = value.trim().toLowerCase();
 
@@ -257,6 +235,55 @@ function isIgnorableDeadline(value: string) {
     normalizedValue === "n/a" ||
     normalizedValue === "no deadline"
   );
+}
+
+export function getExactProjectDeadlineDate(
+  deadline: string,
+  referenceDate = new Date(),
+) {
+  if (isIgnorableDeadline(deadline)) {
+    return null;
+  }
+
+  return getExactDeadlineDate(deadline, referenceDate);
+}
+
+export function getProjectDeadlineBuckets(
+  projects: Project[],
+  referenceDate = new Date(),
+) {
+  const exactDeadlines: CalendarDeadline[] = [];
+  const deadlinesNeedingDates: CalendarDeadline[] = [];
+
+  projects
+    .filter((project) => !project.completed && !isIgnorableDeadline(project.deadline))
+    .forEach((project) => {
+      const exactDate = getExactProjectDeadlineDate(
+        project.deadline,
+        referenceDate,
+      );
+
+      if (exactDate) {
+        exactDeadlines.push({
+          deadlineText: project.deadline,
+          isoDate: toIsoDate(exactDate),
+          projectId: project.id,
+          projectName: project.name,
+        });
+        return;
+      }
+
+      deadlinesNeedingDates.push({
+        deadlineText: project.deadline,
+        projectId: project.id,
+        projectName: project.name,
+      });
+    });
+
+  return {
+    deadlinesNeedingDates,
+    exactDeadlines,
+  };
 }
 
 export function getCurrentWeekStart(referenceDate = new Date()) {
@@ -377,13 +404,20 @@ export function buildCalendarDays({
   projects
     .filter((project) => !project.completed && !isIgnorableDeadline(project.deadline))
     .forEach((project) => {
+      const exactDate = getExactDeadlineDate(
+        project.deadline,
+        weekDates[0]?.date ?? new Date(),
+      );
       const deadline: CalendarDeadline = {
         deadlineText: project.deadline,
+        isoDate: exactDate ? toIsoDate(exactDate) : undefined,
         projectId: project.id,
         projectName: project.name,
       };
-      const deadlineDay = getDeadlineWeekDay(project.deadline, weekDates);
-      const matchedDay = deadlineDay ? getDateForWeekDay(deadlineDay, days) : null;
+      const matchedDay =
+        exactDate && isSameWeekDate(exactDate, weekDates)
+          ? days.find((day) => day.isoDate === toIsoDate(exactDate)) ?? null
+          : null;
 
       if (matchedDay) {
         matchedDay.deadlines.push(deadline);
@@ -458,12 +492,13 @@ export function buildCalendarMonth({
   projects
     .filter((project) => !project.completed && !isIgnorableDeadline(project.deadline))
     .forEach((project) => {
+      const deadlineDate = getExactDeadlineDate(project.deadline, monthStart);
       const deadline: CalendarDeadline = {
         deadlineText: project.deadline,
+        isoDate: deadlineDate ? toIsoDate(deadlineDate) : undefined,
         projectId: project.id,
         projectName: project.name,
       };
-      const deadlineDate = getExactDeadlineDate(project.deadline, monthStart);
 
       if (deadlineDate && isSameMonthDate(deadlineDate, monthStart)) {
         const matchedDay = days.find(

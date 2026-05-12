@@ -21,6 +21,10 @@ import {
 } from "@/lib/calendar";
 import type { Project } from "@/lib/projects";
 import {
+  findWeeklyPlanWorkConflicts,
+  type WeeklyPlanWorkConflict,
+} from "@/lib/schedule-conflicts";
+import {
   getSupabaseBrowserClient,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
@@ -35,6 +39,7 @@ import {
   getWorkShiftDurationHours,
   type WorkShift,
 } from "@/lib/work-schedule";
+import { cn } from "@/lib/utils";
 
 type CalendarStatus = "loading" | "ready" | "signed_out" | "error";
 type CalendarView = "week" | "month";
@@ -75,7 +80,12 @@ const filterItems: Array<{
   },
 ];
 
-type MonthIndicatorTone = "work" | "plan" | "deadline" | "flexible";
+type MonthIndicatorTone =
+  | "conflict"
+  | "deadline"
+  | "flexible"
+  | "plan"
+  | "work";
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -139,6 +149,7 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
 function getMonthEventSummary(
   day: CalendarMonthDaySchedule,
   filters: CalendarFilters,
+  conflictByBlockId: Map<string, WeeklyPlanWorkConflict>,
 ) {
   const visibleDay = getVisibleDayData(day, filters);
   const timedPlanBlocks = visibleDay.planBlocks.filter(
@@ -153,6 +164,18 @@ function getMonthEventSummary(
     label: string;
     tone: MonthIndicatorTone;
   }> = [];
+  const conflictingBlocks = visibleDay.planBlocks.filter((block) =>
+    conflictByBlockId.has(block.id),
+  );
+
+  if (conflictingBlocks.length > 0) {
+    indicators.push({
+      count: conflictingBlocks.length,
+      id: "conflict",
+      label: "Conflict",
+      tone: "conflict",
+    });
+  }
 
   if (visibleDay.workShifts.length > 0) {
     indicators.push({
@@ -201,6 +224,10 @@ function getMonthEventSummary(
 }
 
 function getMonthEventToneClass(tone: MonthIndicatorTone) {
+  if (tone === "conflict") {
+    return "border-brand-coral/18 bg-brand-coral/[0.09] text-brand-coral";
+  }
+
   if (tone === "work") {
     return "border-brand-ocean/16 bg-brand-ocean/[0.075] text-brand-ocean";
   }
@@ -244,13 +271,31 @@ function WorkShiftEvent({ shift }: { shift: WorkShift }) {
   );
 }
 
-function PlanBlockEvent({ block }: { block: WeeklyPlanBlock }) {
+function PlanBlockEvent({
+  block,
+  conflict,
+}: {
+  block: WeeklyPlanBlock;
+  conflict?: WeeklyPlanWorkConflict | null;
+}) {
   return (
-    <div className="rounded-[22px] border border-brand-teal/12 bg-brand-teal/[0.055] p-4">
+    <div
+      className={cn(
+        "rounded-[22px] border p-4",
+        conflict
+          ? "border-brand-coral/20 bg-brand-coral/[0.055]"
+          : "border-brand-teal/12 bg-brand-teal/[0.055]",
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
           Plan block
         </Badge>
+        {conflict ? (
+          <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+            Conflict
+          </Badge>
+        ) : null}
         <span className="text-xs font-semibold text-brand-ink/45">
           {getPlanBlockTimeLabel(block)}
         </span>
@@ -261,6 +306,11 @@ function PlanBlockEvent({ block }: { block: WeeklyPlanBlock }) {
       <p className="mt-1 text-sm leading-6 text-brand-ink/65">
         {block.plannedTask}
       </p>
+      {conflict ? (
+        <p className="mt-3 rounded-2xl border border-brand-coral/16 bg-white/66 px-3 py-2 text-xs font-semibold leading-5 text-brand-coral">
+          {conflict.message}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -308,7 +358,9 @@ function MonthIndicatorBadge({
 
 function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
   const dotClass =
-    tone === "work"
+    tone === "conflict"
+      ? "bg-brand-coral"
+      : tone === "work"
       ? "bg-brand-ocean"
       : tone === "deadline"
         ? "bg-brand-coral"
@@ -325,10 +377,12 @@ function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
 }
 
 function MonthDayDetail({
+  conflictByBlockId,
   day,
   filters,
   status,
 }: {
+  conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   day: CalendarMonthDaySchedule | null;
   filters: CalendarFilters;
   status: CalendarStatus;
@@ -379,7 +433,11 @@ function MonthDayDetail({
           ))}
 
           {visibleDay.planBlocks.map((block) => (
-            <PlanBlockEvent key={block.id} block={block} />
+            <PlanBlockEvent
+              key={block.id}
+              block={block}
+              conflict={conflictByBlockId.get(block.id)}
+            />
           ))}
 
           {visibleDay.deadlines.map((deadline) => (
@@ -396,6 +454,7 @@ function MonthDayDetail({
 }
 
 function CalendarMonthView({
+  conflictByBlockId,
   filters,
   monthCalendar,
   selectedMonthDay,
@@ -403,6 +462,7 @@ function CalendarMonthView({
   setSelectedMonthIso,
   status,
 }: {
+  conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   filters: CalendarFilters;
   monthCalendar: ReturnType<typeof buildCalendarMonth>;
   selectedMonthDay: CalendarMonthDaySchedule | null;
@@ -437,9 +497,10 @@ function CalendarMonthView({
             ))}
 
             {monthCalendar.days.map((day) => {
-              const { indicators, totalItems } = getMonthEventSummary(
+              const { indicators } = getMonthEventSummary(
                 day,
                 filters,
+                conflictByBlockId,
               );
               const isSelected =
                 day.isCurrentMonth &&
@@ -517,6 +578,7 @@ function CalendarMonthView({
       </Card>
 
       <MonthDayDetail
+        conflictByBlockId={conflictByBlockId}
         day={selectedMonthDay}
         filters={filters}
         status={status}
@@ -628,6 +690,19 @@ export function CalendarPage() {
         workShifts,
       }),
     [monthDate, planBlocks, projects, workShifts],
+  );
+
+  const planWorkConflicts = useMemo(
+    () => findWeeklyPlanWorkConflicts(planBlocks, workShifts),
+    [planBlocks, workShifts],
+  );
+
+  const conflictByBlockId = useMemo(
+    () =>
+      new Map(
+        planWorkConflicts.map((conflict) => [conflict.block.id, conflict]),
+      ),
+    [planWorkConflicts],
   );
 
   const weekSummary = useMemo(() => {
@@ -956,7 +1031,11 @@ export function CalendarPage() {
                           ))}
 
                           {visibleDay.planBlocks.map((block) => (
-                            <PlanBlockEvent key={block.id} block={block} />
+                            <PlanBlockEvent
+                              key={block.id}
+                              block={block}
+                              conflict={conflictByBlockId.get(block.id)}
+                            />
                           ))}
 
                           {visibleDay.deadlines.map((deadline) => (
@@ -974,6 +1053,7 @@ export function CalendarPage() {
               </section>
             ) : (
               <CalendarMonthView
+                conflictByBlockId={conflictByBlockId}
                 filters={filters}
                 monthCalendar={monthCalendar}
                 selectedMonthDay={selectedMonthDay}
