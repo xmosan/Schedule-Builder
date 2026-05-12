@@ -288,7 +288,6 @@ function DeadlineEvent({
 }
 
 function MonthIndicatorBadge({
-  count,
   label,
   tone,
 }: {
@@ -303,9 +302,6 @@ function MonthIndicatorBadge({
       )}`}
     >
       {label}
-      {count > 1 ? (
-        <span className="ml-1 text-brand-ink/42">{count}</span>
-      ) : null}
     </span>
   );
 }
@@ -344,7 +340,7 @@ function MonthDayDetail({
   const visibleDay = getVisibleDayData(day, filters);
 
   return (
-    <Card className="rounded-[30px] border-white/70 bg-white/86">
+    <Card className="h-fit rounded-[30px] border-white/70 bg-white/86">
       <CardContent className="p-4 sm:p-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -415,7 +411,7 @@ function CalendarMonthView({
   status: CalendarStatus;
 }) {
   return (
-    <section className="flex flex-col gap-4">
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_360px] items-start">
       <Card className="overflow-hidden rounded-[32px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
         <CardContent className="p-3 sm:p-5 lg:p-6">
           <div className="mb-4 flex flex-col gap-2 px-1 sm:flex-row sm:items-end sm:justify-between">
@@ -480,15 +476,10 @@ function CalendarMonthView({
                     >
                       {day.dayNumber}
                     </span>
-                    {totalItems > 0 && day.isCurrentMonth ? (
-                      <span className="hidden rounded-full bg-brand-ink/[0.045] px-2 py-1 text-[10px] font-semibold text-brand-ink/46 sm:inline-flex">
-                        {totalItems} {totalItems === 1 ? "item" : "items"}
-                      </span>
-                    ) : null}
                   </div>
 
                   <div className="mt-3 hidden flex-wrap gap-1.5 sm:flex">
-                    {indicators.map((indicator) => (
+                    {indicators.slice(0, 3).map((indicator) => (
                       <MonthIndicatorBadge
                         key={indicator.id}
                         count={indicator.count}
@@ -496,19 +487,26 @@ function CalendarMonthView({
                         tone={indicator.tone}
                       />
                     ))}
+                    {indicators.length > 3 ? (
+                      <span className="inline-flex items-center rounded-full border border-brand-ink/10 bg-brand-ink/[0.02] px-2 py-1 text-[11px] font-semibold text-brand-ink/42">
+                        +{indicators.length - 3} more
+                      </span>
+                    ) : null}
                   </div>
 
                   {day.isCurrentMonth && indicators.length > 0 ? (
                     <div className="mt-3 flex flex-wrap items-center gap-1 sm:hidden">
-                      {indicators.map((indicator) => (
+                      {indicators.slice(0, 3).map((indicator) => (
                         <MonthEventDot
                           key={indicator.id}
                           tone={indicator.tone}
                         />
                       ))}
-                      <span className="text-[10px] font-semibold text-brand-ink/42">
-                        {totalItems}
-                      </span>
+                      {indicators.length > 3 ? (
+                        <span className="text-[10px] font-semibold text-brand-ink/42">
+                          +
+                        </span>
+                      ) : null}
                     </div>
                   ) : null}
                 </button>
@@ -856,76 +854,56 @@ export function CalendarPage() {
 
         {status !== "signed_out" ? (
           <>
-            <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-              <Card className="rounded-[28px] border-white/70 bg-white/82">
-                <CardContent className="p-4 sm:p-5">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <h2 className="text-lg font-semibold text-brand-ink">
-                        Calendar filters
-                      </h2>
-                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                        Hide or show schedule categories for this view.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {filterItems.map((item) => (
-                        <button
-                          key={item.key}
-                          aria-pressed={filters[item.key]}
-                          className={`rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                            filters[item.key]
-                              ? "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
-                              : "border-brand-ink/10 bg-white/70 text-brand-ink/48"
-                          }`}
-                          type="button"
-                          onClick={() => toggleFilter(item.key)}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+            <section className="flex flex-col gap-4 rounded-[26px] border border-white/70 bg-white/60 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="mr-2 text-sm font-semibold text-brand-ink/50">Filters:</span>
+                {filterItems.map((item) => (
+                  <button
+                    key={item.key}
+                    aria-pressed={filters[item.key]}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${
+                      filters[item.key]
+                        ? "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
+                        : "border-brand-ink/10 bg-white/70 text-brand-ink/48"
+                    }`}
+                    type="button"
+                    onClick={() => toggleFilter(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
 
-                  {error ? (
-                    <p className="mt-4 rounded-[22px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral">
-                      {error}
-                    </p>
-                  ) : null}
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-[28px] border-white/70 bg-white/82">
-                <CardContent className="p-4 sm:p-5">
-                  <h2 className="text-lg font-semibold text-brand-ink">
-                    Quick actions
-                  </h2>
-                  <div className="mt-4 grid gap-2">
-                    <Link
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white shadow-[0_14px_32px_rgba(18,32,47,0.14)] hover:bg-brand-teal"
-                      href="/plan"
-                    >
-                      <PlusIcon className="h-4 w-4" />
-                      Add plan block
-                    </Link>
-                    <Link
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-brand-ink/10 bg-white/75 px-4 text-sm font-semibold text-brand-ink hover:bg-white"
-                      href="/work"
-                    >
-                      <ClockIcon className="h-4 w-4" />
-                      Add work shift
-                    </Link>
-                    <Link
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-brand-ink/10 bg-white/75 px-4 text-sm font-semibold text-brand-ink hover:bg-white"
-                      href="/projects"
-                    >
-                      <FolderStackIcon className="h-4 w-4" />
-                      Manage projects
-                    </Link>
-                  </div>
-                </CardContent>
-              </Card>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  className="inline-flex h-9 items-center gap-1.5 rounded-full bg-brand-ink px-4 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(18,32,47,0.12)] hover:bg-brand-teal sm:text-sm"
+                  href="/plan"
+                >
+                  <PlusIcon className="h-3.5 w-3.5" />
+                  Plan
+                </Link>
+                <Link
+                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink hover:bg-white sm:text-sm"
+                  href="/work"
+                >
+                  <ClockIcon className="h-3.5 w-3.5" />
+                  Shift
+                </Link>
+                <Link
+                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink hover:bg-white sm:text-sm"
+                  href="/projects"
+                >
+                  <FolderStackIcon className="h-3.5 w-3.5" />
+                  Projects
+                </Link>
+              </div>
             </section>
+
+            {error ? (
+              <p className="rounded-[22px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral">
+                {error}
+              </p>
+            ) : null}
 
             {view === "week" ? (
               <section className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
@@ -1012,11 +990,10 @@ export function CalendarPage() {
               <Card className="rounded-[30px] border-white/70 bg-white/86">
                 <CardContent className="p-4 sm:p-6">
                   <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-                    Upcoming deadline notes
+                    Deadlines needing dates
                   </h2>
                   <p className="mt-2 text-sm leading-6 text-brand-ink/58">
-                    These deadline labels are useful, but not specific enough
-                    to place on this {view === "week" ? "week" : "month"} yet.
+                    Add exact dates to place these on your calendar.
                   </p>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     {(view === "week"
