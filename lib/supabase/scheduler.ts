@@ -560,6 +560,31 @@ export async function createWorkShiftForUser(
   };
 }
 
+export async function updateWorkShiftForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  shiftId: string,
+  draft: WorkShiftDraft,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("work_shifts")
+      .update(mapWorkShiftDraftToRow(userId, draft))
+      .eq("user_id", userId)
+      .eq("id", shiftId)
+      .select("id, user_id, day, start_time, end_time, location, notes, recurring")
+      .single(),
+    "Updating work shift in Supabase",
+  );
+
+  return {
+    data: result.data
+      ? mapWorkShiftRowToWorkShift(result.data as WorkShiftRow)
+      : null,
+    error: result.error,
+  };
+}
+
 export async function deleteWorkShiftForUser(
   supabase: SupabaseClient,
   userId: string,

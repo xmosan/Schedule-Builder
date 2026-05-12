@@ -1,19 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { CalendarIcon } from "@/components/projects/icons";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type FormEvent,
+  type SetStateAction,
+} from "react";
+import {
+  CalendarIcon,
+  ClockIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@/components/projects/icons";
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import {
+  getSupabaseBrowserClient,
+  isSupabaseConfigured,
+} from "@/lib/supabase/client";
 import {
   createWorkShiftForUser,
   deleteWorkShiftForUser,
   fetchWorkShiftsForUser,
+  updateWorkShiftForUser,
 } from "@/lib/supabase/scheduler";
 import { weekDays, type WeekDay } from "@/lib/weekly-plan";
 import {
@@ -27,6 +44,10 @@ import {
 } from "@/lib/work-schedule";
 
 type WorkScheduleStatus = "loading" | "ready" | "signed_out" | "error";
+type AddShiftTarget = "quick" | WeekDay;
+type FormTarget = "quick" | WeekDay | `edit:${string}`;
+
+const shiftRemovalAnimationMs = 300;
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -55,44 +76,112 @@ function getMissingTableMessage(error: unknown) {
   return message;
 }
 
+function formatShiftHours(hours: number) {
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} hr${
+    hours === 1 ? "" : "s"
+  }`;
+}
+
+function getDraftForDay(day: WeekDay): WorkShiftDraft {
+  return {
+    ...defaultWorkShiftDraft,
+    day,
+    recurring: true,
+  };
+}
+
+function getDraftFromShift(shift: WorkShift): WorkShiftDraft {
+  return {
+    day: shift.day,
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    location: shift.location,
+    notes: shift.notes,
+    recurring: true,
+  };
+}
+
 function WorkShiftCard({
+  isExiting,
+  onEdit,
   onRemove,
+  removeError,
   shift,
 }: {
-  onRemove: (shiftId: string) => void;
+  isExiting: boolean;
+  onEdit: () => void;
+  onRemove: () => void;
+  removeError?: string;
   shift: WorkShift;
 }) {
+  const duration = getWorkShiftDurationHours(shift);
+
   return (
-    <div className="rounded-[22px] border border-brand-ink/8 bg-white/78 p-4 shadow-[0_12px_28px_rgba(18,32,47,0.05)]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-brand-ink">
-            {formatWorkShiftRange(shift)}
-          </p>
-          <p className="mt-1 text-sm text-brand-ink/58">
-            {getWorkShiftDurationHours(shift)} hrs
-            {shift.location ? ` · ${shift.location}` : ""}
-          </p>
+    <div
+      className="weekly-block-shell"
+      data-exiting={isExiting ? "true" : "false"}
+    >
+      <div className="weekly-block-inner animate-weekly-block rounded-[24px] border border-brand-ink/8 bg-gradient-to-br from-white via-white to-brand-mist/55 p-4 shadow-[0_12px_28px_rgba(18,32,47,0.045)]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-base font-semibold tracking-[-0.02em] text-brand-ink">
+              {formatWorkShiftRange(shift)}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full bg-brand-teal/[0.085] px-3 py-1.5 text-xs font-semibold text-brand-teal">
+                <ClockIcon className="h-4 w-4" />
+                {formatShiftHours(duration)}
+              </span>
+              <span className="inline-flex items-center rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58">
+                Repeats weekly
+              </span>
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              className="h-10 px-3 text-xs text-brand-ink/58 hover:bg-brand-teal/10 hover:text-brand-teal"
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={onEdit}
+            >
+              Edit
+            </Button>
+            <Button
+              aria-label={`Remove work shift ${formatWorkShiftRange(shift)}`}
+              className="h-10 w-10 rounded-full border border-brand-ink/10 bg-white/85 p-0 text-brand-ink/54 shadow-[0_8px_18px_rgba(18,32,47,0.05)] hover:border-brand-coral/20 hover:bg-brand-coral/10 hover:text-brand-coral"
+              disabled={isExiting}
+              size="sm"
+              title="Remove shift"
+              type="button"
+              variant="secondary"
+              onClick={onRemove}
+            >
+              <TrashIcon aria-hidden="true" className="h-5 w-5" />
+              <span className="sr-only">Remove shift</span>
+            </Button>
+          </div>
         </div>
-        <Badge variant="subtle">
-          {shift.recurring ? "Weekly" : "One-time"}
-        </Badge>
+
+        {shift.location ? (
+          <p className="mt-3 text-sm font-medium leading-6 text-brand-ink/70">
+            {shift.location}
+          </p>
+        ) : null}
+
+        {shift.notes ? (
+          <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+            {shift.notes}
+          </p>
+        ) : null}
+
+        {removeError ? (
+          <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-xs font-medium leading-5 text-brand-coral">
+            {removeError}
+          </p>
+        ) : null}
       </div>
-
-      {shift.notes ? (
-        <p className="mt-3 text-sm leading-6 text-brand-ink/62">
-          {shift.notes}
-        </p>
-      ) : null}
-
-      <Button
-        className="mt-4 w-full"
-        size="sm"
-        variant="outline"
-        onClick={() => onRemove(shift.id)}
-      >
-        Remove shift
-      </Button>
     </div>
   );
 }
@@ -104,9 +193,22 @@ export function WorkSchedulePage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [shifts, setShifts] = useState<WorkShift[]>([]);
   const [draft, setDraft] = useState<WorkShiftDraft>(defaultWorkShiftDraft);
-  const [isSaving, setIsSaving] = useState(false);
+  const [editDraft, setEditDraft] =
+    useState<WorkShiftDraft>(defaultWorkShiftDraft);
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [activeDayForm, setActiveDayForm] = useState<WeekDay | null>(null);
+  const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
+  const [savingTarget, setSavingTarget] = useState<FormTarget | null>(null);
+  const [errorTarget, setErrorTarget] = useState<FormTarget | null>(null);
+  const [exitingShiftIds, setExitingShiftIds] = useState<
+    Record<string, boolean>
+  >({});
+  const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const removeTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {},
+  );
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -175,6 +277,14 @@ export function WorkSchedulePage() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      Object.values(removeTimers.current).forEach((timerId) => {
+        clearTimeout(timerId);
+      });
+    };
+  }, []);
+
   const shiftsByDay = useMemo(() => {
     return new Map<WeekDay, WorkShift[]>(
       weekDays.map((day) => [
@@ -184,52 +294,148 @@ export function WorkSchedulePage() {
     );
   }, [shifts]);
 
-  const weeklyHours = useMemo(() => {
-    return shifts
-      .filter((shift) => shift.recurring)
-      .reduce((sum, shift) => sum + getWorkShiftDurationHours(shift), 0);
+  const unavailableHours = useMemo(() => {
+    return shifts.reduce(
+      (sum, shift) => sum + getWorkShiftDurationHours(shift),
+      0,
+    );
   }, [shifts]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const daysBlocked = useMemo(() => {
+    return weekDays.filter((day) =>
+      shifts.some((shift) => shift.day === day),
+    ).length;
+  }, [shifts]);
 
-    const validationError = validateWorkShiftDraft(draft);
+  function showFormError(target: FormTarget, messageText: string) {
+    setError(messageText);
+    setErrorTarget(target);
+  }
+
+  function clearFeedback() {
+    setError(null);
+    setErrorTarget(null);
+    setMessage(null);
+  }
+
+  function openQuickAddForm() {
+    setIsQuickAddOpen((current) => !current);
+    setActiveDayForm(null);
+    setEditingShiftId(null);
+    clearFeedback();
+  }
+
+  function openDayForm(day: WeekDay) {
+    const shouldClose = activeDayForm === day;
+
+    setIsQuickAddOpen(false);
+    setEditingShiftId(null);
+    setActiveDayForm(shouldClose ? null : day);
+    setDraft(getDraftForDay(day));
+    clearFeedback();
+  }
+
+  function startEditingShift(shift: WorkShift) {
+    setIsQuickAddOpen(false);
+    setActiveDayForm(null);
+    setEditingShiftId(shift.id);
+    setEditDraft(getDraftFromShift(shift));
+    clearFeedback();
+  }
+
+  async function saveNewShift(target: AddShiftTarget) {
+    const nextDraft = {
+      ...draft,
+      recurring: true,
+    };
+    const validationError = validateWorkShiftDraft(nextDraft);
 
     if (validationError) {
-      setError(validationError);
+      showFormError(target, validationError);
       return;
     }
 
     if (!userId) {
-      setError("Sign in before saving work shifts.");
+      showFormError(target, "Sign in before saving work shifts.");
       return;
     }
 
-    setIsSaving(true);
-    setError(null);
-    setMessage(null);
+    setSavingTarget(target);
+    clearFeedback();
 
     try {
       const supabase = getSupabaseBrowserClient();
-      const result = await createWorkShiftForUser(supabase, userId, draft);
+      const result = await createWorkShiftForUser(supabase, userId, nextDraft);
 
       if (result.error || !result.data) {
-        setError(getMissingTableMessage(result.error));
+        showFormError(target, getMissingTableMessage(result.error));
         return;
       }
 
       const savedShift = result.data;
       setShifts((current) => sortWorkShifts([...current, savedShift]));
-      setDraft(defaultWorkShiftDraft);
+      setDraft(getDraftForDay(target === "quick" ? "Monday" : target));
+      setIsQuickAddOpen(false);
+      setActiveDayForm(null);
       setMessage("Work shift saved.");
     } catch (saveError) {
-      setError(getMissingTableMessage(saveError));
+      showFormError(target, getMissingTableMessage(saveError));
     } finally {
-      setIsSaving(false);
+      setSavingTarget(null);
     }
   }
 
-  async function removeShift(shiftId: string) {
+  async function saveEditedShift(shiftId: string) {
+    const target: FormTarget = `edit:${shiftId}`;
+    const nextDraft = {
+      ...editDraft,
+      recurring: true,
+    };
+    const validationError = validateWorkShiftDraft(nextDraft);
+
+    if (validationError) {
+      showFormError(target, validationError);
+      return;
+    }
+
+    if (!userId) {
+      showFormError(target, "Sign in before updating work shifts.");
+      return;
+    }
+
+    setSavingTarget(target);
+    clearFeedback();
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const result = await updateWorkShiftForUser(
+        supabase,
+        userId,
+        shiftId,
+        nextDraft,
+      );
+
+      if (result.error || !result.data) {
+        showFormError(target, getMissingTableMessage(result.error));
+        return;
+      }
+
+      const updatedShift = result.data;
+      setShifts((current) =>
+        sortWorkShifts(
+          current.map((shift) => (shift.id === shiftId ? updatedShift : shift)),
+        ),
+      );
+      setEditingShiftId(null);
+      setMessage("Work shift updated.");
+    } catch (updateError) {
+      showFormError(target, getMissingTableMessage(updateError));
+    } finally {
+      setSavingTarget(null);
+    }
+  }
+
+  function removeShiftWithAnimation(shiftId: string) {
     if (!userId) {
       setError("Sign in before removing work shifts.");
       return;
@@ -237,27 +443,218 @@ export function WorkSchedulePage() {
 
     const confirmed = window.confirm("Remove this work shift?");
 
-    if (!confirmed) {
+    if (!confirmed || exitingShiftIds[shiftId]) {
       return;
     }
 
-    setError(null);
-    setMessage(null);
+    clearFeedback();
+    setRemoveErrors((current) => {
+      const next = { ...current };
+      delete next[shiftId];
+      return next;
+    });
+    setExitingShiftIds((current) => ({ ...current, [shiftId]: true }));
 
-    try {
-      const supabase = getSupabaseBrowserClient();
-      const result = await deleteWorkShiftForUser(supabase, userId, shiftId);
+    removeTimers.current[shiftId] = setTimeout(() => {
+      void Promise.resolve(
+        deleteWorkShiftForUser(getSupabaseBrowserClient(), userId, shiftId),
+      )
+        .then((result) => {
+          if (result.error) {
+            throw result.error;
+          }
 
-      if (result.error) {
-        setError(getMissingTableMessage(result.error));
-        return;
-      }
+          setShifts((current) => current.filter((shift) => shift.id !== shiftId));
+          setMessage("Work shift removed.");
+        })
+        .catch((removeError: unknown) => {
+          setRemoveErrors((current) => ({
+            ...current,
+            [shiftId]: `Shift could not be removed: ${getMissingTableMessage(
+              removeError,
+            )}`,
+          }));
+        })
+        .finally(() => {
+          setExitingShiftIds((current) => {
+            const next = { ...current };
+            delete next[shiftId];
+            return next;
+          });
+          delete removeTimers.current[shiftId];
+        });
+    }, shiftRemovalAnimationMs);
+  }
 
-      setShifts((current) => current.filter((shift) => shift.id !== shiftId));
-      setMessage("Work shift removed.");
-    } catch (removeError) {
-      setError(getMissingTableMessage(removeError));
-    }
+  function renderShiftForm({
+    draftValue,
+    formId,
+    onCancel,
+    onSubmit,
+    setDraftValue,
+    showDayField,
+    submitLabel,
+    target,
+  }: {
+    draftValue: WorkShiftDraft;
+    formId: string;
+    onCancel?: () => void;
+    onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+    setDraftValue: Dispatch<SetStateAction<WorkShiftDraft>>;
+    showDayField: boolean;
+    submitLabel: string;
+    target: FormTarget;
+  }) {
+    const shouldShowError = error && errorTarget === target;
+
+    return (
+      <form
+        className={
+          showDayField
+            ? "mt-5 grid gap-4 lg:grid-cols-[160px_1fr_1fr]"
+            : "mt-4 space-y-3"
+        }
+        onSubmit={onSubmit}
+      >
+        {showDayField ? (
+          <div>
+            <label className="field-label" htmlFor={`${formId}-day`}>
+              Day
+            </label>
+            <Select
+              id={`${formId}-day`}
+              value={draftValue.day}
+              onChange={(event) => {
+                setDraftValue((current) => ({
+                  ...current,
+                  day: event.target.value as WeekDay,
+                }));
+                clearFeedback();
+              }}
+            >
+              {weekDays.map((day) => (
+                <option key={day} value={day}>
+                  {day}
+                </option>
+              ))}
+            </Select>
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="field-label" htmlFor={`${formId}-start`}>
+              Start
+            </label>
+            <Input
+              id={`${formId}-start`}
+              required
+              type="time"
+              value={draftValue.startTime}
+              onChange={(event) => {
+                setDraftValue((current) => ({
+                  ...current,
+                  startTime: event.target.value,
+                }));
+                clearFeedback();
+              }}
+            />
+          </div>
+          <div>
+            <label className="field-label" htmlFor={`${formId}-end`}>
+              End
+            </label>
+            <Input
+              id={`${formId}-end`}
+              required
+              type="time"
+              value={draftValue.endTime}
+              onChange={(event) => {
+                setDraftValue((current) => ({
+                  ...current,
+                  endTime: event.target.value,
+                }));
+                clearFeedback();
+              }}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="field-label" htmlFor={`${formId}-location`}>
+            Location optional
+          </label>
+          <Input
+            id={`${formId}-location`}
+            placeholder="Office, campus, remote..."
+            value={draftValue.location}
+            onChange={(event) => {
+              setDraftValue((current) => ({
+                ...current,
+                location: event.target.value,
+              }));
+              clearFeedback();
+            }}
+          />
+        </div>
+
+        <div className={showDayField ? "lg:col-span-2" : ""}>
+          <label className="field-label" htmlFor={`${formId}-notes`}>
+            Notes optional
+          </label>
+          <Input
+            id={`${formId}-notes`}
+            placeholder="Commute, break, manager..."
+            value={draftValue.notes}
+            onChange={(event) => {
+              setDraftValue((current) => ({
+                ...current,
+                notes: event.target.value,
+              }));
+              clearFeedback();
+            }}
+          />
+        </div>
+
+        <div
+          className={
+            showDayField
+              ? "flex flex-col gap-3 lg:col-span-3 lg:flex-row"
+              : "grid grid-cols-2 gap-2"
+          }
+        >
+          {onCancel ? (
+            <Button
+              className="w-full"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+          ) : null}
+          <Button
+            className="w-full"
+            disabled={savingTarget === target || status === "loading"}
+            size="sm"
+            type="submit"
+          >
+            {savingTarget === target ? "Saving..." : submitLabel}
+          </Button>
+        </div>
+
+        <p className="rounded-[18px] border border-brand-ink/8 bg-white/66 px-4 py-3 text-xs font-medium leading-5 text-brand-ink/52 lg:col-span-3">
+          Shifts repeat weekly. Date-specific work shifts are not enabled yet.
+        </p>
+
+        {shouldShowError ? (
+          <p className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral lg:col-span-3">
+            {error}
+          </p>
+        ) : null}
+      </form>
+    );
   }
 
   return (
@@ -266,32 +663,59 @@ export function WorkSchedulePage() {
         <SchedulerNav />
 
         <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_320px] lg:items-end">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_360px] lg:items-end">
             <div className="max-w-3xl">
               <div className="eyebrow-chip">
                 <CalendarIcon className="h-4 w-4" />
                 Work Schedule
               </div>
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                Add the hours you are unavailable.
+                Work Schedule
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Enter recurring or one-time work shifts so Schedule Builder can
-                avoid planning project blocks during work.
+                Add work shifts and unavailable hours so Schedule Builder can
+                plan around them.
+              </p>
+              <p className="mt-3 rounded-[22px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+                The Assistant can use these hours to avoid suggesting project
+                blocks during work.
               </p>
             </div>
 
             <Card className="rounded-[26px] border-white/70 bg-white/88">
-              <CardContent className="p-4 sm:p-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                  Weekly work
-                </p>
-                <p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-brand-ink">
-                  {weeklyHours} hrs
-                </p>
-                <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                  Recurring shifts only.
-                </p>
+              <CardContent className="grid grid-cols-2 gap-3 p-4 sm:p-5">
+                <div className="rounded-[22px] bg-white/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+                    Unavailable this week
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
+                    {formatShiftHours(unavailableHours)}
+                  </p>
+                </div>
+                <div className="rounded-[22px] bg-white/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+                    Shifts
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
+                    {shifts.length}
+                  </p>
+                </div>
+                <div className="rounded-[22px] bg-white/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+                    Recurring shifts
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
+                    {shifts.length}
+                  </p>
+                </div>
+                <div className="rounded-[22px] bg-white/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+                    Days blocked
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
+                    {daysBlocked}
+                  </p>
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -317,203 +741,208 @@ export function WorkSchedulePage() {
         ) : null}
 
         {status !== "signed_out" ? (
-          <section className="grid items-start gap-5 sm:gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
-            <Card className="rounded-[30px] border-white/70 bg-white/88">
-              <CardContent className="p-5 sm:p-6">
-                <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-                  Add work shift
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-brand-ink/62">
-                  Use this for jobs, recurring work hours, or one-time shifts.
-                </p>
-
-                <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
-                  <div>
-                    <label className="field-label" htmlFor="work-day">
-                      Day
-                    </label>
-                    <Select
-                      id="work-day"
-                      value={draft.day}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          day: event.target.value as WeekDay,
-                        }))
-                      }
-                    >
-                      {weekDays.map((day) => (
-                        <option key={day} value={day}>
-                          {day}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="field-label" htmlFor="work-start">
-                        Start
-                      </label>
-                      <Input
-                        id="work-start"
-                        required
-                        type="time"
-                        value={draft.startTime}
-                        onChange={(event) =>
-                          setDraft((current) => ({
-                            ...current,
-                            startTime: event.target.value,
-                          }))
-                        }
-                      />
+          <>
+            <Card className="rounded-[24px] border-white/70 bg-white/78 sm:rounded-[28px]">
+              <CardContent className="p-4 sm:p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
+                      <PlusIcon className="h-5 w-5" />
                     </div>
                     <div>
-                      <label className="field-label" htmlFor="work-end">
-                        End
-                      </label>
-                      <Input
-                        id="work-end"
-                        required
-                        type="time"
-                        value={draft.endTime}
-                        onChange={(event) =>
-                          setDraft((current) => ({
-                            ...current,
-                            endTime: event.target.value,
-                          }))
-                        }
-                      />
+                      <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                        Quick add shift
+                      </h2>
+                      <p className="text-sm leading-6 text-brand-ink/60">
+                        Add a shift quickly, or use a day card below.
+                      </p>
                     </div>
                   </div>
-
-                  <div>
-                    <label className="field-label" htmlFor="work-location">
-                      Location optional
-                    </label>
-                    <Input
-                      id="work-location"
-                      placeholder="Office, campus, remote..."
-                      value={draft.location}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          location: event.target.value,
-                        }))
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className="field-label" htmlFor="work-notes">
-                      Notes optional
-                    </label>
-                    <Input
-                      id="work-notes"
-                      placeholder="Lunch break, commute, manager..."
-                      value={draft.notes}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          notes: event.target.value,
-                        }))
-                      }
-                    />
-                  </div>
-
-                  <label className="flex items-center gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-4 text-sm font-semibold text-brand-ink">
-                    <input
-                      checked={draft.recurring}
-                      className="h-4 w-4 accent-brand-teal"
-                      type="checkbox"
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          recurring: event.target.checked,
-                        }))
-                      }
-                    />
-                    Repeat weekly
-                  </label>
-
                   <Button
-                    className="w-full"
-                    disabled={isSaving || status === "loading"}
-                    type="submit"
+                    aria-expanded={isQuickAddOpen}
+                    className="w-full sm:w-auto"
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    onClick={openQuickAddForm}
                   >
-                    {isSaving ? "Saving shift..." : "Add work shift"}
+                    <PlusIcon className="h-4 w-4" />
+                    {isQuickAddOpen ? "Close quick add" : "Open quick add"}
                   </Button>
-                </form>
+                </div>
 
-                {message ? (
-                  <div className="mt-5 rounded-[22px] border border-brand-teal/18 bg-brand-teal/8 p-4 text-sm leading-6 text-brand-teal">
-                    {message}
-                  </div>
-                ) : null}
-
-                {error ? (
-                  <div className="mt-5 rounded-[22px] border border-brand-coral/18 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
-                    {error}
-                  </div>
-                ) : null}
+                {isQuickAddOpen
+                  ? renderShiftForm({
+                      draftValue: draft,
+                      formId: "quick-work-shift",
+                      onSubmit: (event) => {
+                        event.preventDefault();
+                        void saveNewShift("quick");
+                      },
+                      setDraftValue: setDraft,
+                      showDayField: true,
+                      submitLabel: "Add shift",
+                      target: "quick",
+                    })
+                  : null}
               </CardContent>
             </Card>
 
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {message ? (
+              <div className="rounded-[22px] border border-brand-teal/18 bg-brand-teal/8 p-4 text-sm leading-6 text-brand-teal">
+                {message}
+              </div>
+            ) : null}
+
+            {error && !errorTarget ? (
+              <div className="rounded-[22px] border border-brand-coral/18 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
+                {error}
+              </div>
+            ) : null}
+
+            <section className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
               {weekDays.map((day) => {
                 const dayShifts = shiftsByDay.get(day) ?? [];
+                const dayHours = dayShifts.reduce(
+                  (sum, shift) => sum + getWorkShiftDurationHours(shift),
+                  0,
+                );
 
                 return (
                   <Card
                     key={day}
-                    className="rounded-[30px] border-white/70 bg-white/84"
+                    className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)] sm:rounded-[34px]"
                   >
-                    <CardContent className="p-5">
-                      <div className="flex items-start justify-between gap-3">
+                    <CardContent className="flex h-full flex-col p-4 sm:p-5 lg:p-6">
+                      <div className="mb-4 flex flex-col gap-4 border-b border-brand-ink/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
                             {day}
                           </h2>
-                          <p className="text-sm text-brand-ink/55">
-                            {dayShifts.length} {dayShifts.length === 1 ? "shift" : "shifts"}
-                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Badge variant="subtle">
+                              {dayShifts.length}{" "}
+                              {dayShifts.length === 1 ? "shift" : "shifts"}
+                            </Badge>
+                            <Badge
+                              className="bg-brand-teal/8 text-brand-teal"
+                              variant="subtle"
+                            >
+                              {formatShiftHours(dayHours)}
+                            </Badge>
+                          </div>
                         </div>
-                        <Badge variant="subtle">
-                          {dayShifts.reduce(
-                            (sum, shift) => sum + getWorkShiftDurationHours(shift),
-                            0,
-                          )}{" "}
-                          hrs
-                        </Badge>
+                        {activeDayForm === day ? (
+                          <Button
+                            className="h-10 px-4 text-sm sm:w-auto"
+                            size="sm"
+                            type="button"
+                            variant="secondary"
+                            onClick={() => setActiveDayForm(null)}
+                          >
+                            Close
+                          </Button>
+                        ) : (
+                          <Button
+                            className="w-full border-dashed sm:w-auto"
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                            onClick={() => openDayForm(day)}
+                          >
+                            <PlusIcon className="h-4 w-4" />
+                            Add to {day}
+                          </Button>
+                        )}
                       </div>
 
-                      <div className="mt-4 grid gap-3">
-                        {status === "loading" ? (
-                          <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
-                            Loading shifts...
+                      <div className="flex flex-1 flex-col gap-4">
+                        {activeDayForm === day ? (
+                          <div className="rounded-[24px] border border-brand-teal/18 bg-brand-teal/[0.045] p-3 sm:p-4">
+                            <div>
+                              <p className="text-sm font-semibold text-brand-ink">
+                                Add to {day}
+                              </p>
+                              <p className="text-xs leading-5 text-brand-ink/52">
+                                Add your work hours for this day.
+                              </p>
+                            </div>
+                            {renderShiftForm({
+                              draftValue: draft,
+                              formId: `day-work-shift-${day.toLowerCase()}`,
+                              onCancel: () => setActiveDayForm(null),
+                              onSubmit: (event) => {
+                                event.preventDefault();
+                                void saveNewShift(day);
+                              },
+                              setDraftValue: setDraft,
+                              showDayField: false,
+                              submitLabel: "Add shift",
+                              target: day,
+                            })}
                           </div>
                         ) : null}
 
-                        {status !== "loading" && dayShifts.length === 0 ? (
-                          <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm leading-6 text-brand-ink/52">
-                            No work shifts planned.
-                          </div>
-                        ) : null}
+                        <div className="space-y-3">
+                          {status === "loading" ? (
+                            <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
+                              Loading shifts...
+                            </div>
+                          ) : null}
 
-                        {dayShifts.map((shift) => (
-                          <WorkShiftCard
-                            key={shift.id}
-                            shift={shift}
-                            onRemove={removeShift}
-                          />
-                        ))}
+                          {status !== "loading" && dayShifts.length === 0 ? (
+                            <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4">
+                              <p className="text-sm font-semibold text-brand-ink/70">
+                                Open availability
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                                Add work hours when this day is unavailable.
+                              </p>
+                            </div>
+                          ) : null}
+
+                          {dayShifts.map((shift) =>
+                            editingShiftId === shift.id ? (
+                              <div
+                                key={shift.id}
+                                className="rounded-[24px] border border-brand-teal/18 bg-brand-teal/[0.045] p-3 sm:p-4"
+                              >
+                                <p className="text-sm font-semibold text-brand-ink">
+                                  Edit shift
+                                </p>
+                                {renderShiftForm({
+                                  draftValue: editDraft,
+                                  formId: `edit-work-shift-${shift.id}`,
+                                  onCancel: () => setEditingShiftId(null),
+                                  onSubmit: (event) => {
+                                    event.preventDefault();
+                                    void saveEditedShift(shift.id);
+                                  },
+                                  setDraftValue: setEditDraft,
+                                  showDayField: true,
+                                  submitLabel: "Save shift",
+                                  target: `edit:${shift.id}`,
+                                })}
+                              </div>
+                            ) : (
+                              <WorkShiftCard
+                                key={shift.id}
+                                isExiting={Boolean(exitingShiftIds[shift.id])}
+                                removeError={removeErrors[shift.id]}
+                                shift={shift}
+                                onEdit={() => startEditingShift(shift)}
+                                onRemove={() => removeShiftWithAnimation(shift.id)}
+                              />
+                            ),
+                          )}
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
                 );
               })}
-            </div>
-          </section>
+            </section>
+          </>
         ) : null}
       </div>
     </div>
