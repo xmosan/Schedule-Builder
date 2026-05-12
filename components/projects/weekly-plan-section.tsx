@@ -528,7 +528,7 @@ export function WeeklyPlanSection({
                 </div>
                 <Button
                   aria-label={`Remove ${block.projectName} from ${day}`}
-                  className="h-8 w-8 shrink-0 rounded-full p-0 text-brand-ink/38 hover:bg-brand-coral/10 hover:text-brand-coral"
+                  className="h-11 w-11 shrink-0 rounded-full border border-brand-ink/10 bg-white/85 p-0 text-brand-ink/58 shadow-[0_8px_18px_rgba(18,32,47,0.06)] hover:border-brand-coral/20 hover:bg-brand-coral/10 hover:text-brand-coral"
                   disabled={Boolean(exitingBlockIds[block.id])}
                   size="sm"
                   title={`Remove ${block.projectName}`}
@@ -536,7 +536,7 @@ export function WeeklyPlanSection({
                   variant="secondary"
                   onClick={() => removeBlockWithAnimation(block.id)}
                 >
-                  <TrashIcon aria-hidden="true" className="h-4 w-4" />
+                  <TrashIcon aria-hidden="true" className="h-5 w-5" />
                   <span className="sr-only">Remove block</span>
                 </Button>
               </div>
