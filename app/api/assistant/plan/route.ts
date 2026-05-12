@@ -76,6 +76,7 @@ const assistantResponseJsonSchema = {
             enum: ["info", "warning", "important"],
           },
           projectName: { type: "string" },
+          newProjectName: { type: "string" },
           category: {
             type: "string",
             enum: ["Must-do", "Growth", "Maintenance", ""],
@@ -112,6 +113,7 @@ const assistantResponseJsonSchema = {
           "rationale",
           "severity",
           "projectName",
+          "newProjectName",
           "category",
           "priority",
           "deadline",
@@ -353,7 +355,11 @@ function createAiPrompt(
     "Separate insights in the message from actions in the suggestions.",
     "Do not claim anything was saved.",
     "The app can create new projects, update project next actions, and create weekly blocks only after the user applies a reviewed action card.",
+    "The app can also update existing project fields after review: name, category, priority, deadline, next action, and weekly hours.",
     "If the user asks you to create, add, draft, or save a project, return a new_project suggestion card. Do not say you cannot create or save it; say you drafted it for review and the user can apply it.",
+    "If the user asks to change, edit, move, confirm, or update a project deadline, due date, priority, category, weekly hours, next action, or name, return an update_project suggestion card. Do not return an informational deadline warning for a requested project edit.",
+    "For update_project cards, projectName must be the existing project to update. Include only the new values in deadline, category, priority, proposedNextAction, weeklyHours, or newProjectName. Leave unused fields empty or 0.",
+    "If the user says to confirm a drafted change, remind them they still need to click the apply/update button unless the action card has already been applied. Never say the change is confirmed or completed before apply.",
     "Do not create calendar events.",
     "Do not mark projects done.",
     "Do not delete anything.",
@@ -364,10 +370,11 @@ function createAiPrompt(
     "When suggesting new weekly blocks, prefer evenings, Friday, Saturday, Sunday, or flexible blocks when weekday work shifts make daytime unavailable.",
     "If the user asks to plan the week, find open time, or balance work and school, mention the saved work schedule naturally when it exists.",
     "Exact-dated deadlines can be placed on the calendar. Vague deadlines need exact dates and should not be placed on a month grid.",
-    "Allowed suggestion types only: new_project, suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
+    "Allowed suggestion types only: new_project, update_project, suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
     "Every suggestion must include id, type, title, description, confidence, rationale, and severity.",
     "For optional fields that do not apply, return an empty string or 0.",
     "For new_project cards, include projectName, category, priority, deadline, proposedNextAction, and weeklyHours.",
+    "For update_project cards, include projectName and the proposed changed fields.",
     "For suggested_weekly_block cards, include projectName, day, estimatedHours, and plannedTask.",
     "For suggested_next_action cards, include projectName and proposedNextAction.",
     "",
@@ -482,7 +489,9 @@ function createAssistantMessagePrompt(
     "Avoid repeating the same opening wording from prior assistant messages.",
     "Never claim anything was saved or changed.",
     "The app can create projects, update next actions, and add weekly blocks only after the user applies a reviewed action card.",
+    "The app can update project deadlines, priority, category, weekly hours, next action, and name only after the user applies a reviewed action card.",
     "If the user asks to create or save a project, say you drafted it for review. Do not say you cannot create or save it from here.",
+    "If the user asks to confirm a project edit, say the edit is ready to apply in the review card. Do not say it is confirmed, saved, completed, or changed unless the user clicked apply.",
     "Never say you created calendar events.",
     "",
     "Recent conversation:",
@@ -535,6 +544,32 @@ function createAssistantMessagePrompt(
       })),
     }),
   ].join("\n");
+}
+
+function preserveFallbackProjectEdits(
+  aiSuggestions: AssistantPlanReviewResponse["suggestions"],
+  fallbackSuggestions: AssistantPlanReviewResponse["suggestions"],
+) {
+  const fallbackProjectEdits = fallbackSuggestions.filter(
+    (suggestion) => suggestion.type === "update_project",
+  );
+
+  if (fallbackProjectEdits.length === 0) {
+    return aiSuggestions;
+  }
+
+  const hasProjectEdit = aiSuggestions.some(
+    (suggestion) => suggestion.type === "update_project",
+  );
+
+  if (hasProjectEdit) {
+    return aiSuggestions;
+  }
+
+  return filterAssistantSuggestions([
+    ...fallbackProjectEdits,
+    ...aiSuggestions,
+  ]);
 }
 
 async function createOpenAiSuggestions(
@@ -760,7 +795,10 @@ export async function POST(request: NextRequest) {
           profile,
           recentMessages,
         );
-        suggestions = aiResponse.suggestions;
+        suggestions = preserveFallbackProjectEdits(
+          aiResponse.suggestions,
+          fallbackResponse.suggestions,
+        );
         finalMessage = streamedMessage || aiResponse.message;
       } catch (error) {
         const note =

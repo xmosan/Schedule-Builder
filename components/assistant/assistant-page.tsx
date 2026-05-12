@@ -76,9 +76,12 @@ const examplePrompts = [
   "Create study blocks",
   "Suggest my Top 3",
 ];
+const confirmationPromptPattern =
+  /^(yes|yeah|yep|confirm|confirmed|apply|apply it|do it|save it|update it|make the change|alright|all right|ok|okay)(?:[\s,!.].*)?$/i;
 
 const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
   new_project: "Project draft",
+  update_project: "Project edit",
   suggested_weekly_block: "Schedule idea",
   suggested_next_action: "Next action",
   workload_warning: "Workload note",
@@ -88,6 +91,7 @@ const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
 
 const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
   new_project: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
+  update_project: "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
   suggested_weekly_block: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   suggested_next_action: "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
   workload_warning: "border-[#e7c783] bg-[#fff8e6] text-[#8a5d0a]",
@@ -97,6 +101,7 @@ const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
 
 const suggestionMarkerStyles: Record<AssistantSuggestionType, string> = {
   new_project: "bg-brand-teal",
+  update_project: "bg-brand-ocean",
   suggested_weekly_block: "bg-brand-teal",
   suggested_next_action: "bg-brand-ocean",
   workload_warning: "bg-[#c99725]",
@@ -132,6 +137,7 @@ function getErrorMessage(error: unknown) {
 function isActionableSuggestion(suggestion: AssistantSuggestion) {
   return (
     suggestion.type === "new_project" ||
+    suggestion.type === "update_project" ||
     suggestion.type === "suggested_weekly_block" ||
     suggestion.type === "suggested_next_action"
   );
@@ -143,6 +149,18 @@ function isEditableSuggestion(suggestion: AssistantSuggestion) {
 
 function isActionVisible(actionState?: ActionState) {
   return actionState?.status !== "removed";
+}
+
+function isPendingActionState(actionState?: ActionState) {
+  return (
+    !actionState ||
+    actionState.status === "pending" ||
+    actionState.status === "error"
+  );
+}
+
+function isConfirmationPrompt(prompt: string) {
+  return confirmationPromptPattern.test(prompt.trim());
 }
 
 function getActions(response?: AssistantPlanReviewResponse) {
@@ -307,6 +325,9 @@ function ActionCard({
   const detailItems = [
     suggestion.rationale ? { label: "Why this helps", value: suggestion.rationale } : null,
     suggestion.plannedTask ? { label: "Task", value: suggestion.plannedTask } : null,
+    suggestion.newProjectName
+      ? { label: "New project name", value: suggestion.newProjectName }
+      : null,
     suggestion.proposedNextAction
       ? { label: "Suggested next action", value: suggestion.proposedNextAction }
       : null,
@@ -368,13 +389,27 @@ function ActionCard({
           suggestion.estimatedHours ||
           suggestion.weeklyHours ||
           suggestion.category ||
-          suggestion.priority) &&
+          suggestion.priority ||
+          suggestion.deadline ||
+          suggestion.newProjectName) &&
         !isEditing ? (
           <div className="mt-4 grid gap-2 text-xs text-brand-ink/60 sm:grid-cols-3">
             {suggestion.projectName && (
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
                 <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Project</span>
                 <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.projectName}</span>
+              </div>
+            )}
+            {suggestion.newProjectName && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">New name</span>
+                <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.newProjectName}</span>
+              </div>
+            )}
+            {suggestion.deadline && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Deadline</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.deadline}</span>
               </div>
             )}
             {suggestion.category && (
@@ -414,11 +449,25 @@ function ActionCard({
           <div className="mt-4 grid gap-3 text-sm">
             {suggestion.projectName !== undefined && (
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Project</span>
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">
+                  {suggestion.type === "update_project" ? "Project to update" : "Project"}
+                </span>
                 <input
                   className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
                   value={suggestion.projectName ?? ""}
                   onChange={(event) => onUpdate({ projectName: event.target.value })}
+                />
+              </label>
+            )}
+            {suggestion.newProjectName !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">New project name</span>
+                <input
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  value={suggestion.newProjectName ?? ""}
+                  onChange={(event) =>
+                    onUpdate({ newProjectName: event.target.value })
+                  }
                 />
               </label>
             )}
@@ -577,6 +626,8 @@ function ActionCard({
                   ? "Applying..."
                   : suggestion.type === "new_project"
                     ? "Save project"
+                    : suggestion.type === "update_project"
+                      ? "Update project"
                     : "Apply"}
               </Button>
               {isEditableSuggestion(suggestion) && (
@@ -1170,6 +1221,115 @@ export function AssistantPage() {
     );
   }
 
+  function getLatestPendingActionReview() {
+    for (const message of [...messages].reverse()) {
+      if (message.role !== "assistant" || !message.response) {
+        continue;
+      }
+
+      const pendingActions = getActions(message.response).filter((suggestion) => {
+        const actionState = actionStates[suggestion.id];
+
+        return (
+          isActionableSuggestion(suggestion) &&
+          isActionVisible(actionState) &&
+          isPendingActionState(actionState)
+        );
+      });
+
+      if (pendingActions.length > 0) {
+        return {
+          messageId: message.id,
+          pendingActions,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  async function applyConfirmedSuggestion(
+    userMessage: ChatMessage,
+    assistantMessageId: string,
+    suggestion: AssistantSuggestion,
+  ) {
+    setMessages((current) => [
+      ...current,
+      userMessage,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "Applying the approved change...",
+        isStreaming: true,
+      },
+    ]);
+    setPrompt("");
+    setIsSubmitting(true);
+    setError(null);
+    updateActionState(suggestion.id, {
+      message: undefined,
+      status: "applying",
+    });
+
+    try {
+      const response = await requestApplyAction(suggestion);
+      const result = response.results[0];
+
+      setContext(response.context);
+      updateActionState(suggestion.id, {
+        editing: false,
+        message: result?.message ?? response.message,
+        status: result?.status === "applied" ? "applied" : "error",
+      });
+
+      const content =
+        result?.status === "applied"
+          ? `${result.message} Projects and Calendar will reflect the saved change from Supabase.`
+          : result?.message ??
+            "I could not apply that change. Open the review card and check the fields.";
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                content,
+                isStreaming: false,
+              }
+            : message,
+        ),
+      );
+
+      if (result?.status === "applied") {
+        addAssistantNotice(result.message || "Suggestion applied.");
+
+        window.setTimeout(() => {
+          removeSuggestionAfterAnimation(suggestion.id);
+        }, applySuccessExitDelayMs);
+      }
+    } catch (applyError) {
+      const message = getErrorMessage(applyError);
+
+      updateActionState(suggestion.id, {
+        message,
+        status: "error",
+      });
+      setMessages((current) =>
+        current.map((chatMessage) =>
+          chatMessage.id === assistantMessageId
+            ? {
+                ...chatMessage,
+                content: message,
+                isStreaming: false,
+              }
+            : chatMessage,
+        ),
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function sendPrompt(nextPrompt: string) {
     if (isSubmitting || status === "loading") {
       return;
@@ -1193,6 +1353,40 @@ export function AssistantPage() {
       content: trimmedPrompt,
     };
     const assistantMessageId = createId("assistant");
+
+    if (isConfirmationPrompt(trimmedPrompt)) {
+      const pendingReview = getLatestPendingActionReview();
+
+      if (pendingReview?.pendingActions.length === 1) {
+        await applyConfirmedSuggestion(
+          userMessage,
+          assistantMessageId,
+          pendingReview.pendingActions[0],
+        );
+        return;
+      }
+
+      if (pendingReview && pendingReview.pendingActions.length > 1) {
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            id: assistantMessageId,
+            role: "assistant",
+            content:
+              "I see more than one pending change. Open the review card and choose the exact update you want me to apply.",
+            isStreaming: false,
+          },
+        ]);
+        setOpenReviewMessages((current) => ({
+          ...current,
+          [pendingReview.messageId]: true,
+        }));
+        setPrompt("");
+        return;
+      }
+    }
+
     const assistantPlaceholder: ChatMessage = {
       id: assistantMessageId,
       role: "assistant",

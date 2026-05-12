@@ -1,6 +1,9 @@
 import type { PlannerType } from "@/lib/onboarding";
 import type { CalendarDeadline } from "@/lib/calendar";
-import { getProjectDeadlineBuckets } from "@/lib/calendar";
+import {
+  getExactProjectDeadlineDate,
+  getProjectDeadlineBuckets,
+} from "@/lib/calendar";
 import {
   getPlannedHours,
   projectCategories,
@@ -31,6 +34,7 @@ import {
 
 export const assistantSuggestionTypes = [
   "new_project",
+  "update_project",
   "suggested_weekly_block",
   "suggested_next_action",
   "workload_warning",
@@ -40,6 +44,7 @@ export const assistantSuggestionTypes = [
 
 export const assistantPlanningSuggestionTypes = [
   "new_project",
+  "update_project",
   "suggested_weekly_block",
   "suggested_next_action",
   "workload_warning",
@@ -85,6 +90,7 @@ export type AssistantSuggestion = {
   severity: AssistantSuggestionSeverity;
   category?: ProjectCategory;
   deadline?: string;
+  newProjectName?: string;
   projectName?: string;
   priority?: ProjectPriority;
   day?: WeekDay;
@@ -139,6 +145,8 @@ const openTimePromptPattern =
   /\b(find open time|open time|open slots|free time|available time|availability)\b/i;
 const projectDraftPromptPattern =
   /\b(create|add|start|draft|make|save)\b.*\b(project|goal|initiative|class|course|work)\b|\bnew project\b/i;
+const projectUpdatePromptPattern =
+  /\b(change|update|edit|move|set|shift|rename|adjust|confirm)\b.*\b(project|deadline|due date|priority|category|weekly hours|hours|next action|name)\b|\b(due date|deadline)\b.*\b(later|earlier|after|before|to|on|by)\b/i;
 
 export function isGreetingPrompt(prompt: string) {
   return greetingPattern.test(prompt.trim());
@@ -204,6 +212,10 @@ function createSuggestionId(prefix: string, index: number) {
 
 function getSuggestionPriority(suggestion: AssistantSuggestion) {
   if (suggestion.type === "new_project") {
+    return 6;
+  }
+
+  if (suggestion.type === "update_project") {
     return 6;
   }
 
@@ -390,6 +402,10 @@ function normalizeSuggestion(
     deadline:
       typeof candidate.deadline === "string"
         ? candidate.deadline.trim().slice(0, 120)
+        : undefined,
+    newProjectName:
+      typeof candidate.newProjectName === "string"
+        ? candidate.newProjectName.trim().slice(0, 120)
         : undefined,
     projectName:
       typeof candidate.projectName === "string"
@@ -643,6 +659,105 @@ function inferProjectDraftName(prompt: string) {
   return "New project";
 }
 
+function formatDeadlineDate(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "long",
+  }).format(date);
+}
+
+function addDays(date: Date, days: number) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+}
+
+function findPromptProject(projects: Project[], prompt: string) {
+  const normalizedPrompt = prompt.toLowerCase();
+  const activeProjects = projects.filter((project) => !project.completed);
+  const exactMatch = [...activeProjects]
+    .sort((first, second) => second.name.length - first.name.length)
+    .find((project) => normalizedPrompt.includes(project.name.toLowerCase()));
+
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (activeProjects.length === 1) {
+    return activeProjects[0];
+  }
+
+  return null;
+}
+
+function extractRequestedDeadline(prompt: string, currentDeadline: string) {
+  const explicitDateMatch = prompt.match(
+    /\b(?:to|on|by|for|be|as)\s+((?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}(?:,\s*\d{4})?|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i,
+  );
+
+  if (explicitDateMatch?.[1]) {
+    return explicitDateMatch[1].trim();
+  }
+
+  const relativeDateMatch = prompt.match(
+    /\b(\d{1,2})\s+days?\s+(later|after|out|earlier|before)\b/i,
+  );
+
+  if (!relativeDateMatch) {
+    return null;
+  }
+
+  const currentDate = getExactProjectDeadlineDate(currentDeadline);
+
+  if (!currentDate) {
+    return null;
+  }
+
+  const amount = Number(relativeDateMatch[1]);
+  const direction = /earlier|before/i.test(relativeDateMatch[2]) ? -1 : 1;
+
+  return formatDeadlineDate(addDays(currentDate, amount * direction));
+}
+
+function createFallbackProjectUpdateSuggestion(
+  context: AssistantPlanningContext,
+  prompt: string,
+): AssistantSuggestion | null {
+  if (!projectUpdatePromptPattern.test(prompt)) {
+    return null;
+  }
+
+  const project = findPromptProject(context.projects, prompt);
+
+  if (!project) {
+    return null;
+  }
+
+  const nextDeadline = extractRequestedDeadline(prompt, project.deadline);
+
+  if (!nextDeadline) {
+    return null;
+  }
+
+  const description = `Update ${project.name}'s deadline from ${
+    project.deadline || "No deadline"
+  } to ${nextDeadline}.`;
+
+  return {
+    id: "project-update-deadline",
+    type: "update_project",
+    title: `Update ${project.name}`,
+    description,
+    confidence: 0.82,
+    summary: description,
+    rationale:
+      "Project edits need your approval so the assistant never changes deadlines automatically.",
+    severity: "important",
+    deadline: nextDeadline,
+    projectName: project.name,
+  };
+}
+
 export function createCalendarConflictSuggestions(
   context: AssistantPlanningContext,
 ) {
@@ -709,6 +824,14 @@ export function createFallbackAssistantResponse(
     .filter((project) => project.priority === "High")
     .filter((project) => !existingBlockProjectNames.has(project.name.toLowerCase()))
     .slice(0, 2);
+  const projectUpdateSuggestion = createFallbackProjectUpdateSuggestion(
+    context,
+    prompt,
+  );
+
+  if (projectUpdateSuggestion) {
+    suggestions.push(projectUpdateSuggestion);
+  }
 
   if (projectDraftPromptPattern.test(prompt)) {
     const projectName = inferProjectDraftName(prompt);
@@ -905,6 +1028,8 @@ export function createFallbackAssistantResponse(
       ? `I’d look for open time around ${lightPlanningDayText} first. Those days have the lightest mix of plan blocks and fixed commitments right now.`
       : focusPromptPattern.test(prompt) && topProject
       ? `I’d start with ${topProject.name}. It has the strongest priority signal right now, so I’d make the next action visible first and keep the rest of the plan lighter around it.`
+      : projectUpdateSuggestion
+      ? "I drafted the project edit for review. Use the review card to apply it, and then the Projects and Calendar pages will update from Supabase."
       : projectDraftPromptPattern.test(prompt)
       ? "I drafted a project card you can review first. If it looks right, apply it and I’ll save it to your Projects list."
       : balancePromptPattern.test(prompt) && workScheduleSummary

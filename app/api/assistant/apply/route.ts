@@ -191,6 +191,7 @@ function isProjectPriority(value: unknown): value is ProjectPriority {
 function validateActionableSuggestion(suggestion: AssistantSuggestion) {
   if (
     suggestion.type !== "new_project" &&
+    suggestion.type !== "update_project" &&
     suggestion.type !== "suggested_weekly_block" &&
     suggestion.type !== "suggested_next_action"
   ) {
@@ -308,11 +309,19 @@ async function applyNewProjectSuggestion({
   }
 
   if (findProjectByName(currentProjects, projectName)) {
-    return createResult(
+    const result = await applyProjectUpdateSuggestion({
+      currentProjects,
       suggestion,
-      "error",
-      "A project with this name already exists.",
-    );
+      supabase,
+      userId,
+    });
+
+    return result.status === "applied"
+      ? {
+          ...result,
+          message: "Updated the existing project instead of creating a duplicate.",
+        }
+      : result;
   }
 
   if (!nextAction) {
@@ -368,6 +377,118 @@ async function applyNewProjectSuggestion({
   });
 
   return createResult(suggestion, "applied", "Created the project.");
+}
+
+async function applyProjectUpdateSuggestion({
+  currentProjects,
+  suggestion,
+  supabase,
+  userId,
+}: {
+  currentProjects: Project[];
+  suggestion: AssistantSuggestion;
+  supabase: SupabaseClient;
+  userId: string;
+}) {
+  const projectName = suggestion.projectName?.trim();
+
+  if (!projectName) {
+    return createResult(suggestion, "error", "Project name cannot be empty.");
+  }
+
+  const project = findProjectByName(currentProjects, projectName);
+
+  if (!project) {
+    return createResult(suggestion, "error", "Could not find that project.");
+  }
+
+  const updates: Partial<ProjectRow> = {};
+  const newProjectName = suggestion.newProjectName?.trim();
+  const nextAction = suggestion.proposedNextAction?.trim();
+  const deadline = suggestion.deadline?.trim();
+
+  if (newProjectName && newProjectName !== project.name) {
+    const duplicateProject = currentProjects.find(
+      (candidate) =>
+        candidate.id !== project.id &&
+        normalizeProjectKey(candidate.name) === normalizeProjectKey(newProjectName),
+    );
+
+    if (duplicateProject) {
+      return createResult(
+        suggestion,
+        "error",
+        "Another project already uses that name.",
+      );
+    }
+
+    updates.name = newProjectName;
+  }
+
+  if (deadline && deadline !== project.deadline) {
+    updates.deadline = deadline;
+  }
+
+  if (
+    suggestion.category &&
+    isProjectCategory(suggestion.category) &&
+    suggestion.category !== project.category
+  ) {
+    updates.category = suggestion.category;
+  }
+
+  if (
+    suggestion.priority &&
+    isProjectPriority(suggestion.priority) &&
+    suggestion.priority !== project.priority
+  ) {
+    updates.priority = suggestion.priority;
+  }
+
+  if (nextAction && nextAction !== project.nextAction) {
+    updates.next_action = nextAction;
+  }
+
+  if (suggestion.weeklyHours !== undefined) {
+    if (!Number.isFinite(suggestion.weeklyHours) || suggestion.weeklyHours < 0) {
+      return createResult(
+        suggestion,
+        "error",
+        "Project weekly hours must be 0 or greater.",
+      );
+    }
+
+    if (suggestion.weeklyHours !== project.weeklyHours) {
+      updates.weekly_hours = suggestion.weeklyHours;
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return createResult(
+      suggestion,
+      "skipped",
+      "No project fields changed in this suggestion.",
+    );
+  }
+
+  const { error } = await supabase
+    .from("projects")
+    .update(updates)
+    .eq("user_id", userId)
+    .eq("project_id", project.id);
+
+  if (error) {
+    return createResult(suggestion, "error", error.message);
+  }
+
+  if (updates.name) project.name = updates.name;
+  if (updates.deadline !== undefined) project.deadline = updates.deadline;
+  if (updates.category) project.category = updates.category;
+  if (updates.priority) project.priority = updates.priority;
+  if (updates.next_action) project.nextAction = updates.next_action;
+  if (updates.weekly_hours !== undefined) project.weeklyHours = updates.weekly_hours;
+
+  return createResult(suggestion, "applied", "Updated the project.");
 }
 
 async function applyNextActionSuggestion({
@@ -542,6 +663,18 @@ export async function POST(request: NextRequest) {
     if (item.normalized.type === "new_project") {
       results.push(
         await applyNewProjectSuggestion({
+          currentProjects,
+          suggestion: item.normalized,
+          supabase: authResult.supabase,
+          userId: authResult.userId,
+        }),
+      );
+      continue;
+    }
+
+    if (item.normalized.type === "update_project") {
+      results.push(
+        await applyProjectUpdateSuggestion({
           currentProjects,
           suggestion: item.normalized,
           supabase: authResult.supabase,
