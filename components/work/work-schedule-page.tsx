@@ -665,11 +665,7 @@ export function WorkSchedulePage() {
         <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_360px] lg:items-end">
             <div className="max-w-3xl">
-              <div className="eyebrow-chip">
-                <CalendarIcon className="h-4 w-4" />
-                Work Schedule
-              </div>
-              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
+              <h1 className="text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
                 Work Schedule
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
@@ -677,8 +673,7 @@ export function WorkSchedulePage() {
                 plan around them.
               </p>
               <p className="mt-3 rounded-[22px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
-                The Assistant can use these hours to avoid suggesting project
-                blocks during work.
+                Start by adding your regular work shifts. Schedule Builder will use them to avoid planning project blocks during unavailable time.
               </p>
             </div>
 
@@ -893,10 +888,7 @@ export function WorkSchedulePage() {
                           {status !== "loading" && dayShifts.length === 0 ? (
                             <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4">
                               <p className="text-sm font-semibold text-brand-ink/70">
-                                Open availability
-                              </p>
-                              <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                                Add work hours when this day is unavailable.
+                                No shifts yet
                               </p>
                             </div>
                           ) : null}
