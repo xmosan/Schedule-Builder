@@ -28,6 +28,11 @@ const desktopNavItems: SchedulerNavItem[] = [
     mobileLabel: "Plan",
   },
   {
+    href: "/calendar",
+    label: "Calendar",
+    mobileLabel: "Calendar",
+  },
+  {
     href: "/work",
     label: "Work Schedule",
     mobileLabel: "Work",
@@ -66,6 +71,11 @@ const mobileNavItems: SchedulerNavItem[] = [
     mobileLabel: "Plan",
   },
   {
+    href: "/calendar",
+    label: "Calendar",
+    mobileLabel: "Calendar",
+  },
+  {
     href: "/work",
     label: "Work Schedule",
     mobileLabel: "Work",
@@ -74,11 +84,6 @@ const mobileNavItems: SchedulerNavItem[] = [
     href: "/assistant",
     label: "Assistant",
     mobileLabel: "Assistant",
-  },
-  {
-    href: "/settings",
-    label: "Settings",
-    mobileLabel: "Settings",
   },
 ];
 
@@ -115,7 +120,7 @@ export function SchedulerNav() {
 
         <nav
           aria-label="Scheduler navigation"
-          className="hidden items-center gap-2 md:flex"
+          className="hidden flex-wrap items-center justify-end gap-2 md:flex"
         >
           {desktopNavItems.map((item) => {
             const isActive = isActiveRoute(pathname, item.href);
