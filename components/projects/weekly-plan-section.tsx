@@ -22,6 +22,7 @@ import {
   createWeeklyPlanBlock,
   formatEstimatedHours,
   formatStartTime,
+  normalizeStartTime,
   parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
@@ -42,6 +43,8 @@ type WeeklyPlanDraftState = {
   estimatedHours: string;
   startTime: string;
 };
+
+type FormTarget = "quick" | WeekDay;
 
 const weeklyBlockRemovalAnimationMs = 300;
 
@@ -65,11 +68,14 @@ function getBlockIdentityKey({
   day,
   plannedTask,
   projectName,
-}: Pick<WeeklyPlanBlock, "day" | "plannedTask" | "projectName">) {
+  startTime,
+}: Pick<WeeklyPlanBlock, "day" | "plannedTask" | "projectName"> &
+  Pick<Partial<WeeklyPlanBlock>, "startTime">) {
   return [
     day,
     normalizeBlockPart(projectName),
     normalizeBlockPart(plannedTask),
+    normalizeStartTime(startTime ?? "") ?? "flexible",
   ].join(":");
 }
 
@@ -100,10 +106,12 @@ export function WeeklyPlanSection({
     getInitialDraft(projects),
   );
   const [isAddFormOpen, setIsAddFormOpen] = useState(false);
+  const [activeDayForm, setActiveDayForm] = useState<WeekDay | null>(null);
   const [duplicateWarningKey, setDuplicateWarningKey] = useState<string | null>(
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [errorTarget, setErrorTarget] = useState<FormTarget | null>(null);
   const [exitingBlockIds, setExitingBlockIds] = useState<
     Record<string, boolean>
   >({});
@@ -174,6 +182,8 @@ export function WeeklyPlanSection({
       projectId: String(selectedProject.id),
       plannedTask: selectedProject.nextAction,
     }));
+    setIsAddFormOpen(true);
+    setActiveDayForm(null);
     setProjectFocusMessage(
       `${selectedProject.name} is selected. Choose a day and time estimate, then add it to your weekly plan.`,
     );
@@ -230,6 +240,7 @@ export function WeeklyPlanSection({
           day: draft.day,
           plannedTask: draft.plannedTask,
           projectName: selectedProject.name,
+          startTime: draft.startTime,
         })
       : null;
   const hasDuplicateDraft = Boolean(
@@ -256,6 +267,45 @@ export function WeeklyPlanSection({
 
     if (error) {
       setError(null);
+      setErrorTarget(null);
+    }
+  }
+
+  function showFormError(target: FormTarget, message: string) {
+    setError(message);
+    setErrorTarget(target);
+  }
+
+  function getProjectForDraft(projectId: string) {
+    return projects.find((project) => String(project.id) === projectId);
+  }
+
+  function openQuickAddForm() {
+    setIsAddFormOpen((current) => !current);
+    setActiveDayForm(null);
+    clearDraftWarnings();
+  }
+
+  function openDayForm(day: WeekDay) {
+    const shouldCloseForm = activeDayForm === day;
+
+    setIsAddFormOpen(false);
+    setActiveDayForm(shouldCloseForm ? null : day);
+
+    if (!shouldCloseForm) {
+      setDraft((draftState) => {
+        const draftProject =
+          getProjectForDraft(draftState.projectId) ?? projects[0] ?? null;
+
+        return {
+          ...draftState,
+          day,
+          projectId: draftProject ? String(draftProject.id) : "",
+          plannedTask:
+            draftState.plannedTask.trim() || draftProject?.nextAction || "",
+        };
+      });
+      clearDraftWarnings();
     }
   }
 
@@ -273,16 +323,22 @@ export function WeeklyPlanSection({
     clearDraftWarnings();
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>, target: FormTarget) {
     event.preventDefault();
 
     if (!selectedProject) {
-      setError("Add a project first, then schedule a weekly work block.");
+      showFormError(
+        target,
+        "Add a project first, then schedule a weekly work block.",
+      );
       return;
     }
 
     if (!hasValidDraftStartTime) {
-      setError("Choose a valid start time or leave the start time blank.");
+      showFormError(
+        target,
+        "Choose a valid start time or leave the start time blank.",
+      );
       return;
     }
 
@@ -295,7 +351,10 @@ export function WeeklyPlanSection({
     });
 
     if (!planBlock) {
-      setError("Add a task and a positive time estimate before saving.");
+      showFormError(
+        target,
+        "Add a task and a positive time estimate before saving.",
+      );
       return;
     }
 
@@ -306,7 +365,8 @@ export function WeeklyPlanSection({
       duplicateWarningKey !== nextBlockKey
     ) {
       setDuplicateWarningKey(nextBlockKey);
-      setError(
+      showFormError(
+        target,
         "A similar block already exists for that day. Click again if you still want to add another copy.",
       );
       return;
@@ -319,9 +379,14 @@ export function WeeklyPlanSection({
       estimatedHours: "1",
       startTime: "",
     }));
-    setIsAddFormOpen(false);
+    if (target === "quick") {
+      setIsAddFormOpen(false);
+    } else {
+      setActiveDayForm(null);
+    }
     setDuplicateWarningKey(null);
     setError(null);
+    setErrorTarget(null);
   }
 
   function handleCalendarExport() {
@@ -404,201 +469,272 @@ export function WeeklyPlanSection({
     }, weeklyBlockRemovalAnimationMs);
   }
 
-  return (
-    <section className="space-y-5 sm:space-y-6">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <div className="metric-card">
-            <p className="text-sm text-brand-ink/55">Planned hours</p>
-            <p className="mt-2 text-2xl font-semibold text-brand-ink">
-              {formatEstimatedHours(totalPlannedHours)}
-            </p>
+  function renderBlockForm(target: FormTarget, showDayField: boolean) {
+    const fieldSuffix = target === "quick" ? "quick" : target.toLowerCase();
+    const shouldShowError = error && errorTarget === target;
+
+    return (
+      <form
+        className={
+          showDayField
+            ? "mt-5 grid gap-4 lg:grid-cols-[160px_minmax(0,1fr)_170px]"
+            : "mt-4 space-y-3"
+        }
+        onSubmit={(event) => handleSubmit(event, target)}
+      >
+        {showDayField ? (
+          <div>
+            <label className="field-label" htmlFor={`plan-day-${fieldSuffix}`}>
+              Day
+            </label>
+            <Select
+              id={`plan-day-${fieldSuffix}`}
+              value={draft.day}
+              onChange={(event) => {
+                setDraft((current) => ({
+                  ...current,
+                  day: event.target.value as WeekDay,
+                }));
+                clearDraftWarnings();
+              }}
+            >
+              {weekDays.map((day) => (
+                <option key={day} value={day}>
+                  {day}
+                </option>
+              ))}
+            </Select>
           </div>
-          <div className="metric-card">
-            <p className="text-sm text-brand-ink/55">Days filled</p>
-            <p className="mt-2 text-2xl font-semibold text-brand-ink">
-              {filledDays}
-            </p>
-          </div>
-          <div className="metric-card">
-            <p className="text-sm text-brand-ink/55">Work blocks</p>
-            <p className="mt-2 text-2xl font-semibold text-brand-ink">
-              {planBlocks.length}
-            </p>
-          </div>
-          <div className="metric-card">
-            <p className="text-sm text-brand-ink/55">Projects ready</p>
-            <p className="mt-2 text-2xl font-semibold text-brand-ink">
-              {projects.filter((project) => !project.completed).length}
-            </p>
-          </div>
+        ) : null}
+
+        <div>
+          <label className="field-label" htmlFor={`plan-project-${fieldSuffix}`}>
+            Project
+          </label>
+          <Select
+            id={`plan-project-${fieldSuffix}`}
+            value={draft.projectId}
+            onChange={(event) => handleProjectChange(event.target.value)}
+            disabled={projects.length === 0}
+          >
+            {projects.length > 0 ? (
+              projects.map((project) => (
+                <option key={project.id} value={String(project.id)}>
+                  {project.name}
+                  {project.completed ? " (done)" : ""}
+                </option>
+              ))
+            ) : (
+              <option value="">No projects yet</option>
+            )}
+          </Select>
         </div>
 
-        <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
-          <CardContent className="p-4 sm:p-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex items-start gap-3">
-                <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
-                  <PlusIcon className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
-                    Plan a work block
-                  </h2>
-                  <p className="text-sm leading-6 text-brand-ink/60">
-                    Choose a day, project, task, start time, and realistic time
-                    estimate.
-                  </p>
-                </div>
-              </div>
-              <Button
-                aria-expanded={isAddFormOpen}
-                className="w-full sm:hidden"
-                size="sm"
-                type="button"
-                variant="outline"
-                onClick={() => setIsAddFormOpen((current) => !current)}
-              >
-                <PlusIcon className="h-4 w-4" />
-                {isAddFormOpen ? "Close form" : "Add work block"}
-              </Button>
-            </div>
+        <div className={showDayField ? "lg:col-span-2" : ""}>
+          <label className="field-label" htmlFor={`plan-task-${fieldSuffix}`}>
+            Planned task
+          </label>
+          <Input
+            id={`plan-task-${fieldSuffix}`}
+            placeholder="Draft the next deliverable"
+            value={draft.plannedTask}
+            onChange={(event) => {
+              setDraft((current) => ({
+                ...current,
+                plannedTask: event.target.value,
+              }));
+              clearDraftWarnings();
+            }}
+          />
+        </div>
 
-            <form
-              className={`mt-5 gap-4 lg:grid-cols-[160px_minmax(0,1fr)_170px] ${
-                isAddFormOpen ? "grid" : "hidden sm:grid"
-              }`}
-              onSubmit={handleSubmit}
+        <div className={showDayField ? "" : "grid gap-3"}>
+          <div>
+            <label
+              className="field-label"
+              htmlFor={`plan-start-time-${fieldSuffix}`}
             >
+              Start
+              <span className="font-normal text-brand-ink/45"> optional</span>
+            </label>
+            <Input
+              id={`plan-start-time-${fieldSuffix}`}
+              type="time"
+              value={draft.startTime}
+              onChange={(event) => {
+                setDraft((current) => ({
+                  ...current,
+                  startTime: event.target.value,
+                }));
+                clearDraftWarnings();
+              }}
+            />
+          </div>
+
+          {!showDayField ? (
+            <div>
+              <label className="field-label" htmlFor={`plan-hours-${fieldSuffix}`}>
+                Hours
+              </label>
+              <Input
+                id={`plan-hours-${fieldSuffix}`}
+                type="number"
+                min="0.5"
+                step="0.5"
+                inputMode="decimal"
+                placeholder="1"
+                value={draft.estimatedHours}
+                onChange={(event) => {
+                  setDraft((current) => ({
+                    ...current,
+                    estimatedHours: event.target.value,
+                  }));
+                  clearDraftWarnings();
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+
+        {showDayField ? (
+          <div>
+            <label className="field-label" htmlFor={`plan-hours-${fieldSuffix}`}>
+              Estimated time
+            </label>
+            <Input
+              id={`plan-hours-${fieldSuffix}`}
+              type="number"
+              min="0.5"
+              step="0.5"
+              inputMode="decimal"
+              placeholder="1"
+              value={draft.estimatedHours}
+              onChange={(event) => {
+                setDraft((current) => ({
+                  ...current,
+                  estimatedHours: event.target.value,
+                }));
+                clearDraftWarnings();
+              }}
+            />
+          </div>
+        ) : null}
+
+        <div
+          className={
+            showDayField
+              ? "flex items-end lg:col-span-3"
+              : "grid grid-cols-2 gap-2"
+          }
+        >
+          {showDayField ? null : (
+            <Button
+              className="w-full"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={() => setActiveDayForm(null)}
+            >
+              Cancel
+            </Button>
+          )}
+          <Button
+            className="w-full"
+            size={showDayField ? "default" : "sm"}
+            type="submit"
+            disabled={!canAddBlock}
+          >
+            <PlusIcon className="h-4 w-4" />
+            {isConfirmingDuplicate ? "Add anyway" : "Add block"}
+          </Button>
+        </div>
+
+        {projectFocusMessage && target === "quick" ? (
+          <p className="rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal lg:col-span-3">
+            {projectFocusMessage}
+          </p>
+        ) : null}
+
+        {shouldShowError ? (
+          <p className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral lg:col-span-3">
+            {error}
+          </p>
+        ) : null}
+      </form>
+    );
+  }
+
+  return (
+    <section className="space-y-5 sm:space-y-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="metric-card">
+          <p className="text-sm text-brand-ink/55">Planned hours</p>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">
+            {formatEstimatedHours(totalPlannedHours)}
+          </p>
+        </div>
+        <div className="metric-card">
+          <p className="text-sm text-brand-ink/55">Days filled</p>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">
+            {filledDays}
+          </p>
+        </div>
+        <div className="metric-card">
+          <p className="text-sm text-brand-ink/55">Work blocks</p>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">
+            {planBlocks.length}
+          </p>
+        </div>
+        <div className="metric-card">
+          <p className="text-sm text-brand-ink/55">Projects ready</p>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">
+            {projects.filter((project) => !project.completed).length}
+          </p>
+        </div>
+      </div>
+
+      <Card className="rounded-[28px] border-white/70 bg-white/78 sm:rounded-[32px]">
+        <CardContent className="p-4 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
+                <PlusIcon className="h-5 w-5" />
+              </div>
               <div>
-                <label className="field-label" htmlFor="plan-day">
-                  Day
-                </label>
-                <Select
-                  id="plan-day"
-                  value={draft.day}
-                  onChange={(event) => {
-                    setDraft((current) => ({
-                      ...current,
-                      day: event.target.value as WeekDay,
-                    }));
-                    clearDraftWarnings();
-                  }}
-                >
-                  {weekDays.map((day) => (
-                    <option key={day} value={day}>
-                      {day}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-
-              <div>
-                <label className="field-label" htmlFor="plan-project">
-                  Project
-                </label>
-                <Select
-                  id="plan-project"
-                  value={draft.projectId}
-                  onChange={(event) => handleProjectChange(event.target.value)}
-                  disabled={projects.length === 0}
-                >
-                  {projects.length > 0 ? (
-                    projects.map((project) => (
-                      <option key={project.id} value={String(project.id)}>
-                        {project.name}
-                        {project.completed ? " (done)" : ""}
-                      </option>
-                    ))
-                  ) : (
-                    <option value="">No projects yet</option>
-                  )}
-                </Select>
-              </div>
-
-              <div>
-                <label className="field-label" htmlFor="plan-start-time">
-                  Start time
-                  <span className="font-normal text-brand-ink/45"> optional</span>
-                </label>
-                <Input
-                  id="plan-start-time"
-                  type="time"
-                  value={draft.startTime}
-                  onChange={(event) => {
-                    setDraft((current) => ({
-                      ...current,
-                      startTime: event.target.value,
-                    }));
-                    clearDraftWarnings();
-                  }}
-                />
-              </div>
-
-              <div className="lg:col-span-2">
-                <label className="field-label" htmlFor="plan-task">
-                  Planned task
-                </label>
-                <Input
-                  id="plan-task"
-                  placeholder="Draft the next deliverable"
-                  value={draft.plannedTask}
-                  onChange={(event) => {
-                    setDraft((current) => ({
-                      ...current,
-                      plannedTask: event.target.value,
-                    }));
-                    clearDraftWarnings();
-                  }}
-                />
-              </div>
-
-              <div>
-                <label className="field-label" htmlFor="plan-hours">
-                  Estimated time
-                </label>
-                <Input
-                  id="plan-hours"
-                  type="number"
-                  min="0.5"
-                  step="0.5"
-                  inputMode="decimal"
-                  placeholder="1"
-                  value={draft.estimatedHours}
-                  onChange={(event) => {
-                    setDraft((current) => ({
-                      ...current,
-                      estimatedHours: event.target.value,
-                    }));
-                    clearDraftWarnings();
-                  }}
-                />
-              </div>
-
-              <div className="flex items-end lg:col-span-3">
-                <Button className="w-full" type="submit" disabled={!canAddBlock}>
-                  <PlusIcon className="h-4 w-4" />
-                  {isConfirmingDuplicate
-                    ? "Add similar block anyway"
-                    : "Add work block"}
-                </Button>
-              </div>
-
-              {projectFocusMessage ? (
-                <p className="rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal lg:col-span-3">
-                  {projectFocusMessage}
+                <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                  Quick add block
+                </h2>
+                <p className="text-sm leading-6 text-brand-ink/60">
+                  Prefer the board below for day-by-day planning. Use this
+                  shortcut when you already know the day.
                 </p>
-              ) : null}
+              </div>
+            </div>
+            <Button
+              aria-expanded={isAddFormOpen}
+              className="w-full sm:w-auto"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={openQuickAddForm}
+            >
+              <PlusIcon className="h-4 w-4" />
+              {isAddFormOpen ? "Close quick add" : "Open quick add"}
+            </Button>
+          </div>
 
-              {error ? (
-                <p className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral lg:col-span-3">
-                  {error}
-                </p>
-              ) : null}
-            </form>
-          </CardContent>
-        </Card>
+          {isAddFormOpen ? (
+            renderBlockForm("quick", true)
+          ) : (
+            <div className="mt-4 rounded-[22px] border border-dashed border-brand-ink/10 bg-white/55 p-4 text-sm leading-6 text-brand-ink/58">
+              Each day card has its own add button, so you can build the week
+              visually without starting from a big form.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
           {weekDays.map((day) => {
             const dayBlocks = blocksByDay[day];
             const dayHours = dayBlocks.reduce(
@@ -609,9 +745,9 @@ export function WeeklyPlanSection({
             return (
               <Card
                 key={day}
-                className="overflow-hidden rounded-[30px] border-white/70 bg-white/86 shadow-[0_18px_45px_rgba(18,32,47,0.07)] sm:rounded-[34px]"
+                className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/86 shadow-[0_18px_45px_rgba(18,32,47,0.07)] sm:rounded-[34px]"
               >
-                <CardContent className="p-4 sm:p-5">
+                <CardContent className="flex h-full flex-col p-4 sm:p-5 xl:p-3 2xl:p-4">
                   <div className="mb-4 flex items-start justify-between gap-3 border-b border-brand-ink/8 pb-4">
                     <div>
                       <h3 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink">
@@ -626,7 +762,7 @@ export function WeeklyPlanSection({
                     </Badge>
                   </div>
 
-                  <div className="space-y-3">
+                  <div className="flex flex-1 flex-col gap-3">
                     {dayBlocks.length > 0 ? (
                       dayBlocks.map((block, index) => (
                         <div
@@ -696,6 +832,42 @@ export function WeeklyPlanSection({
                         </p>
                       </div>
                     )}
+
+                    {activeDayForm === day ? (
+                      <div className="rounded-[24px] border border-brand-teal/18 bg-brand-teal/[0.045] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-brand-ink">
+                              Add to {day}
+                            </p>
+                            <p className="text-xs leading-5 text-brand-ink/52">
+                              Pick a project, task, time, and duration.
+                            </p>
+                          </div>
+                          <Button
+                            className="h-9 px-3 text-xs"
+                            size="sm"
+                            type="button"
+                            variant="secondary"
+                            onClick={() => setActiveDayForm(null)}
+                          >
+                            Close
+                          </Button>
+                        </div>
+                        {renderBlockForm(day, false)}
+                      </div>
+                    ) : (
+                      <Button
+                        className="w-full border-dashed"
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                        onClick={() => openDayForm(day)}
+                      >
+                        <PlusIcon className="h-4 w-4" />
+                        Add block
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -703,65 +875,65 @@ export function WeeklyPlanSection({
           })}
         </div>
 
-        <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
-          <CardContent className="p-4 sm:p-6">
-            <div className="flex items-start gap-3">
-              <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
-                <CalendarIcon className="h-5 w-5" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
-                  Export your weekly plan
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-                  Download an .ics file for Apple Calendar, Google Calendar, or
-                  Outlook.
-                </p>
-              </div>
+      <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+        <CardContent className="p-4 sm:p-6">
+          <div className="flex items-start gap-3">
+            <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
+              <CalendarIcon className="h-5 w-5" />
             </div>
-
-            <div className="mt-5">
-              <label className="field-label" htmlFor="export-week-start">
-                Week start date
-              </label>
-              <Input
-                id="export-week-start"
-                type="date"
-                value={exportWeekStart}
-                onChange={(event) => {
-                  setExportWeekStart(event.target.value);
-                  setExportError(null);
-                  setExportMessage(null);
-                }}
-              />
-              <p className="mt-2 text-sm leading-6 text-brand-ink/55">
-                Choose the Monday for this weekly plan. Blocks with start times
-                export at their scheduled time. Blocks without start times use
-                the default 9:00 AM order.
+            <div>
+              <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                Export your weekly plan
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-brand-ink/60">
+                Download an .ics file for Apple Calendar, Google Calendar, or
+                Outlook.
               </p>
             </div>
+          </div>
 
-            {exportError ? (
-              <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-sm font-medium leading-6 text-brand-coral">
-                {exportError}
-              </p>
-            ) : null}
+          <div className="mt-5">
+            <label className="field-label" htmlFor="export-week-start">
+              Week start date
+            </label>
+            <Input
+              id="export-week-start"
+              type="date"
+              value={exportWeekStart}
+              onChange={(event) => {
+                setExportWeekStart(event.target.value);
+                setExportError(null);
+                setExportMessage(null);
+              }}
+            />
+            <p className="mt-2 text-sm leading-6 text-brand-ink/55">
+              Choose the Monday for this weekly plan. Blocks with start times
+              export at their scheduled time. Blocks without start times use the
+              default 9:00 AM order.
+            </p>
+          </div>
 
-            {exportMessage ? (
-              <p className="mt-3 rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-3 py-2 text-sm font-medium leading-6 text-brand-teal">
-                {exportMessage}
-              </p>
-            ) : null}
+          {exportError ? (
+            <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-sm font-medium leading-6 text-brand-coral">
+              {exportError}
+            </p>
+          ) : null}
 
-            <Button
-              className="mt-4 w-full"
-              type="button"
-              onClick={handleCalendarExport}
-            >
-              Export to Calendar
-            </Button>
-          </CardContent>
-        </Card>
+          {exportMessage ? (
+            <p className="mt-3 rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-3 py-2 text-sm font-medium leading-6 text-brand-teal">
+              {exportMessage}
+            </p>
+          ) : null}
+
+          <Button
+            className="mt-4 w-full"
+            type="button"
+            onClick={handleCalendarExport}
+          >
+            Export to Calendar
+          </Button>
+        </CardContent>
+      </Card>
     </section>
   );
 }
