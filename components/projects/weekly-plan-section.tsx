@@ -490,6 +490,8 @@ export function WeeklyPlanSection({
     isTimed: boolean,
     duplicateCount: number,
   ) {
+    const timeLabel = isTimed ? formatStartTime(block.startTime) : "Flexible";
+
     return (
       <div
         key={block.id}
@@ -557,13 +559,12 @@ export function WeeklyPlanSection({
                   )}
                 >
                   <ClockIcon className="h-4 w-4" />
-                  {formatStartTime(block.startTime)}
-                </span>
-                <span className="inline-flex items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58">
+                  {timeLabel}
+                  <span className="text-brand-ink/25">•</span>
                   {formatEstimatedHours(block.estimatedHours)}
                 </span>
                 {duplicateCount > 1 ? (
-                  <span className="inline-flex items-center rounded-full border border-brand-coral/15 bg-brand-coral/[0.06] px-3 py-1.5 text-xs font-semibold text-brand-coral">
+                  <span className="inline-flex items-center rounded-full border border-brand-ink/8 bg-brand-ink/[0.035] px-3 py-1.5 text-xs font-semibold text-brand-ink/45">
                     Similar block appears {duplicateCount} times
                   </span>
                 ) : null}
@@ -811,8 +812,7 @@ export function WeeklyPlanSection({
                   Quick add block
                 </h2>
                 <p className="text-sm leading-6 text-brand-ink/60">
-                  Already know where it goes? Add a block quickly, or use a day
-                  card below.
+                  Add a block quickly, or use a day card below.
                 </p>
               </div>
             </div>
@@ -941,7 +941,7 @@ export function WeeklyPlanSection({
                           <div className="flex items-center gap-2 px-1">
                             <span className="h-1.5 w-1.5 rounded-full bg-brand-ink/30" />
                             <p className="text-[0.68rem] font-bold uppercase tracking-[0.22em] text-brand-ink/45">
-                              Flexible
+                              Anytime
                             </p>
                           </div>
                           <div className="space-y-2">
