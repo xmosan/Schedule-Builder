@@ -88,14 +88,14 @@ export const integrations: IntegrationCardData[] = [
   },
   {
     id: "ics-upload-import",
-    name: "Calendar Export",
+    name: "Calendar Import / Export",
     onboardingName: "ICS import/export",
     monogram: "ICS",
-    category: "Export Available",
+    category: "Import and export available",
     description:
-      "Export your weekly plan to Apple Calendar, Google Calendar, or Outlook.",
+      "Export your weekly plan or import calendar files from school, work, or calendar apps.",
     whyItHelps:
-      "Provides a flexible bridge to export calendar data before native connections launch.",
+      "Provides a flexible bridge for moving schedule data in or out before native connections launch.",
     accentClassName:
       "bg-[#edf6fb] text-[#155e75] ring-1 ring-inset ring-[#d3e9f1]",
     status: "available",

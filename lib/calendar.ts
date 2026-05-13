@@ -1,4 +1,5 @@
 import type { Project } from "@/lib/projects";
+import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
 import {
   formatStartTime,
   parseStartTimeToMinutes,
@@ -20,6 +21,7 @@ export type CalendarDaySchedule = {
   dateLabel: string;
   day: WeekDay;
   deadlines: CalendarDeadline[];
+  importedEvents: ImportedCalendarEvent[];
   isoDate: string;
   planBlocks: WeeklyPlanBlock[];
   workShifts: WorkShift[];
@@ -32,6 +34,7 @@ export type CalendarMonthDaySchedule = CalendarDaySchedule & {
 };
 
 type BuildCalendarDaysOptions = {
+  importedEvents: ImportedCalendarEvent[];
   planBlocks: WeeklyPlanBlock[];
   projects: Project[];
   weekStart?: Date;
@@ -309,6 +312,7 @@ export function getWeekDates(
       dateLabel: formatDateLabel(date),
       day,
       deadlines: [],
+      importedEvents: [],
       isoDate: toIsoDate(date),
       planBlocks: [],
       workShifts: [],
@@ -339,6 +343,7 @@ export function getMonthDates(
       day: getWeekDayFromDate(date),
       dayNumber: date.getDate(),
       deadlines: [],
+      importedEvents: [],
       isCurrentMonth: isSameMonthDate(date, monthStart),
       isToday: toIsoDate(date) === todayIsoDate,
       isoDate: toIsoDate(date),
@@ -360,6 +365,7 @@ export function getWeekRangeLabel(weekDates: Pick<CalendarDaySchedule, "date">[]
 }
 
 export function buildCalendarDays({
+  importedEvents,
   planBlocks,
   projects,
   weekStart = getCurrentWeekStart(),
@@ -393,9 +399,16 @@ export function buildCalendarDays({
     const dayWorkShifts = workShifts
       .filter((shift) => shift.day === weekDate.day)
       .sort((first, second) => first.startTime.localeCompare(second.startTime));
+    const dayImportedEvents = importedEvents
+      .filter((event) => toIsoDate(new Date(event.startsAt)) === weekDate.isoDate)
+      .sort(
+        (first, second) =>
+          new Date(first.startsAt).getTime() - new Date(second.startsAt).getTime(),
+      );
 
     return {
       ...weekDate,
+      importedEvents: dayImportedEvents,
       planBlocks: dayPlanBlocks,
       workShifts: dayWorkShifts,
     };
@@ -435,6 +448,7 @@ export function buildCalendarDays({
 }
 
 export function buildCalendarMonth({
+  importedEvents,
   monthDate = getCurrentMonthStart(),
   planBlocks,
   projects,
@@ -481,9 +495,16 @@ export function buildCalendarMonth({
     const dayWorkShifts = workShifts
       .filter((shift) => shift.day === monthDay.day)
       .sort((first, second) => first.startTime.localeCompare(second.startTime));
+    const dayImportedEvents = importedEvents
+      .filter((event) => toIsoDate(new Date(event.startsAt)) === monthDay.isoDate)
+      .sort(
+        (first, second) =>
+          new Date(first.startsAt).getTime() - new Date(second.startsAt).getTime(),
+      );
 
     return {
       ...monthDay,
+      importedEvents: dayImportedEvents,
       planBlocks: dayPlanBlocks,
       workShifts: dayWorkShifts,
     };

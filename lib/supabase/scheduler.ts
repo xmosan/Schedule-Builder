@@ -11,6 +11,11 @@ import {
 } from "@/lib/onboarding";
 import type { Project, ProjectCategory, ProjectPriority } from "@/lib/projects";
 import {
+  sortImportedCalendarEvents,
+  type ImportedCalendarEvent,
+  type ImportedCalendarEventDraft,
+} from "@/lib/imported-calendar";
+import {
   normalizeStartTime,
   type WeekDay,
   type WeeklyPlanBlock,
@@ -63,6 +68,20 @@ type WorkShiftRow = {
   location: string | null;
   notes: string | null;
   recurring: boolean;
+};
+
+type ImportedCalendarEventRow = {
+  id: string;
+  user_id: string;
+  source: string;
+  external_uid: string | null;
+  title: string;
+  description: string | null;
+  location: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  all_day: boolean;
+  imported_at: string;
 };
 
 function createTimeoutError(operation: string) {
@@ -223,6 +242,57 @@ function mapWorkShiftDraftToRow(
     notes: draft.notes.trim(),
     recurring: draft.recurring,
   };
+}
+
+function mapImportedCalendarEventRowToEvent(
+  row: ImportedCalendarEventRow,
+): ImportedCalendarEvent {
+  return {
+    id: row.id,
+    source: row.source,
+    externalUid: row.external_uid ?? "",
+    title: row.title,
+    description: row.description ?? "",
+    location: row.location ?? "",
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    allDay: row.all_day,
+    importedAt: row.imported_at,
+  };
+}
+
+function mapImportedCalendarEventDraftToRow(
+  userId: string,
+  draft: ImportedCalendarEventDraft,
+): Omit<ImportedCalendarEventRow, "id" | "imported_at"> {
+  return {
+    user_id: userId,
+    source: draft.source || "ics",
+    external_uid: draft.externalUid.trim() || null,
+    title: draft.title.trim(),
+    description: draft.description.trim() || null,
+    location: draft.location.trim() || null,
+    starts_at: draft.startsAt,
+    ends_at: draft.endsAt,
+    all_day: draft.allDay,
+  };
+}
+
+function createImportedEventDuplicateKey(
+  event: Pick<
+    ImportedCalendarEvent,
+    "endsAt" | "externalUid" | "source" | "startsAt" | "title"
+  >,
+) {
+  const externalUid = event.externalUid.trim();
+
+  if (externalUid) {
+    return `${event.source}:uid:${externalUid}`;
+  }
+
+  return `${event.source}:event:${event.title.trim().toLowerCase()}:${
+    event.startsAt
+  }:${event.endsAt ?? ""}`;
 }
 
 function mapOnboardingAnswersToRow(
@@ -600,4 +670,109 @@ export async function deleteWorkShiftForUser(
   );
 
   return { error: result.error };
+}
+
+export async function fetchImportedCalendarEventsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("imported_calendar_events")
+      .select(
+        "id, user_id, source, external_uid, title, description, location, starts_at, ends_at, all_day, imported_at",
+      )
+      .eq("user_id", userId)
+      .order("starts_at", { ascending: true }),
+    "Loading imported calendar events from Supabase",
+  );
+
+  return {
+    data: sortImportedCalendarEvents(
+      result.data?.map((row) =>
+        mapImportedCalendarEventRowToEvent(row as ImportedCalendarEventRow),
+      ) ?? [],
+    ),
+    error: result.error,
+  };
+}
+
+export async function createImportedCalendarEventsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  drafts: ImportedCalendarEventDraft[],
+) {
+  const existingResult = await withSupabaseTimeout(
+    supabase
+      .from("imported_calendar_events")
+      .select("id, source, external_uid, title, starts_at, ends_at")
+      .eq("user_id", userId),
+    "Checking existing imported calendar events in Supabase",
+  );
+
+  if (existingResult.error) {
+    return {
+      data: [] as ImportedCalendarEvent[],
+      error: existingResult.error,
+      skippedDuplicates: 0,
+    };
+  }
+
+  const existingKeys = new Set(
+    (existingResult.data ?? []).map((row) => {
+      const event = row as Pick<
+        ImportedCalendarEventRow,
+        "ends_at" | "external_uid" | "source" | "starts_at" | "title"
+      >;
+
+      return createImportedEventDuplicateKey({
+        source: event.source,
+        externalUid: event.external_uid ?? "",
+        title: event.title,
+        startsAt: event.starts_at,
+        endsAt: event.ends_at,
+      });
+    }),
+  );
+  const rows = drafts
+    .filter((draft) => {
+      const key = createImportedEventDuplicateKey(draft);
+
+      if (existingKeys.has(key)) {
+        return false;
+      }
+
+      existingKeys.add(key);
+      return true;
+    })
+    .map((draft) => mapImportedCalendarEventDraftToRow(userId, draft));
+  const skippedDuplicates = drafts.length - rows.length;
+
+  if (rows.length === 0) {
+    return {
+      data: [] as ImportedCalendarEvent[],
+      error: null as SchedulerSyncError | null,
+      skippedDuplicates,
+    };
+  }
+
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("imported_calendar_events")
+      .insert(rows)
+      .select(
+        "id, user_id, source, external_uid, title, description, location, starts_at, ends_at, all_day, imported_at",
+      ),
+    "Saving imported calendar events to Supabase",
+  );
+
+  return {
+    data: sortImportedCalendarEvents(
+      result.data?.map((row) =>
+        mapImportedCalendarEventRowToEvent(row as ImportedCalendarEventRow),
+      ) ?? [],
+    ),
+    error: result.error,
+    skippedDuplicates,
+  };
 }

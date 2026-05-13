@@ -71,12 +71,22 @@ export function IntegrationCard({
 
         <div className="mt-6 flex flex-wrap gap-3">
           {integration.status === "available" ? (
-            <Link
-              href="/plan"
-              className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
-            >
-              Export from Weekly Plan
-            </Link>
+            <>
+              <Link
+                href="/plan"
+                className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
+              >
+                Export from Weekly Plan
+              </Link>
+              {integration.id === "ics-upload-import" ? (
+                <Link
+                  href="#import-ics"
+                  className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-ink/10 bg-white/75 px-6 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white sm:w-auto"
+                >
+                  Import ICS File
+                </Link>
+              ) : null}
+            </>
           ) : (
             <div className="inline-flex h-11 items-center justify-center px-1 text-sm font-medium text-brand-ink/40">
               Connection planned

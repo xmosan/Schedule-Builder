@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { IcsImportPanel } from "@/components/calendar/ics-import-panel";
 import {
   CalendarIcon,
   ClockIcon,
@@ -11,6 +12,11 @@ import {
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  formatImportedEventTimeRange,
+  getImportedEventDurationHours,
+  type ImportedCalendarEvent,
+} from "@/lib/imported-calendar";
 import {
   buildCalendarDays,
   buildCalendarMonth,
@@ -30,6 +36,7 @@ import {
 } from "@/lib/supabase/client";
 import {
   fetchProjectsForUser,
+  fetchImportedCalendarEventsForUser,
   fetchWeeklyPlanBlocksForUser,
   fetchWorkShiftsForUser,
 } from "@/lib/supabase/scheduler";
@@ -47,6 +54,7 @@ type CalendarView = "week" | "month";
 type CalendarFilters = {
   deadlines: boolean;
   flexible: boolean;
+  importedEvents: boolean;
   planBlocks: boolean;
   workShifts: boolean;
 };
@@ -54,6 +62,7 @@ type CalendarFilters = {
 const defaultFilters: CalendarFilters = {
   deadlines: true,
   flexible: true,
+  importedEvents: true,
   planBlocks: true,
   workShifts: true,
 };
@@ -75,6 +84,10 @@ const filterItems: Array<{
     label: "Deadlines",
   },
   {
+    key: "importedEvents",
+    label: "Imported events",
+  },
+  {
     key: "flexible",
     label: "Flexible blocks",
   },
@@ -84,6 +97,7 @@ type MonthIndicatorTone =
   | "conflict"
   | "deadline"
   | "flexible"
+  | "imported"
   | "plan"
   | "work";
 
@@ -110,7 +124,8 @@ function getMissingTableMessage(error: unknown) {
   if (
     message.includes("projects") ||
     message.includes("weekly_plan_blocks") ||
-    message.includes("work_shifts")
+    message.includes("work_shifts") ||
+    message.includes("imported_calendar_events")
   ) {
     return "One of the scheduler tables is missing or unavailable in Supabase. Check the project schema, then refresh this page.";
   }
@@ -130,16 +145,26 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
     ? day.planBlocks.filter((block) => filters.flexible || block.startTime)
     : [];
   const deadlines = filters.deadlines ? day.deadlines : [];
+  const importedEvents = filters.importedEvents ? day.importedEvents : [];
   const scheduledHours =
     workShifts.reduce(
       (sum, shift) => sum + getWorkShiftDurationHours(shift),
       0,
-    ) + planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0);
+    ) +
+    planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0) +
+    importedEvents.reduce(
+      (sum, event) => sum + getImportedEventDurationHours(event),
+      0,
+    );
 
   return {
     deadlines,
     hasEvents:
-      workShifts.length > 0 || planBlocks.length > 0 || deadlines.length > 0,
+      workShifts.length > 0 ||
+      planBlocks.length > 0 ||
+      deadlines.length > 0 ||
+      importedEvents.length > 0,
+    importedEvents,
     planBlocks,
     scheduledHours,
     workShifts,
@@ -213,12 +238,22 @@ function getMonthEventSummary(
     });
   }
 
+  if (visibleDay.importedEvents.length > 0) {
+    indicators.push({
+      count: visibleDay.importedEvents.length,
+      id: "imported",
+      label: "Imported",
+      tone: "imported",
+    });
+  }
+
   return {
     indicators,
     totalItems:
       visibleDay.workShifts.length +
       visibleDay.planBlocks.length +
-      visibleDay.deadlines.length,
+      visibleDay.deadlines.length +
+      visibleDay.importedEvents.length,
     visibleDay,
   };
 }
@@ -234,6 +269,10 @@ function getMonthEventToneClass(tone: MonthIndicatorTone) {
 
   if (tone === "deadline") {
     return "border-brand-coral/16 bg-brand-coral/[0.08] text-brand-coral";
+  }
+
+  if (tone === "imported") {
+    return "border-brand-ink/10 bg-brand-ink/[0.045] text-brand-ink/70";
   }
 
   if (tone === "flexible") {
@@ -337,6 +376,38 @@ function DeadlineEvent({
   );
 }
 
+function ImportedCalendarEventCard({
+  event,
+}: {
+  event: ImportedCalendarEvent;
+}) {
+  return (
+    <div className="rounded-[22px] border border-brand-ink/10 bg-brand-ink/[0.035] p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge className="bg-brand-ink/8 text-brand-ink/70" variant="subtle">
+          Imported event
+        </Badge>
+        <span className="text-xs font-semibold text-brand-ink/45">
+          {formatImportedEventTimeRange(event)}
+        </span>
+      </div>
+      <p className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
+        {event.title}
+      </p>
+      {event.location ? (
+        <p className="mt-1 text-sm leading-6 text-brand-ink/62">
+          {event.location}
+        </p>
+      ) : null}
+      {event.description ? (
+        <p className="mt-2 line-clamp-3 text-sm leading-6 text-brand-ink/56">
+          {event.description}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function MonthIndicatorBadge({
   label,
   tone,
@@ -362,6 +433,8 @@ function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
       ? "bg-brand-coral"
       : tone === "work"
       ? "bg-brand-ocean"
+      : tone === "imported"
+        ? "bg-brand-ink/55"
       : tone === "deadline"
         ? "bg-brand-coral"
         : tone === "flexible"
@@ -423,7 +496,7 @@ function MonthDayDetail({
                 Open day
               </p>
               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                No work shifts, plan blocks, or deadlines yet.
+                No work shifts, plan blocks, imported events, or deadlines yet.
               </p>
             </div>
           ) : null}
@@ -446,6 +519,10 @@ function MonthDayDetail({
               deadlineText={deadline.deadlineText}
               projectName={deadline.projectName}
             />
+          ))}
+
+          {visibleDay.importedEvents.map((event) => (
+            <ImportedCalendarEventCard key={event.id} event={event} />
           ))}
         </div>
       </CardContent>
@@ -594,6 +671,7 @@ export function CalendarPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [planBlocks, setPlanBlocks] = useState<WeeklyPlanBlock[]>([]);
   const [workShifts, setWorkShifts] = useState<WorkShift[]>([]);
+  const [importedEvents, setImportedEvents] = useState<ImportedCalendarEvent[]>([]);
   const [filters, setFilters] = useState<CalendarFilters>(defaultFilters);
   const [view, setView] = useState<CalendarView>("week");
   const [monthDate, setMonthDate] = useState(() => new Date());
@@ -632,11 +710,13 @@ export function CalendarPage() {
           return;
         }
 
-        const [projectsResult, planResult, workResult] = await Promise.all([
-          fetchProjectsForUser(supabase, userId),
-          fetchWeeklyPlanBlocksForUser(supabase, userId),
-          fetchWorkShiftsForUser(supabase, userId),
-        ]);
+        const [projectsResult, planResult, workResult, importedEventsResult] =
+          await Promise.all([
+            fetchProjectsForUser(supabase, userId),
+            fetchWeeklyPlanBlocksForUser(supabase, userId),
+            fetchWorkShiftsForUser(supabase, userId),
+            fetchImportedCalendarEventsForUser(supabase, userId),
+          ]);
 
         if (!isActive) {
           return;
@@ -645,12 +725,14 @@ export function CalendarPage() {
         setProjects(projectsResult.data);
         setPlanBlocks(planResult.data);
         setWorkShifts(workResult.data);
+        setImportedEvents(importedEventsResult.data);
         setStatus("ready");
 
         const errors = [
           projectsResult.error,
           planResult.error,
           workResult.error,
+          importedEventsResult.error,
         ].filter(Boolean);
 
         setError(errors.length > 0 ? getMissingTableMessage(errors[0]) : null);
@@ -674,22 +756,24 @@ export function CalendarPage() {
   const calendar = useMemo(
     () =>
       buildCalendarDays({
+        importedEvents,
         planBlocks,
         projects,
         workShifts,
       }),
-    [planBlocks, projects, workShifts],
+    [importedEvents, planBlocks, projects, workShifts],
   );
 
   const monthCalendar = useMemo(
     () =>
       buildCalendarMonth({
+        importedEvents,
         monthDate,
         planBlocks,
         projects,
         workShifts,
       }),
-    [monthDate, planBlocks, projects, workShifts],
+    [importedEvents, monthDate, planBlocks, projects, workShifts],
   );
 
   const planWorkConflicts = useMemo(
@@ -718,12 +802,18 @@ export function CalendarPage() {
       return (
         day.workShifts.length > 0 ||
         day.planBlocks.length > 0 ||
-        day.deadlines.length > 0
+        day.deadlines.length > 0 ||
+        day.importedEvents.length > 0
       );
     }).length;
+    const importedEventCount = calendar.days.reduce(
+      (sum, day) => sum + day.importedEvents.length,
+      0,
+    );
 
     return {
       daysWithCommitments,
+      importedEventCount,
       openDays: Math.max(0, 7 - daysWithCommitments),
       plannedProjectHours,
       workHours,
@@ -748,10 +838,15 @@ export function CalendarPage() {
       (sum, day) => sum + day.deadlines.length,
       0,
     );
+    const importedEventCount = visibleDays.reduce(
+      (sum, day) => sum + day.importedEvents.length,
+      0,
+    );
     const openDays = visibleDays.filter((day) => !day.hasEvents).length;
 
     return {
       deadlines,
+      importedEventCount,
       openDays,
       plannedBlocks,
       workShiftDays,
@@ -774,8 +869,8 @@ export function CalendarPage() {
             value: weekSummary.daysWithCommitments,
           },
           {
-            label: "Open days",
-            value: weekSummary.openDays,
+            label: "Imported events",
+            value: weekSummary.importedEventCount,
           },
         ]
       : [
@@ -792,8 +887,8 @@ export function CalendarPage() {
             value: monthSummary.deadlines,
           },
           {
-            label: "Open days",
-            value: monthSummary.openDays,
+            label: "Imported",
+            value: monthSummary.importedEventCount,
           },
         ];
 
@@ -834,8 +929,8 @@ export function CalendarPage() {
                 Calendar
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                See work shifts, planned blocks, and project deadlines in one
-                calendar view.
+                See work shifts, planned blocks, imported events, and project
+                deadlines in one calendar view.
               </p>
               <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <div className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/78 p-1 shadow-[0_12px_28px_rgba(18,32,47,0.06)]">
@@ -974,6 +1069,19 @@ export function CalendarPage() {
               </div>
             </section>
 
+            <IcsImportPanel
+              compact
+              onImported={(events) =>
+                setImportedEvents((current) =>
+                  [...current, ...events].sort(
+                    (first, second) =>
+                      new Date(first.startsAt).getTime() -
+                      new Date(second.startsAt).getTime(),
+                  ),
+                )
+              }
+            />
+
             {error ? (
               <p className="rounded-[22px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral">
                 {error}
@@ -1021,7 +1129,7 @@ export function CalendarPage() {
                                 Open day
                               </p>
                               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                                No work shifts, plan blocks, or deadlines yet.
+                                No work shifts, plan blocks, imported events, or deadlines yet.
                               </p>
                             </div>
                           ) : null}
@@ -1044,6 +1152,10 @@ export function CalendarPage() {
                               deadlineText={deadline.deadlineText}
                               projectName={deadline.projectName}
                             />
+                          ))}
+
+                          {visibleDay.importedEvents.map((event) => (
+                            <ImportedCalendarEventCard key={event.id} event={event} />
                           ))}
                         </div>
                       </CardContent>

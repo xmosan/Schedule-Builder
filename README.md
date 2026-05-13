@@ -28,10 +28,11 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `https://schedule-builder-ruddy.vercel.app`
    - Any Vercel preview URLs you want to test
 7. In Supabase SQL Editor, run the SQL in `supabase/schema.sql`.
-   - This creates `projects`, `weekly_plan_blocks`, `planner_profiles`, and `work_shifts`.
+   - This creates `projects`, `weekly_plan_blocks`, `planner_profiles`, `work_shifts`, and `imported_calendar_events`.
    - `planner_profiles` stores onboarding answers and uses Row Level Security so each user only sees their own setup.
    - `work_shifts` stores manual work availability and uses Row Level Security so each user only sees their own shifts.
-   - If your existing Supabase project already has the scheduler tables, you can run `supabase/onboarding.sql` for onboarding and `supabase/work-shifts.sql` for work schedule support.
+   - `imported_calendar_events` stores reviewed ICS imports and uses Row Level Security so each user only sees their own imported calendar events.
+   - If your existing Supabase project already has the scheduler tables, you can run `supabase/onboarding.sql` for onboarding, `supabase/work-shifts.sql` for work schedule support, and `supabase/imported-calendar-events.sql` for ICS import.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.
    - Magic link sign-in also uses the Email provider.
@@ -85,6 +86,18 @@ Weekly Plan blocks can be exported as an `.ics` file for Apple Calendar, Google 
 4. Import `schedule-builder-weekly-plan.ics` into your calendar app.
 
 Each block becomes a calendar event using the project name as the title, the planned task as the description, and the estimated hours as the event duration. Blocks start at 9:00 AM on each selected day and stack in the order shown.
+
+## Calendar import
+
+Schedule Builder can import `.ics` calendar files from school portals, calendar apps, or exported work calendars.
+
+1. Open `/integrations` or `/calendar`.
+2. Choose **Import ICS file**.
+3. Upload a `.ics` file.
+4. Review the preview list and choose which events to import.
+5. Click **Import selected**.
+
+Imported events are saved to `imported_calendar_events` in Supabase and appear on the Calendar week and month views. Duplicate imports are skipped when an event has the same ICS UID, or when a UID is missing and the title/start/end match an existing imported event. Recurring rules are not expanded yet; if an ICS file already contains expanded event instances, those instances can be imported.
 
 ## Work Schedule
 
@@ -154,6 +167,8 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 - `components/ui/` contains lightweight reusable UI primitives used by the app.
 - `components/work/` contains the manual work schedule UI.
 - `lib/calendar-export.ts` generates downloadable calendar files for Weekly Plan exports.
+- `lib/ics-import.ts` parses uploaded ICS calendar files for review-first import.
+- `lib/imported-calendar.ts` holds imported calendar event types and formatting helpers.
 - `lib/assistant.ts` contains assistant response types, context summaries, and fallback suggestion rules.
 - `lib/projects.ts` holds project types, storage helpers, and ranking helpers for the Top 3 logic.
 - `lib/onboarding.ts` holds onboarding types, answer options, and use-case starter projects.
@@ -162,6 +177,7 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 - `lib/supabase/` contains the Supabase browser client and scheduler sync helpers.
 - `public/` contains PWA icons and the lightweight service worker.
 - `supabase/schema.sql` contains the database tables and RLS policies required for sync.
+- `supabase/imported-calendar-events.sql` contains the standalone migration for ICS imported calendar events.
 
 ## Notes
 

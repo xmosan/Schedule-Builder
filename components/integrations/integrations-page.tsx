@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { IcsImportPanel } from "@/components/calendar/ics-import-panel";
 import { useEffect, useMemo, useState } from "react";
 import { CalendarIcon } from "@/components/projects/icons";
 import { IntegrationCard } from "@/components/integrations/integration-card";
@@ -230,7 +230,8 @@ export function IntegrationsPage() {
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Bring calendar events, deadlines, and planning workflows into Schedule Builder.
+                Bring calendar events, deadlines, and planning workflows into
+                Schedule Builder.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2.5">
@@ -247,7 +248,7 @@ export function IntegrationsPage() {
                 <div className="mt-4 space-y-3">
                   <div className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4">
                     <p className="text-sm leading-6 text-brand-ink/70">
-                      <span className="font-semibold text-brand-ink">Start with calendar export today.</span> Direct calendar and school/work connections are planned next.
+                      <span className="font-semibold text-brand-ink">Start with calendar import/export today.</span> Direct calendar and school/work connections are planned next.
                     </p>
                   </div>
                 </div>
@@ -284,6 +285,10 @@ export function IntegrationsPage() {
             })}
           </section>
         </div>
+
+        <section id="import-ics" className="scroll-mt-6">
+          <IcsImportPanel />
+        </section>
 
         <div className="mt-8 lg:mt-12">
           <h2 className="mb-5 text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
