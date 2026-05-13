@@ -27,7 +27,9 @@ import {
 } from "@/lib/calendar";
 import type { Project } from "@/lib/projects";
 import {
+  findWeeklyPlanImportedEventConflicts,
   findWeeklyPlanWorkConflicts,
+  type WeeklyPlanImportedEventConflict,
   type WeeklyPlanWorkConflict,
 } from "@/lib/schedule-conflicts";
 import {
@@ -175,6 +177,7 @@ function getMonthEventSummary(
   day: CalendarMonthDaySchedule,
   filters: CalendarFilters,
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>,
+  importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>,
 ) {
   const visibleDay = getVisibleDayData(day, filters);
   const timedPlanBlocks = visibleDay.planBlocks.filter(
@@ -189,8 +192,10 @@ function getMonthEventSummary(
     label: string;
     tone: MonthIndicatorTone;
   }> = [];
-  const conflictingBlocks = visibleDay.planBlocks.filter((block) =>
-    conflictByBlockId.has(block.id),
+  const conflictingBlocks = visibleDay.planBlocks.filter(
+    (block) =>
+      conflictByBlockId.has(block.id) ||
+      importedConflictByBlockId.has(block.id),
   );
 
   if (conflictingBlocks.length > 0) {
@@ -312,16 +317,20 @@ function WorkShiftEvent({ shift }: { shift: WorkShift }) {
 
 function PlanBlockEvent({
   block,
-  conflict,
+  importedConflict,
+  workConflict,
 }: {
   block: WeeklyPlanBlock;
-  conflict?: WeeklyPlanWorkConflict | null;
+  importedConflict?: WeeklyPlanImportedEventConflict | null;
+  workConflict?: WeeklyPlanWorkConflict | null;
 }) {
+  const hasConflict = Boolean(workConflict || importedConflict);
+
   return (
     <div
       className={cn(
         "rounded-[22px] border p-4",
-        conflict
+        hasConflict
           ? "border-brand-coral/20 bg-brand-coral/[0.055]"
           : "border-brand-teal/12 bg-brand-teal/[0.055]",
       )}
@@ -330,7 +339,7 @@ function PlanBlockEvent({
         <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
           Plan block
         </Badge>
-        {conflict ? (
+        {hasConflict ? (
           <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
             Conflict
           </Badge>
@@ -345,9 +354,14 @@ function PlanBlockEvent({
       <p className="mt-1 text-sm leading-6 text-brand-ink/65">
         {block.plannedTask}
       </p>
-      {conflict ? (
+      {workConflict ? (
         <p className="mt-3 rounded-2xl border border-brand-coral/16 bg-white/66 px-3 py-2 text-xs font-semibold leading-5 text-brand-coral">
-          {conflict.message}
+          {workConflict.message}
+        </p>
+      ) : null}
+      {importedConflict ? (
+        <p className="mt-3 rounded-2xl border border-brand-coral/16 bg-white/66 px-3 py-2 text-xs font-semibold leading-5 text-brand-coral">
+          {importedConflict.message}
         </p>
       ) : null}
     </div>
@@ -386,6 +400,9 @@ function ImportedCalendarEventCard({
       <div className="flex flex-wrap items-center gap-2">
         <Badge className="bg-brand-ink/8 text-brand-ink/70" variant="subtle">
           Imported event
+        </Badge>
+        <Badge className="bg-brand-ink/[0.045] text-brand-ink/52" variant="subtle">
+          Source: {event.source.toUpperCase()}
         </Badge>
         <span className="text-xs font-semibold text-brand-ink/45">
           {formatImportedEventTimeRange(event)}
@@ -453,11 +470,13 @@ function MonthDayDetail({
   conflictByBlockId,
   day,
   filters,
+  importedConflictByBlockId,
   status,
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   day: CalendarMonthDaySchedule | null;
   filters: CalendarFilters;
+  importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
   status: CalendarStatus;
 }) {
   if (!day) {
@@ -509,7 +528,8 @@ function MonthDayDetail({
             <PlanBlockEvent
               key={block.id}
               block={block}
-              conflict={conflictByBlockId.get(block.id)}
+              importedConflict={importedConflictByBlockId.get(block.id)}
+              workConflict={conflictByBlockId.get(block.id)}
             />
           ))}
 
@@ -533,6 +553,7 @@ function MonthDayDetail({
 function CalendarMonthView({
   conflictByBlockId,
   filters,
+  importedConflictByBlockId,
   monthCalendar,
   selectedMonthDay,
   selectedMonthIso,
@@ -541,6 +562,7 @@ function CalendarMonthView({
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   filters: CalendarFilters;
+  importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
   monthCalendar: ReturnType<typeof buildCalendarMonth>;
   selectedMonthDay: CalendarMonthDaySchedule | null;
   selectedMonthIso: string | null;
@@ -578,6 +600,7 @@ function CalendarMonthView({
                 day,
                 filters,
                 conflictByBlockId,
+                importedConflictByBlockId,
               );
               const isSelected =
                 day.isCurrentMonth &&
@@ -658,6 +681,7 @@ function CalendarMonthView({
         conflictByBlockId={conflictByBlockId}
         day={selectedMonthDay}
         filters={filters}
+        importedConflictByBlockId={importedConflictByBlockId}
         status={status}
       />
     </section>
@@ -780,6 +804,10 @@ export function CalendarPage() {
     () => findWeeklyPlanWorkConflicts(planBlocks, workShifts),
     [planBlocks, workShifts],
   );
+  const planImportedEventConflicts = useMemo(
+    () => findWeeklyPlanImportedEventConflicts(planBlocks, importedEvents),
+    [importedEvents, planBlocks],
+  );
 
   const conflictByBlockId = useMemo(
     () =>
@@ -787,6 +815,16 @@ export function CalendarPage() {
         planWorkConflicts.map((conflict) => [conflict.block.id, conflict]),
       ),
     [planWorkConflicts],
+  );
+  const importedConflictByBlockId = useMemo(
+    () =>
+      new Map(
+        planImportedEventConflicts.map((conflict) => [
+          conflict.block.id,
+          conflict,
+        ]),
+      ),
+    [planImportedEventConflicts],
   );
 
   const weekSummary = useMemo(() => {
@@ -1142,7 +1180,8 @@ export function CalendarPage() {
                             <PlanBlockEvent
                               key={block.id}
                               block={block}
-                              conflict={conflictByBlockId.get(block.id)}
+                              importedConflict={importedConflictByBlockId.get(block.id)}
+                              workConflict={conflictByBlockId.get(block.id)}
                             />
                           ))}
 
@@ -1167,6 +1206,7 @@ export function CalendarPage() {
               <CalendarMonthView
                 conflictByBlockId={conflictByBlockId}
                 filters={filters}
+                importedConflictByBlockId={importedConflictByBlockId}
                 monthCalendar={monthCalendar}
                 selectedMonthDay={selectedMonthDay}
                 selectedMonthIso={selectedMonthIso}

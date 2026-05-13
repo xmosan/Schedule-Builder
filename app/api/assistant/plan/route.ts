@@ -8,6 +8,7 @@ import {
   createContextOnlyAssistantResponse,
   createFallbackAssistantResponse,
   filterAssistantSuggestions,
+  getRelevantImportedCalendarEvents,
   hasPlanningIntent,
   isGreetingPrompt,
   isVaguePrompt,
@@ -19,6 +20,7 @@ import {
 import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
 import {
   fetchPlannerProfileForUser,
+  fetchImportedCalendarEventsForUser,
   fetchProjectsForUser,
   fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
@@ -298,17 +300,25 @@ async function getAuthenticatedUser(
 }
 
 async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
-  const [profileResult, projectsResult, weeklyPlanResult, workShiftsResult] = await Promise.all([
+  const [
+    profileResult,
+    projectsResult,
+    weeklyPlanResult,
+    workShiftsResult,
+    importedEventsResult,
+  ] = await Promise.all([
     fetchPlannerProfileForUser(supabase, userId),
     fetchProjectsForUser(supabase, userId),
     fetchWeeklyPlanBlocksForUser(supabase, userId),
     fetchWorkShiftsForUser(supabase, userId),
+    fetchImportedCalendarEventsForUser(supabase, userId),
   ]);
   const loadErrors = [
     profileResult.error,
     projectsResult.error,
     weeklyPlanResult.error,
     workShiftsResult.error,
+    importedEventsResult.error,
   ].filter(Boolean);
 
   const profile = profileResult.error == null ? profileResult.data : null;
@@ -322,6 +332,9 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
       weeklyPlanResult.error == null ? weeklyPlanResult.data : [],
       plannerType,
       workShiftsResult.error == null ? workShiftsResult.data : [],
+      importedEventsResult.error == null
+        ? getRelevantImportedCalendarEvents(importedEventsResult.data)
+        : [],
     ),
     profile,
     warning:
@@ -366,9 +379,11 @@ function createAiPrompt(
     "Do not suggest destructive overwrites.",
     "Prefer additive weekly plan suggestions for active projects.",
     "Use the work schedule as unavailable time. Avoid suggesting weekly project blocks during work shifts.",
+    "Use imported calendar events as commitments and unavailable time. Avoid suggesting weekly project blocks during imported event times.",
     "Some weekly plan blocks have start times. If a timed weekly block overlaps a saved work shift, return a workload_warning that says it may overlap a saved work shift.",
+    "If a timed weekly block overlaps an imported calendar event, return a workload_warning that says it may overlap an imported calendar event.",
     "When suggesting new weekly blocks, prefer evenings, Friday, Saturday, Sunday, or flexible blocks when weekday work shifts make daytime unavailable.",
-    "If the user asks to plan the week, find open time, or balance work and school, mention the saved work schedule naturally when it exists.",
+    "If the user asks to plan the week, find open time, or balance work and school, mention saved work shifts and imported calendar commitments naturally when they exist.",
     "Exact-dated deadlines can be placed on the calendar. Vague deadlines need exact dates and should not be placed on a month grid.",
     "Allowed suggestion types only: new_project, update_project, suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
     "Every suggestion must include id, type, title, description, confidence, rationale, and severity.",
@@ -409,6 +424,8 @@ function createAiPrompt(
     `Work shifts: ${context.workShiftsCount}`,
     `Work schedule hours: ${context.workScheduleHours}`,
     `Work schedule summary: ${context.workScheduleSummary ?? "None saved"}`,
+    `Imported calendar events: ${context.importedEventsCount}`,
+    `Imported event conflicts: ${context.importedEventConflictCount}`,
     `Calendar conflicts: ${context.calendarConflictCount}`,
     `Exact-dated deadlines: ${context.deadlinesWithDatesCount}`,
     `Deadlines needing dates: ${context.deadlinesNeedingDatesCount}`,
@@ -461,6 +478,31 @@ function createAiPrompt(
       })),
     ),
     "",
+    "Imported calendar events:",
+    JSON.stringify(
+      context.importedCalendarEvents.map((event) => ({
+        title: event.title,
+        startsAt: event.startsAt,
+        endsAt: event.endsAt,
+        allDay: event.allDay,
+        location: event.location,
+        source: event.source,
+      })),
+    ),
+    "",
+    "Imported event conflicts:",
+    JSON.stringify(
+      context.importedEventConflicts.map((conflict) => ({
+        day: conflict.day,
+        projectName: conflict.block.projectName,
+        plannedTask: conflict.block.plannedTask,
+        blockStart: conflict.blockStartLabel,
+        blockEnd: conflict.blockEndLabel,
+        importedEventTitle: conflict.event.title,
+        importedEventTime: conflict.eventRangeLabel,
+      })),
+    ),
+    "",
     "Exact project deadlines:",
     JSON.stringify(context.deadlinesWithDates),
     "",
@@ -485,7 +527,9 @@ function createAssistantMessagePrompt(
     "If the user asks a normal question, answer it first.",
     "If the user asks for planning help, give a practical summary before separate action cards are shown by the app.",
     "If work shifts exist, treat them as unavailable and reference them naturally for planning requests.",
+    "If imported calendar events exist, treat them as unavailable commitments and reference them naturally for planning/open-time requests.",
     "If timed weekly blocks overlap work shifts, mention the conflict clearly without moving anything.",
+    "If timed weekly blocks overlap imported calendar events, mention the conflict clearly without moving anything.",
     "Avoid repeating the same opening wording from prior assistant messages.",
     "Never claim anything was saved or changed.",
     "The app can create projects, update next actions, and add weekly blocks only after the user applies a reviewed action card.",
@@ -509,6 +553,8 @@ function createAssistantMessagePrompt(
       workShiftsCount: context.workShiftsCount,
       workScheduleHours: context.workScheduleHours,
       workScheduleSummary: context.workScheduleSummary,
+      importedEventsCount: context.importedEventsCount,
+      importedEventConflictCount: context.importedEventConflictCount,
       calendarConflictCount: context.calendarConflictCount,
       deadlinesWithDates: context.deadlinesWithDates,
       deadlinesNeedingDates: context.deadlinesNeedingDates,
@@ -534,6 +580,14 @@ function createAssistantMessagePrompt(
         endTime: shift.endTime,
         recurring: shift.recurring,
       })),
+      importedCalendarEvents: context.importedCalendarEvents.map((event) => ({
+        title: event.title,
+        startsAt: event.startsAt,
+        endsAt: event.endsAt,
+        allDay: event.allDay,
+        location: event.location,
+        source: event.source,
+      })),
       calendarConflicts: context.calendarConflicts.map((conflict) => ({
         day: conflict.day,
         projectName: conflict.block.projectName,
@@ -541,6 +595,15 @@ function createAssistantMessagePrompt(
         blockStart: conflict.blockStartLabel,
         blockEnd: conflict.blockEndLabel,
         workShift: conflict.shiftRangeLabel,
+      })),
+      importedEventConflicts: context.importedEventConflicts.map((conflict) => ({
+        day: conflict.day,
+        projectName: conflict.block.projectName,
+        plannedTask: conflict.block.plannedTask,
+        blockStart: conflict.blockStartLabel,
+        blockEnd: conflict.blockEndLabel,
+        importedEventTitle: conflict.event.title,
+        importedEventTime: conflict.eventRangeLabel,
       })),
     }),
   ].join("\n");

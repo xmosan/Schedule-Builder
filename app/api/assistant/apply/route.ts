@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
   createAssistantContextSummary,
+  getRelevantImportedCalendarEvents,
   normalizeAssistantSuggestions,
   type AssistantApplyResponse,
   type AssistantApplyResult,
@@ -15,11 +16,14 @@ import {
   type ProjectPriority,
 } from "@/lib/projects";
 import {
+  fetchImportedCalendarEventsForUser,
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
   fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
+import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
+import { getWeeklyPlanImportedEventConflictForBlock } from "@/lib/schedule-conflicts";
 import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
 import { formatWorkShiftRange, type WorkShift } from "@/lib/work-schedule";
 
@@ -205,6 +209,7 @@ async function applyWeeklyBlockSuggestion({
   appliedBlockCount,
   currentBlocks,
   currentProjects,
+  importedCalendarEvents,
   suggestion,
   supabase,
   userId,
@@ -213,6 +218,7 @@ async function applyWeeklyBlockSuggestion({
   appliedBlockCount: number;
   currentBlocks: WeeklyPlanBlock[];
   currentProjects: Project[];
+  importedCalendarEvents: ImportedCalendarEvent[];
   suggestion: AssistantSuggestion;
   supabase: SupabaseClient;
   userId: string;
@@ -268,23 +274,37 @@ async function applyWeeklyBlockSuggestion({
     return createResult(suggestion, "error", error.message);
   }
 
-  currentBlocks.push({
+  const createdBlock: WeeklyPlanBlock = {
     id: row.block_id,
     day: row.day,
     projectName: row.project_name,
     plannedTask: row.planned_task,
     estimatedHours: row.estimated_hours,
-  });
+  };
 
+  currentBlocks.push(createdBlock);
+
+  const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
+    createdBlock,
+    importedCalendarEvents,
+  );
   const workRanges = workShifts
     .filter((shift) => shift.day === row.day)
     .map(formatWorkShiftRange);
+  const followUpWarnings = [
+    workRanges.length > 0
+      ? `This day has work shifts (${workRanges.join(", ")}), so place the block outside those hours.`
+      : null,
+    importedConflict
+      ? `This block may overlap with imported event "${importedConflict.event.title}" (${importedConflict.eventRangeLabel}).`
+      : null,
+  ].filter((message): message is string => Boolean(message));
 
   return createResult(
     suggestion,
     "applied",
-    workRanges.length > 0
-      ? `Created a weekly plan block. This day has work shifts (${workRanges.join(", ")}), so place the block outside those hours.`
+    followUpWarnings.length > 0
+      ? `Created a weekly plan block. ${followUpWarnings.join(" ")}`
       : "Created a weekly plan block.",
   );
 }
@@ -538,11 +558,18 @@ async function applyNextActionSuggestion({
 }
 
 async function loadContextSummary(supabase: SupabaseClient, userId: string) {
-  const [profileResult, projectsResult, weeklyPlanResult, workShiftsResult] = await Promise.all([
+  const [
+    profileResult,
+    projectsResult,
+    weeklyPlanResult,
+    workShiftsResult,
+    importedEventsResult,
+  ] = await Promise.all([
     fetchPlannerProfileForUser(supabase, userId),
     fetchProjectsForUser(supabase, userId),
     fetchWeeklyPlanBlocksForUser(supabase, userId),
     fetchWorkShiftsForUser(supabase, userId),
+    fetchImportedCalendarEventsForUser(supabase, userId),
   ]);
 
   return createAssistantContextSummary(
@@ -552,6 +579,9 @@ async function loadContextSummary(supabase: SupabaseClient, userId: string) {
       ? profileResult.data.plannerType
       : "Unknown",
     workShiftsResult.error == null ? workShiftsResult.data : [],
+    importedEventsResult.error == null
+      ? getRelevantImportedCalendarEvents(importedEventsResult.data)
+      : [],
   );
 }
 
@@ -594,10 +624,16 @@ export async function POST(request: NextRequest) {
     };
   });
 
-  const [projectsResult, weeklyPlanResult, workShiftsResult] = await Promise.all([
+  const [
+    projectsResult,
+    weeklyPlanResult,
+    workShiftsResult,
+    importedEventsResult,
+  ] = await Promise.all([
     fetchProjectsForUser(authResult.supabase, authResult.userId),
     fetchWeeklyPlanBlocksForUser(authResult.supabase, authResult.userId),
     fetchWorkShiftsForUser(authResult.supabase, authResult.userId),
+    fetchImportedCalendarEventsForUser(authResult.supabase, authResult.userId),
   ]);
 
   if (projectsResult.error || weeklyPlanResult.error) {
@@ -618,6 +654,10 @@ export async function POST(request: NextRequest) {
   const currentProjects = [...projectsResult.data];
   const currentBlocks = [...weeklyPlanResult.data];
   const workShifts = workShiftsResult.error ? [] : [...workShiftsResult.data];
+  const importedCalendarEvents =
+    importedEventsResult.error == null
+      ? getRelevantImportedCalendarEvents(importedEventsResult.data)
+      : [];
   const results: AssistantApplyResult[] = [];
   let appliedBlockCount = 0;
 
@@ -645,6 +685,7 @@ export async function POST(request: NextRequest) {
         appliedBlockCount,
         currentBlocks,
         currentProjects,
+        importedCalendarEvents,
         suggestion: item.normalized,
         supabase: authResult.supabase,
         userId: authResult.userId,

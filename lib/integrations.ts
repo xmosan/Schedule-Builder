@@ -88,7 +88,7 @@ export const integrations: IntegrationCardData[] = [
   },
   {
     id: "ics-upload-import",
-    name: "Calendar Import / Export",
+    name: "Calendar import/export",
     onboardingName: "ICS import/export",
     monogram: "ICS",
     category: "Import and export available",

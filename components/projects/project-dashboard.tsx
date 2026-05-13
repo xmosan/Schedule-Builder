@@ -36,13 +36,17 @@ import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/c
 import {
   deleteProjectForUser,
   deleteWeeklyPlanBlockForUser,
+  fetchImportedCalendarEventsForUser,
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
   fetchWeeklyPlanBlocksForUser,
+  fetchWorkShiftsForUser,
   savePlannerProfileForUser,
   replaceProjectsForUser,
   replaceWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
+import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
+import type { WorkShift } from "@/lib/work-schedule";
 import {
   getWeeklyPlanStorageKey,
   parseStoredWeeklyPlan,
@@ -268,6 +272,10 @@ export function ProjectDashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<Project[]>(starterProjects);
   const [planBlocks, setPlanBlocks] = useState<WeeklyPlanBlock[]>([]);
+  const [workShifts, setWorkShifts] = useState<WorkShift[]>([]);
+  const [importedEvents, setImportedEvents] = useState<ImportedCalendarEvent[]>(
+    [],
+  );
   const [onboardingStatus, setOnboardingStatus] =
     useState<OnboardingStatus>("loading");
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
@@ -348,6 +356,8 @@ export function ProjectDashboard() {
       if (!nextUser) {
         setProjects(starterProjects);
         setPlanBlocks([]);
+        setWorkShifts([]);
+        setImportedEvents([]);
         setOnboardingStatus("loading");
         setHasLoadedRemoteData(false);
         setCanSyncProjects(false);
@@ -399,10 +409,18 @@ export function ProjectDashboard() {
 
     async function loadRemoteScheduler() {
       try {
-        const [profileResult, projectsResult, weeklyPlanResult] = await Promise.all([
+        const [
+          profileResult,
+          projectsResult,
+          weeklyPlanResult,
+          workShiftsResult,
+          importedEventsResult,
+        ] = await Promise.all([
           fetchPlannerProfileForUser(activeSupabase, activeUser.id),
           fetchProjectsForUser(activeSupabase, activeUser.id),
           fetchWeeklyPlanBlocksForUser(activeSupabase, activeUser.id),
+          fetchWorkShiftsForUser(activeSupabase, activeUser.id),
+          fetchImportedCalendarEventsForUser(activeSupabase, activeUser.id),
         ]);
 
         if (!isActive) {
@@ -440,6 +458,10 @@ export function ProjectDashboard() {
         );
         setProjects(nextProjects);
         setPlanBlocks(nextPlanBlocks);
+        setWorkShifts(workShiftsResult.error == null ? workShiftsResult.data : []);
+        setImportedEvents(
+          importedEventsResult.error == null ? importedEventsResult.data : [],
+        );
         window.localStorage.setItem(projectStorageKey, JSON.stringify(nextProjects));
         window.localStorage.setItem(
           weeklyPlanStorageKey,
@@ -453,6 +475,8 @@ export function ProjectDashboard() {
           profileResult.error,
           projectsResult.error,
           weeklyPlanResult.error,
+          workShiftsResult.error,
+          importedEventsResult.error,
         ].filter(Boolean);
 
         if (loadErrors.length > 0) {
@@ -472,6 +496,8 @@ export function ProjectDashboard() {
 
         setProjects(storedProjects ?? []);
         setPlanBlocks(migratedPlanBlocks);
+        setWorkShifts([]);
+        setImportedEvents([]);
         setOnboardingStatus("completed");
         setHasLoadedRemoteData(true);
         setCanSyncProjects(false);
@@ -1125,10 +1151,12 @@ export function ProjectDashboard() {
             </section>
 
             <WeeklyPlanSection
+              importedEvents={importedEvents}
               onAddBlock={addWeeklyPlanBlock}
               onRemoveBlock={removeWeeklyPlanBlock}
               planBlocks={planBlocks}
               projects={projects}
+              workShifts={workShifts}
             />
           </>
         ) : null}

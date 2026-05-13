@@ -7,6 +7,10 @@ import {
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 import {
+  formatImportedEventTimeRange,
+  type ImportedCalendarEvent,
+} from "@/lib/imported-calendar";
+import {
   formatWorkShiftRange,
   getWorkShiftDurationHours,
   type WorkShift,
@@ -20,6 +24,16 @@ export type WeeklyPlanWorkConflict = {
   message: string;
   shift: WorkShift;
   shiftRangeLabel: string;
+};
+
+export type WeeklyPlanImportedEventConflict = {
+  block: WeeklyPlanBlock;
+  blockEndLabel: string;
+  blockStartLabel: string;
+  day: WeekDay;
+  event: ImportedCalendarEvent;
+  eventRangeLabel: string;
+  message: string;
 };
 
 function formatDayList(days: WeekDay[]) {
@@ -61,6 +75,36 @@ function formatMinutesAsTimeLabel(totalMinutes: number) {
   const displayHour = hours % 12 === 0 ? 12 : hours % 12;
 
   return `${displayHour}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function toLocalDate(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+}
+
+function toIsoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getCurrentWeekStart(referenceDate = new Date()) {
+  const localDate = toLocalDate(referenceDate);
+  const day = localDate.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+
+  return addDays(localDate, mondayOffset);
+}
+
+function getWeekDateForDay(day: WeekDay, weekStart = getCurrentWeekStart()) {
+  return addDays(weekStart, weekDays.indexOf(day));
 }
 
 export function getWorkScheduleSummary(workShifts: WorkShift[]) {
@@ -167,10 +211,100 @@ export function findWeeklyPlanWorkConflicts(
     .filter((conflict): conflict is WeeklyPlanWorkConflict => conflict !== null);
 }
 
+export function weeklyPlanBlockOverlapsImportedEvent(
+  block: WeeklyPlanBlock,
+  event: ImportedCalendarEvent,
+  weekStart = getCurrentWeekStart(),
+) {
+  const blockStartMinutes = parseStartTimeToMinutes(block.startTime);
+
+  if (blockStartMinutes === null) {
+    return false;
+  }
+
+  const blockDate = getWeekDateForDay(block.day, weekStart);
+  const eventStart = new Date(event.startsAt);
+
+  if (Number.isNaN(eventStart.getTime())) {
+    return false;
+  }
+
+  if (toIsoDate(blockDate) !== toIsoDate(eventStart)) {
+    return false;
+  }
+
+  if (event.allDay) {
+    return true;
+  }
+
+  const eventEnd = event.endsAt ? new Date(event.endsAt) : null;
+  const eventStartMinutes = eventStart.getHours() * 60 + eventStart.getMinutes();
+  const eventEndMinutes =
+    eventEnd && !Number.isNaN(eventEnd.getTime())
+      ? eventEnd.getHours() * 60 + eventEnd.getMinutes()
+      : eventStartMinutes + 30;
+  const blockEndMinutes = blockStartMinutes + block.estimatedHours * 60;
+
+  return blockStartMinutes < eventEndMinutes && blockEndMinutes > eventStartMinutes;
+}
+
+export function getWeeklyPlanImportedEventConflictForBlock(
+  block: WeeklyPlanBlock,
+  importedEvents: ImportedCalendarEvent[],
+  weekStart = getCurrentWeekStart(),
+): WeeklyPlanImportedEventConflict | null {
+  const event = importedEvents.find((candidate) =>
+    weeklyPlanBlockOverlapsImportedEvent(block, candidate, weekStart),
+  );
+
+  if (!event) {
+    return null;
+  }
+
+  const blockStart = parseStartTimeToMinutes(block.startTime) ?? 0;
+  const blockEnd = blockStart + block.estimatedHours * 60;
+  const blockStartLabel = formatStartTime(block.startTime);
+  const blockEndLabel = formatMinutesAsTimeLabel(blockEnd);
+  const eventRangeLabel = formatImportedEventTimeRange(event);
+
+  return {
+    block,
+    blockEndLabel,
+    blockStartLabel,
+    day: block.day,
+    event,
+    eventRangeLabel,
+    message: `This block may overlap with an imported calendar event (${event.title}, ${eventRangeLabel}).`,
+  };
+}
+
+export function findWeeklyPlanImportedEventConflicts(
+  blocks: WeeklyPlanBlock[],
+  importedEvents: ImportedCalendarEvent[],
+  weekStart = getCurrentWeekStart(),
+) {
+  return blocks
+    .map((block) =>
+      getWeeklyPlanImportedEventConflictForBlock(block, importedEvents, weekStart),
+    )
+    .filter(
+      (conflict): conflict is WeeklyPlanImportedEventConflict =>
+        conflict !== null,
+    );
+}
+
 export function describeWeeklyPlanWorkConflict(
   conflict: WeeklyPlanWorkConflict,
 ) {
   return `${conflict.block.projectName} on ${conflict.day} is scheduled ${conflict.blockStartLabel} - ${conflict.blockEndLabel} (${formatEstimatedHours(
     conflict.block.estimatedHours,
   )}) and may overlap your work shift ${conflict.shiftRangeLabel}.`;
+}
+
+export function describeWeeklyPlanImportedEventConflict(
+  conflict: WeeklyPlanImportedEventConflict,
+) {
+  return `${conflict.block.projectName} on ${conflict.day} is scheduled ${conflict.blockStartLabel} - ${conflict.blockEndLabel} (${formatEstimatedHours(
+    conflict.block.estimatedHours,
+  )}) and may overlap imported event "${conflict.event.title}" (${conflict.eventRangeLabel}).`;
 }

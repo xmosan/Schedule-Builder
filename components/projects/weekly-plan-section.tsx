@@ -18,7 +18,12 @@ import {
   generateWeeklyPlanIcs,
   getCurrentWeekMondayInputValue,
 } from "@/lib/calendar-export";
+import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
 import type { Project } from "@/lib/projects";
+import {
+  getWeeklyPlanImportedEventConflictForBlock,
+  getWeeklyPlanWorkConflictForBlock,
+} from "@/lib/schedule-conflicts";
 import {
   createWeeklyPlanBlock,
   formatEstimatedHours,
@@ -29,12 +34,15 @@ import {
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 import { cn } from "@/lib/utils";
+import type { WorkShift } from "@/lib/work-schedule";
 
 type WeeklyPlanSectionProps = {
+  importedEvents?: ImportedCalendarEvent[];
   onAddBlock: (block: WeeklyPlanBlock) => void;
   onRemoveBlock: (id: string) => Promise<void> | void;
   planBlocks: WeeklyPlanBlock[];
   projects: Project[];
+  workShifts?: WorkShift[];
 };
 
 type WeeklyPlanDraftState = {
@@ -95,10 +103,12 @@ function getErrorMessage(error: unknown) {
 }
 
 export function WeeklyPlanSection({
+  importedEvents = [],
   onAddBlock,
   onRemoveBlock,
   planBlocks,
   projects,
+  workShifts = [],
 }: WeeklyPlanSectionProps) {
   const [draft, setDraft] = useState<WeeklyPlanDraftState>(() =>
     getInitialDraft(projects),
@@ -110,6 +120,7 @@ export function WeeklyPlanSection({
   );
   const [error, setError] = useState<string | null>(null);
   const [errorTarget, setErrorTarget] = useState<FormTarget | null>(null);
+  const [conflictWarning, setConflictWarning] = useState<string | null>(null);
   const [exitingBlockIds, setExitingBlockIds] = useState<
     Record<string, boolean>
   >({});
@@ -278,6 +289,7 @@ export function WeeklyPlanSection({
 
   function clearDraftWarnings() {
     setDuplicateWarningKey(null);
+    setConflictWarning(null);
 
     if (error) {
       setError(null);
@@ -386,6 +398,12 @@ export function WeeklyPlanSection({
       return;
     }
 
+    const workConflict = getWeeklyPlanWorkConflictForBlock(planBlock, workShifts);
+    const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
+      planBlock,
+      importedEvents,
+    );
+
     onAddBlock(planBlock);
     setDraft((current) => ({
       ...current,
@@ -401,6 +419,14 @@ export function WeeklyPlanSection({
     setDuplicateWarningKey(null);
     setError(null);
     setErrorTarget(null);
+    const conflictMessages = [
+      workConflict ? "This time may overlap with a saved work shift." : null,
+      importedConflict ? "This time may overlap with an imported event." : null,
+    ].filter((message): message is string => Boolean(message));
+
+    setConflictWarning(
+      conflictMessages.length > 0 ? conflictMessages.join(" ") : null,
+    );
   }
 
   function handleCalendarExport() {
@@ -491,6 +517,11 @@ export function WeeklyPlanSection({
     duplicateCount: number,
   ) {
     const timeLabel = isTimed ? formatStartTime(block.startTime) : "Flexible";
+    const workConflict = getWeeklyPlanWorkConflictForBlock(block, workShifts);
+    const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
+      block,
+      importedEvents,
+    );
 
     return (
       <div
@@ -569,6 +600,21 @@ export function WeeklyPlanSection({
                   </span>
                 ) : null}
               </div>
+
+              {workConflict || importedConflict ? (
+                <div className="mt-3 space-y-2">
+                  {workConflict ? (
+                    <p className="rounded-2xl border border-brand-coral/14 bg-brand-coral/[0.07] px-3 py-2 text-xs font-semibold leading-5 text-brand-coral">
+                      {workConflict.message}
+                    </p>
+                  ) : null}
+                  {importedConflict ? (
+                    <p className="rounded-2xl border border-brand-coral/14 bg-brand-coral/[0.07] px-3 py-2 text-xs font-semibold leading-5 text-brand-coral">
+                      {importedConflict.message}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -834,6 +880,12 @@ export function WeeklyPlanSection({
           ) : null}
         </CardContent>
       </Card>
+
+      {conflictWarning ? (
+        <p className="rounded-[22px] border border-brand-coral/16 bg-brand-coral/[0.07] px-4 py-3 text-sm font-semibold leading-6 text-brand-coral">
+          {conflictWarning}
+        </p>
+      ) : null}
 
       <div className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
         {weekDays.map((day) => {
