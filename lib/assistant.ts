@@ -157,7 +157,13 @@ export function isVaguePrompt(prompt: string) {
 }
 
 export function hasPlanningIntent(prompt: string) {
-  return planningIntentPattern.test(prompt.trim());
+  const normalizedPrompt = prompt.trim();
+
+  return (
+    planningIntentPattern.test(normalizedPrompt) ||
+    projectDraftPromptPattern.test(normalizedPrompt) ||
+    projectUpdatePromptPattern.test(normalizedPrompt)
+  );
 }
 
 function didRecentlyOfferPlanningDirections(
@@ -672,12 +678,22 @@ function addDays(date: Date, days: number) {
   return nextDate;
 }
 
+function normalizeProjectSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\bscheduler\b/g, "schedule")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function findPromptProject(projects: Project[], prompt: string) {
-  const normalizedPrompt = prompt.toLowerCase();
+  const normalizedPrompt = normalizeProjectSearchText(prompt);
   const activeProjects = projects.filter((project) => !project.completed);
   const exactMatch = [...activeProjects]
     .sort((first, second) => second.name.length - first.name.length)
-    .find((project) => normalizedPrompt.includes(project.name.toLowerCase()));
+    .find((project) =>
+      normalizedPrompt.includes(normalizeProjectSearchText(project.name)),
+    );
 
   if (exactMatch) {
     return exactMatch;
