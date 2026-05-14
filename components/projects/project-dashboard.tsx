@@ -41,6 +41,7 @@ import {
   fetchProjectsForUser,
   fetchWeeklyPlanBlocksForUser,
   fetchWorkShiftsForUser,
+  getWeeklyPlanStartTimeMigrationMessage,
   savePlannerProfileForUser,
   replaceProjectsForUser,
   replaceWeeklyPlanBlocksForUser,
@@ -726,6 +727,47 @@ export function ProjectDashboard() {
     setPlanBlocks((current) => [...current, block]);
   }
 
+  async function saveWeeklyPlanBlocksNow(blocks: WeeklyPlanBlock[]) {
+    if (!supabase || !user || !hasLoadedRemoteData || !canSyncWeeklyPlan) {
+      setDataMessage(
+        "Saved locally. Supabase sync will retry when the connection is ready.",
+      );
+      return;
+    }
+
+    const result = await replaceWeeklyPlanBlocksForUser(
+      supabase,
+      user.id,
+      blocks,
+    );
+
+    if (result.error) {
+      const message = getSchedulerErrorMessage(result.error);
+      setDataMessage(`Weekly plan could not be saved to Supabase: ${message}`);
+      throw new Error(message);
+    }
+
+    if (
+      result.usedLegacyStartTimeFallback &&
+      blocks.some((block) => block.startTime)
+    ) {
+      const message = getWeeklyPlanStartTimeMigrationMessage();
+      setDataMessage(message);
+      throw new Error(message);
+    }
+
+    setDataMessage(null);
+  }
+
+  async function updateWeeklyPlanBlock(updatedBlock: WeeklyPlanBlock) {
+    const nextBlocks = planBlocks.map((block) =>
+      block.id === updatedBlock.id ? updatedBlock : block,
+    );
+
+    await saveWeeklyPlanBlocksNow(nextBlocks);
+    setPlanBlocks(nextBlocks);
+  }
+
   async function removeWeeklyPlanBlock(id: string) {
     const blockExists = planBlocks.some((block) => block.id === id);
 
@@ -1174,6 +1216,8 @@ export function ProjectDashboard() {
               importedEvents={importedEvents}
               onAddBlock={addWeeklyPlanBlock}
               onRemoveBlock={removeWeeklyPlanBlock}
+              onSavePlanBlocks={() => saveWeeklyPlanBlocksNow(planBlocks)}
+              onUpdateBlock={updateWeeklyPlanBlock}
               planBlocks={planBlocks}
               projects={projects}
               workShifts={workShifts}

@@ -63,6 +63,16 @@ type CalendarFilters = {
   workShifts: boolean;
 };
 
+type PlanBlockGoogleSyncStatus = "needs_attention" | "synced";
+
+type GoogleCalendarSyncStatusResponse = {
+  error?: string;
+  statuses?: Array<{
+    syncStatus: PlanBlockGoogleSyncStatus;
+    weeklyPlanBlockId: string;
+  }>;
+};
+
 const defaultFilters: CalendarFilters = {
   deadlines: true,
   flexible: true,
@@ -149,6 +159,19 @@ function formatHours(hours: number) {
   return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} hr${
     hours === 1 ? "" : "s"
   }`;
+}
+
+function formatDateInputValue(date: Date) {
+  return `${String(date.getFullYear()).padStart(4, "0")}-${String(
+    date.getMonth() + 1,
+  ).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function getWeekStartInputValueForDate(date: Date) {
+  const weekStart = new Date(date);
+  const offsetFromMonday = (weekStart.getDay() + 6) % 7;
+  weekStart.setDate(weekStart.getDate() - offsetFromMonday);
+  return formatDateInputValue(weekStart);
 }
 
 function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
@@ -423,10 +446,12 @@ function WorkShiftEvent({ shift }: { shift: WorkShift }) {
 function PlanBlockEvent({
   block,
   importedConflict,
+  syncStatus,
   workConflict,
 }: {
   block: WeeklyPlanBlock;
   importedConflict?: WeeklyPlanImportedEventConflict | null;
+  syncStatus?: PlanBlockGoogleSyncStatus | null;
   workConflict?: WeeklyPlanWorkConflict | null;
 }) {
   const hasConflict = Boolean(workConflict || importedConflict);
@@ -442,6 +467,16 @@ function PlanBlockEvent({
           {hasConflict ? (
             <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
               Conflict
+            </Badge>
+          ) : null}
+          {syncStatus === "synced" ? (
+            <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
+              Synced to Google
+            </Badge>
+          ) : null}
+          {syncStatus === "needs_attention" ? (
+            <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+              Sync needs attention
             </Badge>
           ) : null}
         </>
@@ -554,10 +589,12 @@ function DayEventGroups({
   conflictByBlockId,
   day,
   importedConflictByBlockId,
+  planBlockSyncStatusById,
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   day: ReturnType<typeof getVisibleDayData>;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
+  planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
 }) {
   const { flexiblePlanBlocks, timedPlanBlocks } = splitPlanBlocks(
     day.planBlocks,
@@ -592,6 +629,7 @@ function DayEventGroups({
             key={block.id}
             block={block}
             importedConflict={importedConflictByBlockId.get(block.id)}
+            syncStatus={planBlockSyncStatusById[block.id]}
             workConflict={conflictByBlockId.get(block.id)}
           />
         ))}
@@ -606,6 +644,7 @@ function DayEventGroups({
             key={block.id}
             block={block}
             importedConflict={importedConflictByBlockId.get(block.id)}
+            syncStatus={planBlockSyncStatusById[block.id]}
             workConflict={conflictByBlockId.get(block.id)}
           />
         ))}
@@ -676,12 +715,14 @@ function MonthDayDetail({
   day,
   filters,
   importedConflictByBlockId,
+  planBlockSyncStatusById,
   status,
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   day: CalendarMonthDaySchedule | null;
   filters: CalendarFilters;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
+  planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
   status: CalendarStatus;
 }) {
   if (!day) {
@@ -689,6 +730,9 @@ function MonthDayDetail({
   }
 
   const visibleDay = getVisibleDayData(day, filters);
+  const selectedWeekPlanHref = `/plan?week=${encodeURIComponent(
+    getWeekStartInputValueForDate(day.date),
+  )}`;
 
   return (
     <Card className="h-fit rounded-[30px] border-white/70 bg-white/90 shadow-[0_18px_45px_rgba(18,32,47,0.06)] lg:sticky lg:top-6">
@@ -705,6 +749,20 @@ function MonthDayDetail({
           <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
             {formatHours(visibleDay.scheduledHours)}
           </Badge>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Link
+            className="inline-flex h-9 items-center justify-center rounded-full bg-brand-ink px-3 text-xs font-semibold text-white transition hover:-translate-y-0.5 hover:bg-brand-teal"
+            href={selectedWeekPlanHref}
+          >
+            Sync this week in Plan
+          </Link>
+          <Link
+            className="inline-flex h-9 items-center justify-center rounded-full border border-brand-ink/10 bg-white/78 px-3 text-xs font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+            href={selectedWeekPlanHref}
+          >
+            Add plan block
+          </Link>
         </div>
 
         <div className="mt-4">
@@ -725,7 +783,7 @@ function MonthDayDetail({
               <div className="mt-4 flex flex-wrap gap-2">
                 <Link
                   className="inline-flex h-9 items-center justify-center rounded-full bg-brand-ink px-3 text-xs font-semibold text-white"
-                  href="/plan"
+                  href={selectedWeekPlanHref}
                 >
                   Add plan block
                 </Link>
@@ -744,6 +802,7 @@ function MonthDayDetail({
               conflictByBlockId={conflictByBlockId}
               day={visibleDay}
               importedConflictByBlockId={importedConflictByBlockId}
+              planBlockSyncStatusById={planBlockSyncStatusById}
             />
           ) : null}
         </div>
@@ -757,6 +816,7 @@ function CalendarMonthView({
   filters,
   importedConflictByBlockId,
   monthCalendar,
+  planBlockSyncStatusById,
   selectedMonthDay,
   selectedMonthIso,
   setSelectedMonthIso,
@@ -766,6 +826,7 @@ function CalendarMonthView({
   filters: CalendarFilters;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
   monthCalendar: ReturnType<typeof buildCalendarMonth>;
+  planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
   selectedMonthDay: CalendarMonthDaySchedule | null;
   selectedMonthIso: string | null;
   setSelectedMonthIso: (isoDate: string) => void;
@@ -904,6 +965,7 @@ function CalendarMonthView({
         day={selectedMonthDay}
         filters={filters}
         importedConflictByBlockId={importedConflictByBlockId}
+        planBlockSyncStatusById={planBlockSyncStatusById}
         status={status}
       />
     </section>
@@ -925,6 +987,9 @@ export function CalendarPage() {
   );
   const [monthDate, setMonthDate] = useState(() => new Date());
   const [selectedMonthIso, setSelectedMonthIso] = useState<string | null>(null);
+  const [planBlockSyncStatusById, setPlanBlockSyncStatusById] = useState<
+    Record<string, PlanBlockGoogleSyncStatus>
+  >({});
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1001,6 +1066,73 @@ export function CalendarPage() {
       isActive = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured() || status === "signed_out") {
+      setPlanBlockSyncStatusById({});
+      return;
+    }
+
+    let isActive = true;
+
+    async function loadPlanBlockSyncStatuses() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data, error: sessionError } = await supabase.auth.getSession();
+
+        if (!isActive) {
+          return;
+        }
+
+        if (sessionError || !data.session?.access_token) {
+          setPlanBlockSyncStatusById({});
+          return;
+        }
+
+        const weekStartValue = formatDateInputValue(weekStartDate);
+        const response = await fetch(
+          `/api/google-calendar/sync-status?week_start_date=${encodeURIComponent(
+            weekStartValue,
+          )}`,
+          {
+            headers: {
+              Authorization: `Bearer ${data.session.access_token}`,
+            },
+          },
+        );
+        const payload =
+          (await response.json()) as GoogleCalendarSyncStatusResponse;
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!response.ok || payload.error) {
+          setPlanBlockSyncStatusById({});
+          return;
+        }
+
+        setPlanBlockSyncStatusById(
+          (payload.statuses ?? []).reduce<
+            Record<string, PlanBlockGoogleSyncStatus>
+          >((acc, item) => {
+            acc[item.weeklyPlanBlockId] = item.syncStatus;
+            return acc;
+          }, {}),
+        );
+      } catch {
+        if (isActive) {
+          setPlanBlockSyncStatusById({});
+        }
+      }
+    }
+
+    void loadPlanBlockSyncStatuses();
+
+    return () => {
+      isActive = false;
+    };
+  }, [status, weekStartDate]);
 
   const calendar = useMemo(
     () =>
@@ -1515,6 +1647,7 @@ export function CalendarPage() {
                               conflictByBlockId={conflictByBlockId}
                               day={visibleDay}
                               importedConflictByBlockId={importedConflictByBlockId}
+                              planBlockSyncStatusById={planBlockSyncStatusById}
                             />
                           ) : null}
                         </div>
@@ -1529,6 +1662,7 @@ export function CalendarPage() {
                 filters={filters}
                 importedConflictByBlockId={importedConflictByBlockId}
                 monthCalendar={monthCalendar}
+                planBlockSyncStatusById={planBlockSyncStatusById}
                 selectedMonthDay={selectedMonthDay}
                 selectedMonthIso={selectedMonthIso}
                 setSelectedMonthIso={setSelectedMonthIso}

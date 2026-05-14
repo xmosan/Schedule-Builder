@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -28,11 +29,16 @@ import {
   createWeeklyPlanBlock,
   formatEstimatedHours,
   formatStartTime,
+  normalizeStartTime,
   parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
+import {
+  getSupabaseBrowserClient,
+  isSupabaseConfigured,
+} from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { WorkShift } from "@/lib/work-schedule";
 
@@ -40,6 +46,8 @@ type WeeklyPlanSectionProps = {
   importedEvents?: ImportedCalendarEvent[];
   onAddBlock: (block: WeeklyPlanBlock) => void;
   onRemoveBlock: (id: string) => Promise<void> | void;
+  onSavePlanBlocks?: () => Promise<void> | void;
+  onUpdateBlock?: (block: WeeklyPlanBlock) => Promise<void> | void;
   planBlocks: WeeklyPlanBlock[];
   projects: Project[];
   workShifts?: WorkShift[];
@@ -54,6 +62,43 @@ type WeeklyPlanDraftState = {
 };
 
 type FormTarget = "quick" | WeekDay;
+type GoogleCalendarSyncStatusValue =
+  | "failed"
+  | "needs_attention"
+  | "not_synced"
+  | "synced";
+
+type GoogleCalendarSyncStatus = {
+  googleEventHtmlLink?: string | null;
+  lastSyncedAt?: string | null;
+  syncStatus: Exclude<GoogleCalendarSyncStatusValue, "failed" | "not_synced">;
+  syncedTitle?: string | null;
+  weeklyPlanBlockId: string;
+};
+
+type GoogleCalendarSyncStatusResponse = {
+  error?: string;
+  statuses?: GoogleCalendarSyncStatus[];
+  syncCalendarName?: string | null;
+  syncEnabled?: boolean;
+  weekStartDate?: string;
+};
+
+type GoogleCalendarSyncBlockResult = {
+  blockId: string;
+  googleEventHtmlLink?: string | null;
+  message: string;
+  status: "already_synced" | "failed" | "synced";
+  syncStatus?: "needs_attention" | "synced";
+  warnings?: string[];
+};
+
+type GoogleCalendarSyncBlocksResponse = {
+  error?: string;
+  results?: GoogleCalendarSyncBlockResult[];
+  syncCalendarName?: string | null;
+  weekStartDate?: string;
+};
 
 const weeklyBlockRemovalAnimationMs = 300;
 
@@ -102,10 +147,116 @@ function getErrorMessage(error: unknown) {
   return "Please try again in a moment.";
 }
 
+function getGoogleSyncDisplayError(error: unknown) {
+  const message = getErrorMessage(error);
+
+  if (
+    message.includes("weekly_plan_blocks.start_time") ||
+    (message.includes("start_time") && message.includes("weekly_plan_blocks"))
+  ) {
+    return "Google Calendar sync needs one Supabase update before timed blocks can be synced. Run the weekly-plan-start-times migration, then try again.";
+  }
+
+  return message;
+}
+
+function parseDateInput(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function formatDateInputValue(date: Date) {
+  return `${String(date.getFullYear()).padStart(4, "0")}-${String(
+    date.getMonth() + 1,
+  ).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function getWeekMondayInputValue(date: Date) {
+  const monday = new Date(date);
+  const offsetFromMonday = (monday.getDay() + 6) % 7;
+  monday.setDate(monday.getDate() - offsetFromMonday);
+  return formatDateInputValue(monday);
+}
+
+function formatShortDate(date: Date) {
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function formatWeekRangeFromInput(value: string) {
+  const startDate = parseDateInput(value);
+
+  if (!startDate) {
+    return "Choose a Monday to set the week range.";
+  }
+
+  const monday = parseDateInput(getWeekMondayInputValue(startDate));
+
+  if (!monday) {
+    return "Choose a Monday to set the week range.";
+  }
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+
+  return `${formatShortDate(monday)} - ${formatShortDate(sunday)}`;
+}
+
+function getSyncStatusLabel(status: GoogleCalendarSyncStatusValue) {
+  if (status === "synced") {
+    return "Synced";
+  }
+
+  if (status === "needs_attention") {
+    return "Needs attention";
+  }
+
+  if (status === "failed") {
+    return "Sync failed";
+  }
+
+  return "Not synced";
+}
+
+function getSyncStatusClassName(status: GoogleCalendarSyncStatusValue) {
+  if (status === "synced") {
+    return "bg-brand-teal/10 text-brand-teal";
+  }
+
+  if (status === "needs_attention") {
+    return "bg-brand-coral/10 text-brand-coral";
+  }
+
+  if (status === "failed") {
+    return "bg-brand-coral/10 text-brand-coral";
+  }
+
+  return "bg-brand-ink/[0.045] text-brand-ink/52";
+}
+
 export function WeeklyPlanSection({
   importedEvents = [],
   onAddBlock,
   onRemoveBlock,
+  onSavePlanBlocks,
+  onUpdateBlock,
   planBlocks,
   projects,
   workShifts = [],
@@ -127,6 +278,29 @@ export function WeeklyPlanSection({
   const [exportWeekStart, setExportWeekStart] = useState("");
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [googleSyncEnabled, setGoogleSyncEnabled] = useState(false);
+  const [googleSyncCalendarName, setGoogleSyncCalendarName] = useState<
+    string | null
+  >(null);
+  const [googleSyncStatuses, setGoogleSyncStatuses] = useState<
+    Record<string, GoogleCalendarSyncStatus>
+  >({});
+  const [googleSyncResults, setGoogleSyncResults] = useState<
+    Record<string, GoogleCalendarSyncBlockResult>
+  >({});
+  const [googleSyncSelectedIds, setGoogleSyncSelectedIds] = useState<
+    Record<string, boolean>
+  >({});
+  const [googleSyncError, setGoogleSyncError] = useState<string | null>(null);
+  const [googleSyncMessage, setGoogleSyncMessage] = useState<string | null>(
+    null,
+  );
+  const [isGoogleSyncLoading, setIsGoogleSyncLoading] = useState(false);
+  const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
+  const [timeEditBlockId, setTimeEditBlockId] = useState<string | null>(null);
+  const [timeEditError, setTimeEditError] = useState<string | null>(null);
+  const [timeEditValue, setTimeEditValue] = useState("");
+  const [isSavingStartTime, setIsSavingStartTime] = useState(false);
   const [projectFocusMessage, setProjectFocusMessage] = useState<string | null>(
     null,
   );
@@ -154,8 +328,97 @@ export function WeeklyPlanSection({
   }, [projects]);
 
   useEffect(() => {
-    setExportWeekStart(getCurrentWeekMondayInputValue());
+    const requestedWeek = new URLSearchParams(window.location.search).get("week");
+    const requestedWeekDate = requestedWeek ? parseDateInput(requestedWeek) : null;
+
+    setExportWeekStart(
+      requestedWeekDate
+        ? getWeekMondayInputValue(requestedWeekDate)
+        : getCurrentWeekMondayInputValue(),
+    );
   }, []);
+
+  useEffect(() => {
+    if (!exportWeekStart || !isSupabaseConfigured()) {
+      return;
+    }
+
+    let isActive = true;
+
+    async function loadGoogleSyncStatuses() {
+      setIsGoogleSyncLoading(true);
+      setGoogleSyncError(null);
+
+      try {
+        const accessToken = await getSupabaseAccessToken();
+        const response = await fetch(
+          `/api/google-calendar/sync-status?week_start_date=${encodeURIComponent(
+            exportWeekStart,
+          )}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        );
+        const payload =
+          (await response.json()) as GoogleCalendarSyncStatusResponse;
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!response.ok || payload.error) {
+          throw new Error(
+            payload.error ?? "Google Calendar sync status could not be loaded.",
+          );
+        }
+
+        setGoogleSyncEnabled(Boolean(payload.syncEnabled));
+        setGoogleSyncCalendarName(payload.syncCalendarName ?? "Schedule Builder");
+        setGoogleSyncStatuses(
+          (payload.statuses ?? []).reduce<
+            Record<string, GoogleCalendarSyncStatus>
+          >((acc, status) => {
+            acc[status.weeklyPlanBlockId] = status;
+            return acc;
+          }, {}),
+        );
+      } catch (syncStatusError) {
+        if (!isActive) {
+          return;
+        }
+
+        setGoogleSyncEnabled(false);
+        setGoogleSyncError(getGoogleSyncDisplayError(syncStatusError));
+      } finally {
+        if (isActive) {
+          setIsGoogleSyncLoading(false);
+        }
+      }
+    }
+
+    void loadGoogleSyncStatuses();
+
+    return () => {
+      isActive = false;
+    };
+  }, [exportWeekStart]);
+
+  useEffect(() => {
+    setGoogleSyncSelectedIds((current) => {
+      const activeBlockIds = new Set(planBlocks.map((block) => block.id));
+      const next: Record<string, boolean> = {};
+
+      Object.entries(current).forEach(([blockId, isSelected]) => {
+        if (isSelected && activeBlockIds.has(blockId)) {
+          next[blockId] = true;
+        }
+      });
+
+      return next;
+    });
+  }, [planBlocks]);
 
   useEffect(() => {
     return () => {
@@ -198,6 +461,27 @@ export function WeeklyPlanSection({
     );
     setError(null);
   }, [projects]);
+
+  async function getSupabaseAccessToken() {
+    if (!isSupabaseConfigured()) {
+      throw new Error("Supabase is not configured yet.");
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    const { data, error: sessionError } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error(sessionError.message);
+    }
+
+    const accessToken = data.session?.access_token;
+
+    if (!accessToken) {
+      throw new Error("Sign in before syncing Weekly Plan blocks.");
+    }
+
+    return accessToken;
+  }
 
   const selectedProject = useMemo(
     () => projects.find((project) => String(project.id) === draft.projectId),
@@ -286,6 +570,44 @@ export function WeeklyPlanSection({
     draft.plannedTask.trim().length > 0 &&
     Number(draft.estimatedHours) > 0 &&
     hasValidDraftStartTime;
+  const selectedGoogleSyncIds = useMemo(
+    () =>
+      Object.entries(googleSyncSelectedIds)
+        .filter(([, isSelected]) => isSelected)
+        .map(([blockId]) => blockId),
+    [googleSyncSelectedIds],
+  );
+  const syncWeekStartDate = useMemo(
+    () => (exportWeekStart ? parseDateInput(exportWeekStart) : null),
+    [exportWeekStart],
+  );
+  const selectedWeekRangeLabel = useMemo(
+    () => formatWeekRangeFromInput(exportWeekStart),
+    [exportWeekStart],
+  );
+  const timedSyncBlockCount = useMemo(
+    () =>
+      planBlocks.filter(
+        (block) => parseStartTimeToMinutes(block.startTime) !== null,
+      ).length,
+    [planBlocks],
+  );
+  const readySyncBlocks = useMemo(
+    () =>
+      planBlocks.filter(
+        (block) => parseStartTimeToMinutes(block.startTime) !== null,
+      ),
+    [planBlocks],
+  );
+  const flexibleSyncBlocks = useMemo(
+    () =>
+      planBlocks.filter(
+        (block) => parseStartTimeToMinutes(block.startTime) === null,
+      ),
+    [planBlocks],
+  );
+  const canSyncSelectedBlocks =
+    googleSyncEnabled && selectedGoogleSyncIds.length > 0 && !isGoogleSyncing;
 
   function clearDraftWarnings() {
     setDuplicateWarningKey(null);
@@ -300,6 +622,142 @@ export function WeeklyPlanSection({
   function showFormError(target: FormTarget, message: string) {
     setError(message);
     setErrorTarget(target);
+  }
+
+  function getBlockGoogleSyncStatus(
+    block: WeeklyPlanBlock,
+  ): GoogleCalendarSyncStatusValue {
+    const result = googleSyncResults[block.id];
+
+    if (result?.status === "failed" && !isStaleStartTimeSyncFailure(block)) {
+      return "failed" satisfies GoogleCalendarSyncStatusValue;
+    }
+
+    return (
+      googleSyncStatuses[block.id]?.syncStatus ??
+      ("not_synced" satisfies GoogleCalendarSyncStatusValue)
+    );
+  }
+
+  function getBlockGoogleSyncMessage(block: WeeklyPlanBlock) {
+    const result = googleSyncResults[block.id];
+
+    if (result?.message && !isStaleStartTimeSyncFailure(block)) {
+      return result.message;
+    }
+
+    const status = googleSyncStatuses[block.id];
+
+    if (status?.syncStatus === "needs_attention") {
+      return "This block was synced before, but the block has changed. V1 will not update Google Calendar automatically.";
+    }
+
+    if (status?.syncStatus === "synced") {
+      return "Already synced for this week.";
+    }
+
+    return null;
+  }
+
+  function isStaleStartTimeSyncFailure(block: WeeklyPlanBlock) {
+    const result = googleSyncResults[block.id];
+
+    return (
+      result?.status === "failed" &&
+      parseStartTimeToMinutes(block.startTime) !== null &&
+      /start time/i.test(result.message)
+    );
+  }
+
+  function getBlockGoogleSyncWarnings(block: WeeklyPlanBlock) {
+    if (!syncWeekStartDate) {
+      return [] as string[];
+    }
+
+    const workConflict = getWeeklyPlanWorkConflictForBlock(block, workShifts);
+    const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
+      block,
+      importedEvents,
+      syncWeekStartDate,
+    );
+
+    return [
+      workConflict ? "This time may overlap with a saved work shift." : null,
+      importedConflict ? "This time may overlap with an imported event." : null,
+    ].filter((message): message is string => Boolean(message));
+  }
+
+  function toggleGoogleSyncSelection(block: WeeklyPlanBlock) {
+    setGoogleSyncError(null);
+    setGoogleSyncMessage(null);
+    setGoogleSyncSelectedIds((current) => ({
+      ...current,
+      [block.id]: !current[block.id],
+    }));
+  }
+
+  function handleWeekStartChange(value: string) {
+    const parsedDate = parseDateInput(value);
+
+    setExportWeekStart(parsedDate ? getWeekMondayInputValue(parsedDate) : value);
+    setExportError(null);
+    setExportMessage(null);
+    setGoogleSyncError(null);
+    setGoogleSyncMessage(null);
+    setGoogleSyncResults({});
+    setGoogleSyncSelectedIds({});
+  }
+
+  function startEditingBlockTime(block: WeeklyPlanBlock) {
+    setTimeEditBlockId(block.id);
+    setTimeEditValue(normalizeStartTime(block.startTime ?? "") ?? "");
+    setTimeEditError(null);
+    setGoogleSyncError(null);
+    setGoogleSyncMessage(null);
+  }
+
+  function cancelEditingBlockTime() {
+    setTimeEditBlockId(null);
+    setTimeEditValue("");
+    setTimeEditError(null);
+  }
+
+  async function saveBlockStartTime(block: WeeklyPlanBlock) {
+    const startTime = normalizeStartTime(timeEditValue);
+
+    if (!startTime) {
+      setTimeEditError("Choose a valid start time before syncing this block.");
+      return;
+    }
+
+    if (!onUpdateBlock) {
+      setTimeEditError("Start time editing is unavailable right now.");
+      return;
+    }
+
+    setIsSavingStartTime(true);
+    setTimeEditError(null);
+
+    try {
+      await Promise.resolve(onUpdateBlock({ ...block, startTime }));
+      setGoogleSyncResults((current) => {
+        const next = { ...current };
+        delete next[block.id];
+        return next;
+      });
+      setGoogleSyncSelectedIds((current) => ({
+        ...current,
+        [block.id]: true,
+      }));
+      setGoogleSyncMessage(
+        `${block.projectName} now has a start time and can be selected for Google Calendar sync.`,
+      );
+      cancelEditingBlockTime();
+    } catch (updateError) {
+      setTimeEditError(`Start time could not be saved: ${getErrorMessage(updateError)}`);
+    } finally {
+      setIsSavingStartTime(false);
+    }
   }
 
   function getProjectForDraft(projectId: string) {
@@ -471,6 +929,103 @@ export function WeeklyPlanSection({
     );
   }
 
+  async function syncSelectedBlocksToGoogleCalendar() {
+    setGoogleSyncError(null);
+    setGoogleSyncMessage(null);
+    setGoogleSyncResults({});
+
+    if (selectedGoogleSyncIds.length === 0) {
+      setGoogleSyncError("Choose at least one timed block before syncing.");
+      return;
+    }
+
+    if (!exportWeekStart) {
+      setGoogleSyncError("Choose the Monday for the week you want to sync.");
+      return;
+    }
+
+    setIsGoogleSyncing(true);
+
+    try {
+      if (onSavePlanBlocks) {
+        await Promise.resolve(onSavePlanBlocks());
+      }
+
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/google-calendar/sync-blocks", {
+        body: JSON.stringify({
+          blockIds: selectedGoogleSyncIds,
+          weekStartDate: exportWeekStart,
+        }),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      const payload = (await response.json()) as GoogleCalendarSyncBlocksResponse;
+
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "Weekly Plan blocks could not be synced.");
+      }
+
+      const results = payload.results ?? [];
+      const resultsByBlockId = results.reduce<
+        Record<string, GoogleCalendarSyncBlockResult>
+      >((acc, result) => {
+        acc[result.blockId] = result;
+        return acc;
+      }, {});
+      const succeeded = results.filter(
+        (result) => result.status === "synced",
+      ).length;
+      const alreadySynced = results.filter(
+        (result) => result.status === "already_synced",
+      ).length;
+      const failed = results.filter((result) => result.status === "failed").length;
+
+      setGoogleSyncResults(resultsByBlockId);
+      setGoogleSyncStatuses((current) => {
+        const next = { ...current };
+
+        results.forEach((result) => {
+          if (result.syncStatus === "synced" || result.syncStatus === "needs_attention") {
+            next[result.blockId] = {
+              googleEventHtmlLink: result.googleEventHtmlLink,
+              lastSyncedAt: new Date().toISOString(),
+              syncStatus: result.syncStatus,
+              weeklyPlanBlockId: result.blockId,
+            };
+          }
+        });
+
+        return next;
+      });
+      setGoogleSyncSelectedIds({});
+      setGoogleSyncCalendarName(payload.syncCalendarName ?? googleSyncCalendarName);
+
+      if (failed > 0) {
+        setGoogleSyncError(
+          `${failed} block${failed === 1 ? "" : "s"} could not be synced. Review the block messages below.`,
+        );
+      }
+
+      if (succeeded > 0 || alreadySynced > 0) {
+        setGoogleSyncMessage(
+          `${succeeded} block${succeeded === 1 ? "" : "s"} synced${
+            alreadySynced > 0
+              ? `, ${alreadySynced} already synced for this week`
+              : ""
+          }.`,
+        );
+      }
+    } catch (syncError) {
+      setGoogleSyncError(getGoogleSyncDisplayError(syncError));
+    } finally {
+      setIsGoogleSyncing(false);
+    }
+  }
+
   function removeBlockWithAnimation(blockId: string) {
     if (exitingBlockIds[blockId]) {
       return;
@@ -509,6 +1064,72 @@ export function WeeklyPlanSection({
     }, weeklyBlockRemovalAnimationMs);
   }
 
+  function renderStartTimeControl(block: WeeklyPlanBlock, helperText: string) {
+    const isEditingThisBlock = timeEditBlockId === block.id;
+
+    return (
+      <div className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 p-3">
+        {isEditingThisBlock ? (
+          <div className="space-y-3">
+            <div>
+              <label className="field-label" htmlFor={`sync-start-time-${block.id}`}>
+                Start time
+              </label>
+              <Input
+                id={`sync-start-time-${block.id}`}
+                type="time"
+                value={timeEditValue}
+                onChange={(event) => {
+                  setTimeEditValue(event.target.value);
+                  setTimeEditError(null);
+                }}
+              />
+            </div>
+            {timeEditError ? (
+              <p className="text-xs font-semibold leading-5 text-brand-coral">
+                {timeEditError}
+              </p>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                disabled={isSavingStartTime}
+                size="sm"
+                type="button"
+                variant="outline"
+                onClick={cancelEditingBlockTime}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={isSavingStartTime}
+                size="sm"
+                type="button"
+                onClick={() => void saveBlockStartTime(block)}
+              >
+                {isSavingStartTime ? "Saving..." : "Save time"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-semibold leading-5 text-brand-ink/48">
+              {helperText}
+            </p>
+            <Button
+              className="shrink-0"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={() => startEditingBlockTime(block)}
+            >
+              Add time
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderPlanBlock(
     block: WeeklyPlanBlock,
     day: WeekDay,
@@ -516,7 +1137,8 @@ export function WeeklyPlanSection({
     isTimed: boolean,
     duplicateCount: number,
   ) {
-    const timeLabel = isTimed ? formatStartTime(block.startTime) : "Flexible";
+    const timeLabel = isTimed ? formatStartTime(block.startTime) : "Anytime";
+    const googleSyncStatus = getBlockGoogleSyncStatus(block);
     const workConflict = getWeeklyPlanWorkConflictForBlock(block, workShifts);
     const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
       block,
@@ -599,7 +1221,24 @@ export function WeeklyPlanSection({
                     Similar block appears {duplicateCount} times
                   </span>
                 ) : null}
+                {googleSyncStatus !== "not_synced" ? (
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold",
+                      getSyncStatusClassName(googleSyncStatus),
+                    )}
+                  >
+                    {getSyncStatusLabel(googleSyncStatus)}
+                  </span>
+                ) : null}
               </div>
+
+              {!isTimed
+                ? renderStartTimeControl(
+                    block,
+                    "Add a start time when this block needs to become a real calendar event.",
+                  )
+                : null}
 
               {workConflict || importedConflict ? (
                 <div className="mt-3 space-y-2">
@@ -847,6 +1486,36 @@ export function WeeklyPlanSection({
       </div>
 
       <Card className="rounded-[24px] border-white/70 bg-white/78 sm:rounded-[28px]">
+        <CardContent className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-center">
+          <div className="flex items-start gap-3">
+            <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
+              <CalendarIcon className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                Planning week
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-brand-ink/60">
+                {selectedWeekRangeLabel}. This same week is used for calendar
+                download and Google Calendar sync.
+              </p>
+            </div>
+          </div>
+          <div>
+            <label className="field-label" htmlFor="weekly-plan-week">
+              Week of
+            </label>
+            <Input
+              id="weekly-plan-week"
+              type="date"
+              value={exportWeekStart}
+              onChange={(event) => handleWeekStartChange(event.target.value)}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-[24px] border-white/70 bg-white/78 sm:rounded-[28px]">
         <CardContent className="p-4 sm:p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-3">
@@ -885,6 +1554,17 @@ export function WeeklyPlanSection({
         <p className="rounded-[22px] border border-brand-coral/16 bg-brand-coral/[0.07] px-4 py-3 text-sm font-semibold leading-6 text-brand-coral">
           {conflictWarning}
         </p>
+      ) : null}
+
+      {planBlocks.length === 0 ? (
+        <div className="rounded-[28px] border border-dashed border-brand-ink/12 bg-white/62 p-5">
+          <p className="text-base font-semibold text-brand-ink">
+            No blocks planned yet.
+          </p>
+          <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+            Start by adding one to a day below.
+          </p>
+        </div>
       ) : null}
 
       <div className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
@@ -1027,65 +1707,333 @@ export function WeeklyPlanSection({
         })}
       </div>
 
-      <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <Card
+        id="google-calendar-sync"
+        className="scroll-mt-6 rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]"
+      >
         <CardContent className="p-4 sm:p-6">
-          <div className="flex items-start gap-3">
-            <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
-              <CalendarIcon className="h-5 w-5" />
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
+                <CalendarIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
+                  Send this plan to your calendar
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-brand-ink/60">
+                  When the week looks right, download a calendar file or
+                  manually sync timed blocks to Google Calendar.
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
-                Export your weekly plan
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-                Download an .ics file for Apple Calendar, Google Calendar, or
-                Outlook.
+            <Badge className="bg-brand-ink/[0.045] text-brand-ink/56" variant="subtle">
+              Week of {selectedWeekRangeLabel}
+            </Badge>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-[26px] border border-brand-ink/8 bg-white/70 p-4">
+              <Badge className="bg-brand-ocean/10 text-brand-ocean" variant="subtle">
+                Calendar file
+              </Badge>
+              <h3 className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
+                Download calendar file
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/58">
+                Works with Apple Calendar, Google Calendar, and Outlook.
+                Flexible blocks use the default 9:00 AM order if no start time
+                is set.
               </p>
+              <Button
+                className="mt-4 w-full"
+                type="button"
+                onClick={handleCalendarExport}
+              >
+                Download .ics file
+              </Button>
+              {exportError ? (
+                <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-sm font-medium leading-6 text-brand-coral">
+                  {exportError}
+                </p>
+              ) : null}
+              {exportMessage ? (
+                <p className="mt-3 rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-3 py-2 text-sm font-medium leading-6 text-brand-teal">
+                  {exportMessage}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-[26px] border border-brand-teal/12 bg-brand-teal/[0.035] p-4">
+              <Badge
+                className={
+                  googleSyncEnabled
+                    ? "bg-brand-teal/10 text-brand-teal"
+                    : "bg-brand-ink/[0.045] text-brand-ink/52"
+                }
+                variant="subtle"
+              >
+                {googleSyncEnabled ? "Sync enabled" : "Sync not enabled"}
+              </Badge>
+              <h3 className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
+                Sync to Google Calendar
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/58">
+                Sends selected timed blocks to your dedicated{" "}
+                {googleSyncCalendarName ?? "Schedule Builder"} Google Calendar.
+                Nothing syncs unless you choose it.
+              </p>
+              {!googleSyncEnabled ? (
+                <Link
+                  className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-brand-ink px-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-brand-teal"
+                  href="/integrations"
+                >
+                  Enable Google sync
+                </Link>
+              ) : (
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-ink/38">
+                      Ready
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-brand-ink">
+                      {timedSyncBlockCount}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-ink/38">
+                      Needs time
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-brand-ink">
+                      {flexibleSyncBlocks.length}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="mt-5">
-            <label className="field-label" htmlFor="export-week-start">
-              Week start date
-            </label>
-            <Input
-              id="export-week-start"
-              type="date"
-              value={exportWeekStart}
-              onChange={(event) => {
-                setExportWeekStart(event.target.value);
-                setExportError(null);
-                setExportMessage(null);
-              }}
-            />
-            <p className="mt-2 text-sm leading-6 text-brand-ink/55">
-              Choose the Monday for this weekly plan. Blocks with start times
-              export at their scheduled time. Blocks without start times use the
-              default 9:00 AM order.
-            </p>
-          </div>
-
-          {exportError ? (
-            <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-sm font-medium leading-6 text-brand-coral">
-              {exportError}
+          {isGoogleSyncLoading ? (
+            <p className="mt-4 rounded-2xl border border-brand-teal/12 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+              Loading Google sync status...
             </p>
           ) : null}
 
-          {exportMessage ? (
-            <p className="mt-3 rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-3 py-2 text-sm font-medium leading-6 text-brand-teal">
-              {exportMessage}
+          {googleSyncEnabled ? (
+            <div className="mt-6 space-y-4">
+              {planBlocks.length === 0 ? (
+              <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/55 p-4">
+                <p className="text-sm font-semibold text-brand-ink/70">
+                  Add timed blocks before syncing to Google Calendar.
+                </p>
+                <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                  Start by adding one block to a day above.
+                </p>
+              </div>
+              ) : null}
+
+              <div className="rounded-[26px] border border-brand-teal/12 bg-white/70 p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-brand-ink">
+                      Ready to sync
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                      Timed blocks can be selected for Google Calendar.
+                    </p>
+                  </div>
+                  <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
+                    {readySyncBlocks.length} ready
+                  </Badge>
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  {readySyncBlocks.length === 0 ? (
+                    <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/55 p-4">
+                      <p className="text-sm font-semibold text-brand-ink/70">
+                        No timed blocks ready yet.
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                        Add start times to sync blocks to Google Calendar.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {readySyncBlocks.map((block) => {
+                    const syncStatus = getBlockGoogleSyncStatus(block);
+                    const isAlreadySynced =
+                      syncStatus === "synced" || syncStatus === "needs_attention";
+                    const isSelectable = googleSyncEnabled && !isAlreadySynced;
+                    const syncMessage = getBlockGoogleSyncMessage(block);
+                    const syncWarnings = getBlockGoogleSyncWarnings(block);
+                    const syncResult = googleSyncResults[block.id];
+                    const googleEventLink =
+                      googleSyncStatuses[block.id]?.googleEventHtmlLink ??
+                      syncResult?.googleEventHtmlLink;
+
+                    return (
+                      <div
+                        key={block.id}
+                        className={cn(
+                          "rounded-[22px] border p-4 transition",
+                          isSelectable
+                            ? "border-brand-teal/14 bg-brand-teal/[0.035]"
+                            : "border-brand-ink/8 bg-white/64",
+                        )}
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <label className="flex min-w-0 items-start gap-3">
+                            <input
+                              aria-label={`Select ${block.projectName} for Google Calendar sync`}
+                              checked={Boolean(googleSyncSelectedIds[block.id])}
+                              className="mt-1 h-5 w-5 rounded border-brand-ink/20 accent-brand-teal"
+                              disabled={!isSelectable || isGoogleSyncing}
+                              type="checkbox"
+                              onChange={() => toggleGoogleSyncSelection(block)}
+                            />
+                            <span className="min-w-0">
+                              <span className="block text-sm font-semibold text-brand-ink">
+                                {block.projectName}
+                              </span>
+                              <span className="mt-1 block text-sm leading-6 text-brand-ink/62">
+                                {block.plannedTask}
+                              </span>
+                            </span>
+                          </label>
+                          <div className="flex flex-wrap gap-2 sm:justify-end">
+                            <Badge className={getSyncStatusClassName(syncStatus)} variant="subtle">
+                              {getSyncStatusLabel(syncStatus)}
+                            </Badge>
+                            <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
+                              {formatStartTime(block.startTime)} •{" "}
+                              {formatEstimatedHours(block.estimatedHours)}
+                            </Badge>
+                          </div>
+                        </div>
+
+                        {syncWarnings.length > 0 ? (
+                          <div className="mt-3 space-y-2">
+                            {syncWarnings.map((warning) => (
+                              <p
+                                key={warning}
+                                className="rounded-2xl border border-brand-coral/14 bg-brand-coral/[0.07] px-3 py-2 text-xs font-semibold leading-5 text-brand-coral"
+                              >
+                                {warning}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {syncMessage ? (
+                          <p
+                            className={cn(
+                              "mt-3 rounded-2xl border px-3 py-2 text-xs font-semibold leading-5",
+                              syncStatus === "failed"
+                                ? "border-brand-coral/16 bg-brand-coral/[0.08] text-brand-coral"
+                                : "border-brand-ink/8 bg-white/70 text-brand-ink/50",
+                            )}
+                          >
+                            {syncMessage}
+                          </p>
+                        ) : null}
+
+                        {googleEventLink ? (
+                          <a
+                            className="mt-3 inline-flex text-xs font-semibold text-brand-teal underline-offset-4 hover:underline"
+                            href={googleEventLink}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            View Google event
+                          </a>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {flexibleSyncBlocks.length > 0 ? (
+                <div className="rounded-[26px] border border-brand-ink/8 bg-white/62 p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-base font-semibold text-brand-ink">
+                        Needs start time
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                        These stay flexible until you add a time.
+                      </p>
+                    </div>
+                    <Badge variant="subtle">
+                      {flexibleSyncBlocks.length} flexible
+                    </Badge>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {flexibleSyncBlocks.map((block) => (
+                      <div
+                        key={block.id}
+                        className="rounded-[22px] border border-brand-ink/8 bg-white/72 p-4"
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-brand-ink">
+                              {block.projectName}
+                            </p>
+                            <p className="mt-1 text-sm leading-6 text-brand-ink/62">
+                              {block.plannedTask}
+                            </p>
+                          </div>
+                          <Badge variant="subtle">
+                            Anytime •{" "}
+                            {formatEstimatedHours(block.estimatedHours)}
+                          </Badge>
+                        </div>
+                        {renderStartTimeControl(
+                          block,
+                          "Add a start time to make this block eligible for Google Calendar sync.",
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {googleSyncError ? (
+            <p className="mt-4 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-sm font-medium leading-6 text-brand-coral">
+              {googleSyncError}
             </p>
           ) : null}
 
-          <Button
-            className="mt-4 w-full"
-            type="button"
-            onClick={handleCalendarExport}
-          >
-            Export to Calendar
-          </Button>
+          {googleSyncMessage ? (
+            <p className="mt-4 rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-3 py-2 text-sm font-medium leading-6 text-brand-teal">
+              {googleSyncMessage}
+            </p>
+          ) : null}
+
+          {googleSyncEnabled ? (
+            <Button
+              className="mt-4 w-full"
+              disabled={!canSyncSelectedBlocks}
+              type="button"
+              onClick={syncSelectedBlocksToGoogleCalendar}
+            >
+              {isGoogleSyncing
+                ? "Syncing selected..."
+                : selectedGoogleSyncIds.length > 0
+                  ? `Sync selected (${selectedGoogleSyncIds.length})`
+                  : "Sync selected"}
+            </Button>
+          ) : null}
+
+          <p className="mt-3 text-sm leading-6 text-brand-ink/50">
+            Google sync is one-way in V1. Schedule Builder will not update or
+            delete Google Calendar events automatically.
+          </p>
         </CardContent>
       </Card>
+
     </section>
   );
 }

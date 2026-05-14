@@ -91,6 +91,23 @@ type GoogleCalendarResourceResponse = {
   summary?: string;
 };
 
+type GoogleCalendarCreatedEventResponse = {
+  error?: {
+    message?: string;
+  };
+  etag?: string;
+  htmlLink?: string;
+  id?: string;
+};
+
+type GoogleCalendarTimedEventInput = {
+  description: string;
+  endsAt: string;
+  startsAt: string;
+  timeZone: string;
+  title: string;
+};
+
 let serviceClient: SupabaseClient | null = null;
 
 function getErrorMessage(error: unknown) {
@@ -252,6 +269,14 @@ export function hasGoogleCalendarScope(
   expectedScope: string,
 ) {
   return Boolean(scopeValue?.split(/\s+/).includes(expectedScope));
+}
+
+export function getScheduleBuilderGoogleCalendarTimeZone() {
+  return (
+    process.env.SCHEDULE_BUILDER_TIME_ZONE?.trim() ||
+    process.env.TZ?.trim() ||
+    "America/Detroit"
+  );
 }
 
 async function postGoogleTokenRequest(
@@ -521,6 +546,54 @@ export async function createScheduleBuilderGoogleCalendar(accessToken: string) {
   return {
     id: payload.id,
     summary: payload.summary ?? scheduleBuilderGoogleCalendarName,
+  };
+}
+
+export async function createScheduleBuilderGoogleCalendarEvent(
+  accessToken: string,
+  calendarId: string,
+  event: GoogleCalendarTimedEventInput,
+) {
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId,
+    )}/events`,
+    {
+      body: JSON.stringify({
+        description: event.description,
+        end: {
+          dateTime: event.endsAt,
+          timeZone: event.timeZone,
+        },
+        start: {
+          dateTime: event.startsAt,
+          timeZone: event.timeZone,
+        },
+        summary: event.title,
+      }),
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    },
+  );
+  const payload = (await response.json()) as GoogleCalendarCreatedEventResponse;
+
+  if (!response.ok || payload.error) {
+    throw new Error(
+      payload.error?.message ?? "Google Calendar event could not be created.",
+    );
+  }
+
+  if (!payload.id) {
+    throw new Error("Google did not return the created event ID.");
+  }
+
+  return {
+    etag: payload.etag ?? null,
+    htmlLink: payload.htmlLink ?? null,
+    id: payload.id,
   };
 }
 

@@ -105,6 +105,10 @@ function isMissingWeeklyPlanStartTimeColumn(error: unknown) {
   );
 }
 
+export function getWeeklyPlanStartTimeMigrationMessage() {
+  return "Google Calendar sync needs the Weekly Plan start time column in Supabase. Run supabase/weekly-plan-start-times.sql, then try again.";
+}
+
 async function withSupabaseTimeout<Result extends { error: SchedulerSyncError | null }>(
   request: PromiseLike<Result>,
   operation: string,
@@ -498,6 +502,7 @@ export async function replaceWeeklyPlanBlocksForUser(
   userId: string,
   planBlocks: WeeklyPlanBlock[],
 ) {
+  let usedLegacyStartTimeFallback = false;
   const existingResult = await withSupabaseTimeout(
     supabase
       .from("weekly_plan_blocks")
@@ -530,6 +535,7 @@ export async function replaceWeeklyPlanBlocksForUser(
   );
 
   if (isMissingWeeklyPlanStartTimeColumn(upsertError)) {
+    usedLegacyStartTimeFallback = true;
     const retryResult = await withSupabaseTimeout(
       supabase.from("weekly_plan_blocks").upsert(
         planBlocks.map((block, index) =>
@@ -554,7 +560,10 @@ export async function replaceWeeklyPlanBlocksForUser(
       .filter((blockId) => !currentBlockIds.has(blockId)) ?? [];
 
   if (staleBlockIds.length === 0) {
-    return { error: null as SchedulerSyncError | null };
+    return {
+      error: null as SchedulerSyncError | null,
+      usedLegacyStartTimeFallback,
+    };
   }
 
   const { error: deleteError } = await withSupabaseTimeout(
@@ -566,7 +575,7 @@ export async function replaceWeeklyPlanBlocksForUser(
     "Deleting removed weekly plan blocks from Supabase",
   );
 
-  return { error: deleteError };
+  return { error: deleteError, usedLegacyStartTimeFallback };
 }
 
 export async function deleteWeeklyPlanBlockForUser(
