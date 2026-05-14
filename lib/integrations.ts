@@ -61,15 +61,14 @@ export const integrations: IntegrationCardData[] = [
     name: "Google Calendar",
     onboardingName: "Google Calendar",
     monogram: "G",
-    category: "Cross-device calendar sync",
+    category: "Read-only calendar connection",
     description:
-      "Send weekly plan blocks and important due dates into Google Calendar for a single shared view of your time.",
+      "Connect Google Calendar read-only so Schedule Builder can see upcoming commitments while planning.",
     whyItHelps:
-      "Makes it easier to coordinate project work across laptops, phones, and shared calendars.",
+      "Helps the Calendar and Assistant avoid suggesting project blocks over meetings, classes, and events.",
     accentClassName:
       "bg-[#eef9f4] text-[#1f6d52] ring-1 ring-inset ring-[#d2ebdf]",
-    status: "coming_soon",
-    priority: "planned_next",
+    status: "available",
   },
   {
     id: "work-schedule-imports",

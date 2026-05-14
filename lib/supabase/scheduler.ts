@@ -776,3 +776,50 @@ export async function createImportedCalendarEventsForUser(
     skippedDuplicates,
   };
 }
+
+export async function replaceImportedCalendarEventsForSourceRange(
+  supabase: SupabaseClient,
+  userId: string,
+  source: string,
+  drafts: ImportedCalendarEventDraft[],
+  rangeStartIso: string,
+  rangeEndIso: string,
+) {
+  const deleteResult = await withSupabaseTimeout(
+    supabase
+      .from("imported_calendar_events")
+      .delete()
+      .eq("user_id", userId)
+      .eq("source", source)
+      .gte("starts_at", rangeStartIso)
+      .lte("starts_at", rangeEndIso),
+    `Clearing ${source} calendar events from Supabase`,
+  );
+
+  if (deleteResult.error) {
+    return {
+      data: [] as ImportedCalendarEvent[],
+      error: deleteResult.error,
+      skippedDuplicates: 0,
+    };
+  }
+
+  return createImportedCalendarEventsForUser(supabase, userId, drafts);
+}
+
+export async function deleteImportedCalendarEventsForSource(
+  supabase: SupabaseClient,
+  userId: string,
+  source: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("imported_calendar_events")
+      .delete()
+      .eq("user_id", userId)
+      .eq("source", source),
+    `Removing ${source} calendar events from Supabase`,
+  );
+
+  return { error: result.error };
+}

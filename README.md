@@ -28,18 +28,19 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `https://schedule-builder-ruddy.vercel.app`
    - Any Vercel preview URLs you want to test
 7. In Supabase SQL Editor, run the SQL in `supabase/schema.sql`.
-   - This creates `projects`, `weekly_plan_blocks`, `planner_profiles`, `work_shifts`, and `imported_calendar_events`.
+   - This creates `projects`, `weekly_plan_blocks`, `planner_profiles`, `work_shifts`, `imported_calendar_events`, and `google_calendar_connections`.
    - `planner_profiles` stores onboarding answers and uses Row Level Security so each user only sees their own setup.
    - `work_shifts` stores manual work availability and uses Row Level Security so each user only sees their own shifts.
-   - `imported_calendar_events` stores reviewed ICS imports and uses Row Level Security so each user only sees their own imported calendar events.
-   - If your existing Supabase project already has the scheduler tables, you can run `supabase/onboarding.sql` for onboarding, `supabase/work-shifts.sql` for work schedule support, and `supabase/imported-calendar-events.sql` for ICS import.
+   - `imported_calendar_events` stores reviewed ICS imports and synced external calendar events. Row Level Security keeps each user's events scoped to their account.
+   - `google_calendar_connections` stores server-only Google Calendar OAuth tokens. RLS is enabled with no client policies; app API routes access it with `SUPABASE_SERVICE_ROLE_KEY`.
+   - If your existing Supabase project already has the scheduler tables, you can run `supabase/onboarding.sql` for onboarding, `supabase/work-shifts.sql` for work schedule support, `supabase/imported-calendar-events.sql` for ICS import, and `supabase/google-calendar.sql` for Google Calendar read-only sync.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.
    - Magic link sign-in also uses the Email provider.
 
 ## Google sign-in setup
 
-Google login uses Supabase Auth as the OAuth broker. This is only for sign-in with basic profile and email access; the app does not request Google Calendar scopes yet.
+Google login uses Supabase Auth as the OAuth broker. This is only for sign-in with basic profile and email access. Google Calendar connection is a separate, intentional read-only flow described below.
 
 1. In Supabase, open Authentication > Providers > Google.
 2. Copy the Google callback URL shown there. It should look like `https://<your-project-ref>.supabase.co/auth/v1/callback`.
@@ -65,6 +66,29 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 9. Keep the Google Client Secret only in Supabase. It does not belong in `.env.local` or Vercel for this browser app.
+
+## Google Calendar read-only setup
+
+Google Calendar connection is read-only. It imports upcoming Google Calendar events into Schedule Builder as external commitments; it does not create, edit, or delete Google Calendar events.
+
+1. In Supabase SQL Editor, run `supabase/google-calendar.sql` if you have not already run the full `supabase/schema.sql`.
+2. In Google Cloud Console, use a Web application OAuth client.
+3. Add authorized redirect URIs:
+   - `http://localhost:3000/api/google-calendar/callback`
+   - `https://schedule-builder-ruddy.vercel.app/api/google-calendar/callback`
+   - Any Vercel preview callback URLs you want to test
+4. On the OAuth consent screen, add the read-only calendar scope:
+   - `https://www.googleapis.com/auth/calendar.readonly`
+5. Add these server-side environment variables locally and in Vercel:
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `NEXT_PUBLIC_SITE_URL`
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+6. Open `/integrations`, choose **Connect Google Calendar**, approve read-only calendar access, then use **Sync calendar** when you want to refresh upcoming events.
+
+Tokens are stored in `google_calendar_connections` and are never returned to the browser. The client only receives connection status and sync results from server routes.
 
 ## Auth behavior
 
@@ -98,6 +122,8 @@ Schedule Builder can import `.ics` calendar files from school portals, calendar 
 5. Click **Import selected**.
 
 Imported events are saved to `imported_calendar_events` in Supabase and appear on the Calendar week and month views. Duplicate imports are skipped when an event has the same ICS UID, or when a UID is missing and the title/start/end match an existing imported event. Recurring rules are not expanded yet; if an ICS file already contains expanded event instances, those instances can be imported.
+
+Google Calendar events are also cached in `imported_calendar_events` with `source = 'google_calendar'`, so Calendar views and the Planning Assistant can treat them as external commitments.
 
 ## Work Schedule
 

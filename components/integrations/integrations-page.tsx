@@ -15,6 +15,28 @@ import {
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { fetchPlannerProfileForUser } from "@/lib/supabase/scheduler";
 
+type GoogleCalendarConnectionStatus =
+  | "connected"
+  | "needs_reconnect"
+  | "not_connected"
+  | "pending";
+
+type GoogleCalendarStatusResponse = {
+  connected?: boolean;
+  error?: string;
+  errorMessage?: string | null;
+  googleAccountEmail?: string | null;
+  lastSyncedAt?: string | null;
+  scope?: string;
+  status?: GoogleCalendarConnectionStatus;
+};
+
+type GoogleCalendarSyncResponse = {
+  error?: string;
+  importedCount?: number;
+  skippedDuplicates?: number;
+};
+
 const defaultRecommendationsByPlannerType: Record<
   PlannerType,
   DesiredIntegration[]
@@ -117,6 +139,18 @@ export function IntegrationsPage() {
   const [desiredIntegrations, setDesiredIntegrations] = useState<
     DesiredIntegration[]
   >([]);
+  const [googleCalendarStatus, setGoogleCalendarStatus] =
+    useState<GoogleCalendarConnectionStatus>("not_connected");
+  const [googleCalendarLastSyncedAt, setGoogleCalendarLastSyncedAt] = useState<
+    string | null
+  >(null);
+  const [googleCalendarMessage, setGoogleCalendarMessage] = useState<
+    string | null
+  >(null);
+  const [googleCalendarError, setGoogleCalendarError] = useState<string | null>(
+    null,
+  );
+  const [isGoogleCalendarBusy, setIsGoogleCalendarBusy] = useState(false);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -176,6 +210,216 @@ export function IntegrationsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("google_calendar");
+    const calendarError = params.get("google_calendar_error");
+
+    if (connected === "connected") {
+      setGoogleCalendarMessage(
+        "Google Calendar connected. Upcoming events were synced for planning.",
+      );
+    }
+
+    if (calendarError) {
+      setGoogleCalendarError(calendarError);
+    }
+
+    if (connected || calendarError) {
+      params.delete("google_calendar");
+      params.delete("google_calendar_error");
+      const nextUrl = `${window.location.pathname}${
+        params.toString() ? `?${params.toString()}` : ""
+      }${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      return;
+    }
+
+    let isActive = true;
+
+    async function loadGoogleCalendarStatus() {
+      try {
+        const accessToken = await getSupabaseAccessToken();
+
+        if (!accessToken || !isActive) {
+          return;
+        }
+
+        const response = await fetch("/api/google-calendar/status", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        const payload = (await response.json()) as GoogleCalendarStatusResponse;
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!response.ok || payload.error) {
+          setGoogleCalendarError(
+            payload.error ?? "Google Calendar status could not be loaded.",
+          );
+          return;
+        }
+
+        setGoogleCalendarStatus(payload.status ?? "not_connected");
+        setGoogleCalendarLastSyncedAt(payload.lastSyncedAt ?? null);
+
+        if (payload.errorMessage) {
+          setGoogleCalendarError(payload.errorMessage);
+        }
+      } catch (error) {
+        if (!isActive) {
+          return;
+        }
+
+        setGoogleCalendarError(getGoogleCalendarUiError(error));
+      }
+    }
+
+    void loadGoogleCalendarStatus();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  async function getSupabaseAccessToken() {
+    if (!isSupabaseConfigured()) {
+      throw new Error("Supabase is not configured yet.");
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase.auth.getSession();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const accessToken = data.session?.access_token;
+
+    if (!accessToken) {
+      throw new Error("Sign in before connecting Google Calendar.");
+    }
+
+    return accessToken;
+  }
+
+  function getGoogleCalendarUiError(error: unknown) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return "Google Calendar is unavailable right now.";
+  }
+
+  async function connectGoogleCalendar() {
+    setIsGoogleCalendarBusy(true);
+    setGoogleCalendarError(null);
+    setGoogleCalendarMessage(null);
+
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/google-calendar/connect", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        method: "POST",
+      });
+      const payload = (await response.json()) as {
+        authorizationUrl?: string;
+        error?: string;
+      };
+
+      if (!response.ok || payload.error || !payload.authorizationUrl) {
+        throw new Error(
+          payload.error ?? "Google Calendar connection could not start.",
+        );
+      }
+
+      window.location.href = payload.authorizationUrl;
+    } catch (error) {
+      setGoogleCalendarError(getGoogleCalendarUiError(error));
+      setIsGoogleCalendarBusy(false);
+    }
+  }
+
+  async function syncGoogleCalendar() {
+    setIsGoogleCalendarBusy(true);
+    setGoogleCalendarError(null);
+    setGoogleCalendarMessage(null);
+
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/google-calendar/sync", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        method: "POST",
+      });
+      const payload = (await response.json()) as GoogleCalendarSyncResponse;
+
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "Google Calendar sync failed.");
+      }
+
+      setGoogleCalendarStatus("connected");
+      setGoogleCalendarLastSyncedAt(new Date().toISOString());
+      setGoogleCalendarMessage(
+        `Synced ${payload.importedCount ?? 0} Google Calendar event${
+          payload.importedCount === 1 ? "" : "s"
+        } for planning.`,
+      );
+    } catch (error) {
+      setGoogleCalendarError(getGoogleCalendarUiError(error));
+    } finally {
+      setIsGoogleCalendarBusy(false);
+    }
+  }
+
+  async function disconnectGoogleCalendar() {
+    if (
+      !window.confirm(
+        "Disconnect Google Calendar from Schedule Builder? This only removes the cached Google events from this app.",
+      )
+    ) {
+      return;
+    }
+
+    setIsGoogleCalendarBusy(true);
+    setGoogleCalendarError(null);
+    setGoogleCalendarMessage(null);
+
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/google-calendar/disconnect", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        method: "POST",
+      });
+      const payload = (await response.json()) as { error?: string };
+
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "Google Calendar disconnect failed.");
+      }
+
+      setGoogleCalendarStatus("not_connected");
+      setGoogleCalendarLastSyncedAt(null);
+      setGoogleCalendarMessage("Google Calendar disconnected.");
+    } catch (error) {
+      setGoogleCalendarError(getGoogleCalendarUiError(error));
+    } finally {
+      setIsGoogleCalendarBusy(false);
+    }
+  }
+
   const selectedIntegrations = useMemo(() => {
     return new Set<DesiredIntegration>(desiredIntegrations);
   }, [desiredIntegrations]);
@@ -211,6 +455,104 @@ export function IntegrationsPage() {
 
   const availableIntegrations = visibleIntegrations.filter(i => i.status === "available");
   const comingSoonIntegrations = visibleIntegrations.filter(i => i.status === "coming_soon");
+  const googleCalendarStatusLabel =
+    googleCalendarStatus === "connected"
+      ? "Connected"
+      : googleCalendarStatus === "needs_reconnect"
+        ? "Needs reconnect"
+        : googleCalendarStatus === "pending"
+          ? "Connection pending"
+          : "Not connected";
+  const googleCalendarLastSyncLabel = googleCalendarLastSyncedAt
+    ? new Intl.DateTimeFormat("en-US", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(googleCalendarLastSyncedAt))
+    : null;
+
+  function renderGoogleCalendarActions() {
+    return (
+      <div className="w-full space-y-3">
+        <div className="rounded-[18px] border border-brand-ink/8 bg-white/70 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              className={
+                googleCalendarStatus === "connected"
+                  ? "bg-brand-teal/10 text-brand-teal"
+                  : googleCalendarStatus === "needs_reconnect"
+                    ? "bg-brand-coral/10 text-brand-coral"
+                    : "bg-brand-ink/[0.05] text-brand-ink/55"
+              }
+              variant="subtle"
+            >
+              {googleCalendarStatusLabel}
+            </Badge>
+            <Badge className="bg-brand-ink/[0.04] text-brand-ink/54" variant="subtle">
+              Read-only
+            </Badge>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-brand-ink/62">
+            Schedule Builder can read upcoming Google Calendar events for
+            planning context. It cannot create, edit, or delete Google Calendar
+            events.
+          </p>
+          {googleCalendarLastSyncLabel ? (
+            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/38">
+              Last sync: {googleCalendarLastSyncLabel}
+            </p>
+          ) : null}
+        </div>
+
+        {googleCalendarMessage ? (
+          <p className="rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-3 py-2 text-sm font-medium leading-6 text-brand-teal">
+            {googleCalendarMessage}
+          </p>
+        ) : null}
+
+        {googleCalendarError ? (
+          <p className="rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-sm font-medium leading-6 text-brand-coral">
+            {googleCalendarError}
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap gap-3">
+          {googleCalendarStatus === "connected" ? (
+            <>
+              <button
+                className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 disabled:cursor-not-allowed disabled:opacity-55 sm:w-auto"
+                disabled={isGoogleCalendarBusy}
+                type="button"
+                onClick={syncGoogleCalendar}
+              >
+                {isGoogleCalendarBusy ? "Syncing..." : "Sync calendar"}
+              </button>
+              <button
+                className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-ink/10 bg-white/75 px-6 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white disabled:cursor-not-allowed disabled:opacity-55 sm:w-auto"
+                disabled={isGoogleCalendarBusy}
+                type="button"
+                onClick={disconnectGoogleCalendar}
+              >
+                Disconnect
+              </button>
+            </>
+          ) : (
+            <button
+              className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 disabled:cursor-not-allowed disabled:opacity-55 sm:w-auto"
+              disabled={isGoogleCalendarBusy}
+              type="button"
+              onClick={connectGoogleCalendar}
+            >
+              {isGoogleCalendarBusy
+                ? "Opening Google..."
+                : googleCalendarStatus === "needs_reconnect"
+                  ? "Reconnect Google Calendar"
+                  : "Connect Google Calendar"}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-3 pb-28 pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
@@ -248,7 +590,7 @@ export function IntegrationsPage() {
                 <div className="mt-4 space-y-3">
                   <div className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4">
                     <p className="text-sm leading-6 text-brand-ink/70">
-                      <span className="font-semibold text-brand-ink">Start with calendar import/export today.</span> Direct calendar and school/work connections are planned next.
+                      <span className="font-semibold text-brand-ink">Start with read-only calendar context today.</span> Google Calendar and ICS import/export can bring commitments into Schedule Builder without writing back to your calendars.
                     </p>
                   </div>
                 </div>
@@ -271,6 +613,11 @@ export function IntegrationsPage() {
 
               return (
                 <IntegrationCard
+                  actionSlot={
+                    integration.id === "google-calendar"
+                      ? renderGoogleCalendarActions()
+                      : undefined
+                  }
                   key={integration.id}
                   integration={integration}
                   isRecommended={isRecommended}

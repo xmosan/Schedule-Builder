@@ -113,6 +113,26 @@ create table if not exists public.imported_calendar_events (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.google_calendar_connections (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  status text not null default 'needs_reconnect' check (
+    status in ('connected', 'needs_reconnect', 'pending')
+  ),
+  google_calendar_id text not null default 'primary',
+  google_account_email text null,
+  scope text not null default 'https://www.googleapis.com/auth/calendar.readonly',
+  token_type text null,
+  access_token text null,
+  refresh_token text null,
+  expires_at timestamptz null,
+  oauth_state text null,
+  oauth_state_expires_at timestamptz null,
+  last_synced_at timestamptz null,
+  error_message text null,
+  inserted_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create unique index if not exists imported_calendar_events_uid_unique
 on public.imported_calendar_events (user_id, source, external_uid)
 where external_uid is not null and external_uid <> '';
@@ -124,6 +144,10 @@ where (external_uid is null or external_uid = '') and ends_at is not null;
 create unique index if not exists imported_calendar_events_fallback_without_end_unique
 on public.imported_calendar_events (user_id, source, title, starts_at)
 where (external_uid is null or external_uid = '') and ends_at is null;
+
+create unique index if not exists google_calendar_connections_oauth_state_unique
+on public.google_calendar_connections (oauth_state)
+where oauth_state is not null;
 
 drop trigger if exists set_projects_updated_at on public.projects;
 create trigger set_projects_updated_at
@@ -155,11 +179,18 @@ before update on public.imported_calendar_events
 for each row
 execute function public.handle_updated_at();
 
+drop trigger if exists set_google_calendar_connections_updated_at on public.google_calendar_connections;
+create trigger set_google_calendar_connections_updated_at
+before update on public.google_calendar_connections
+for each row
+execute function public.handle_updated_at();
+
 alter table public.projects enable row level security;
 alter table public.weekly_plan_blocks enable row level security;
 alter table public.planner_profiles enable row level security;
 alter table public.work_shifts enable row level security;
 alter table public.imported_calendar_events enable row level security;
+alter table public.google_calendar_connections enable row level security;
 
 drop policy if exists "Users can view their own projects" on public.projects;
 create policy "Users can view their own projects"

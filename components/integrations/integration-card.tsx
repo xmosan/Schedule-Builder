@@ -1,9 +1,11 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { IntegrationCardData } from "@/lib/integrations";
 
 type IntegrationCardProps = {
+  actionSlot?: ReactNode;
   integration: IntegrationCardData;
   isRecommended?: boolean;
   recommendationLabel?: string;
@@ -11,6 +13,7 @@ type IntegrationCardProps = {
 };
 
 export function IntegrationCard({
+  actionSlot,
   integration,
   isRecommended = false,
   recommendationLabel = "Recommended for you",
@@ -70,7 +73,7 @@ export function IntegrationCard({
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3">
-          {integration.status === "available" ? (
+          {actionSlot ?? (integration.status === "available" ? (
             <>
               <Link
                 href="/plan"
@@ -91,7 +94,7 @@ export function IntegrationCard({
             <div className="inline-flex h-11 items-center justify-center px-1 text-sm font-medium text-brand-ink/40">
               Connection planned
             </div>
-          )}
+          ))}
         </div>
       </CardContent>
     </Card>

@@ -13,6 +13,7 @@ import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  formatImportedEventSource,
   formatImportedEventTimeRange,
   getImportedEventDurationHours,
   type ImportedCalendarEvent,
@@ -87,7 +88,7 @@ const filterItems: Array<{
   },
   {
     key: "importedEvents",
-    label: "Imported events",
+    label: "External events",
   },
   {
     key: "flexible",
@@ -399,10 +400,10 @@ function ImportedCalendarEventCard({
     <div className="rounded-[22px] border border-brand-ink/10 bg-brand-ink/[0.035] p-4">
       <div className="flex flex-wrap items-center gap-2">
         <Badge className="bg-brand-ink/8 text-brand-ink/70" variant="subtle">
-          Imported event
+          External event
         </Badge>
         <Badge className="bg-brand-ink/[0.045] text-brand-ink/52" variant="subtle">
-          Source: {event.source.toUpperCase()}
+          Source: {formatImportedEventSource(event.source)}
         </Badge>
         <span className="text-xs font-semibold text-brand-ink/45">
           {formatImportedEventTimeRange(event)}
@@ -515,7 +516,7 @@ function MonthDayDetail({
                 Open day
               </p>
               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                No work shifts, plan blocks, imported events, or deadlines yet.
+                No work shifts, plan blocks, external events, or deadlines yet.
               </p>
             </div>
           ) : null}
@@ -907,7 +908,7 @@ export function CalendarPage() {
             value: weekSummary.daysWithCommitments,
           },
           {
-            label: "Imported events",
+            label: "External events",
             value: weekSummary.importedEventCount,
           },
         ]
@@ -925,7 +926,7 @@ export function CalendarPage() {
             value: monthSummary.deadlines,
           },
           {
-            label: "Imported",
+            label: "External",
             value: monthSummary.importedEventCount,
           },
         ];
@@ -967,7 +968,7 @@ export function CalendarPage() {
                 Calendar
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                See work shifts, planned blocks, imported events, and project
+                See work shifts, planned blocks, external events, and project
                 deadlines in one calendar view.
               </p>
               <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -1167,7 +1168,7 @@ export function CalendarPage() {
                                 Open day
                               </p>
                               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                                No work shifts, plan blocks, imported events, or deadlines yet.
+                                No work shifts, plan blocks, external events, or deadlines yet.
                               </p>
                             </div>
                           ) : null}

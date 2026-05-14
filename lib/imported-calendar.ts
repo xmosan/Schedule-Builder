@@ -21,6 +21,22 @@ function getEventDate(value: string) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+export function formatImportedEventSource(source: string) {
+  if (source === "ics") {
+    return "ICS";
+  }
+
+  if (source === "google_calendar") {
+    return "Google Calendar";
+  }
+
+  return source
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export function getImportedEventDurationHours(
   event: Pick<ImportedCalendarEvent, "allDay" | "endsAt" | "startsAt">,
 ) {
