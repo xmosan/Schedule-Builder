@@ -29,6 +29,10 @@ type GoogleCalendarStatusResponse = {
   lastSyncedAt?: string | null;
   scope?: string;
   status?: GoogleCalendarConnectionStatus;
+  syncCalendarName?: string | null;
+  syncEnabled?: boolean;
+  writeGrantedAt?: string | null;
+  writeScope?: string | null;
 };
 
 type GoogleCalendarSyncResponse = {
@@ -144,12 +148,22 @@ export function IntegrationsPage() {
   const [googleCalendarLastSyncedAt, setGoogleCalendarLastSyncedAt] = useState<
     string | null
   >(null);
+  const [googleCalendarSyncEnabled, setGoogleCalendarSyncEnabled] =
+    useState(false);
+  const [googleCalendarSyncCalendarName, setGoogleCalendarSyncCalendarName] =
+    useState<string | null>(null);
+  const [googleCalendarWriteGrantedAt, setGoogleCalendarWriteGrantedAt] =
+    useState<string | null>(null);
   const [googleCalendarMessage, setGoogleCalendarMessage] = useState<
     string | null
   >(null);
   const [googleCalendarError, setGoogleCalendarError] = useState<string | null>(
     null,
   );
+  const [
+    googleCalendarAuthorizationUrl,
+    setGoogleCalendarAuthorizationUrl,
+  ] = useState<string | null>(null);
   const [isGoogleCalendarBusy, setIsGoogleCalendarBusy] = useState(false);
 
   useEffect(() => {
@@ -213,21 +227,35 @@ export function IntegrationsPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const connected = params.get("google_calendar");
+    const syncEnabled = params.get("google_calendar_sync");
     const calendarError = params.get("google_calendar_error");
+    const calendarSyncError = params.get("google_calendar_sync_error");
 
     if (connected === "connected") {
+      setGoogleCalendarAuthorizationUrl(null);
       setGoogleCalendarMessage(
         "Google Calendar connected. Upcoming events were synced for planning.",
       );
     }
 
-    if (calendarError) {
-      setGoogleCalendarError(calendarError);
+    if (syncEnabled === "enabled") {
+      setGoogleCalendarAuthorizationUrl(null);
+      setGoogleCalendarMessage(
+        "Calendar sync enabled. Schedule Builder created or reused a dedicated Google Calendar. Weekly Plan blocks will not sync until you choose them in a later step.",
+      );
+      setGoogleCalendarSyncEnabled(true);
     }
 
-    if (connected || calendarError) {
+    if (calendarError || calendarSyncError) {
+      setGoogleCalendarAuthorizationUrl(null);
+      setGoogleCalendarError(calendarError ?? calendarSyncError);
+    }
+
+    if (connected || syncEnabled || calendarError || calendarSyncError) {
       params.delete("google_calendar");
+      params.delete("google_calendar_sync");
       params.delete("google_calendar_error");
+      params.delete("google_calendar_sync_error");
       const nextUrl = `${window.location.pathname}${
         params.toString() ? `?${params.toString()}` : ""
       }${window.location.hash}`;
@@ -270,6 +298,9 @@ export function IntegrationsPage() {
 
         setGoogleCalendarStatus(payload.status ?? "not_connected");
         setGoogleCalendarLastSyncedAt(payload.lastSyncedAt ?? null);
+        setGoogleCalendarSyncEnabled(Boolean(payload.syncEnabled));
+        setGoogleCalendarSyncCalendarName(payload.syncCalendarName ?? null);
+        setGoogleCalendarWriteGrantedAt(payload.writeGrantedAt ?? null);
 
         if (payload.errorMessage) {
           setGoogleCalendarError(payload.errorMessage);
@@ -319,14 +350,18 @@ export function IntegrationsPage() {
     return "Google Calendar is unavailable right now.";
   }
 
-  async function connectGoogleCalendar() {
+  async function startGoogleCalendarAuthorization(
+    endpoint: "/api/google-calendar/connect" | "/api/google-calendar/enable-sync",
+    fallbackErrorMessage: string,
+  ) {
     setIsGoogleCalendarBusy(true);
     setGoogleCalendarError(null);
-    setGoogleCalendarMessage(null);
+    setGoogleCalendarAuthorizationUrl(null);
+    setGoogleCalendarMessage("Opening Google authorization...");
 
     try {
       const accessToken = await getSupabaseAccessToken();
-      const response = await fetch("/api/google-calendar/connect", {
+      const response = await fetch(endpoint, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
@@ -339,21 +374,42 @@ export function IntegrationsPage() {
 
       if (!response.ok || payload.error || !payload.authorizationUrl) {
         throw new Error(
-          payload.error ?? "Google Calendar connection could not start.",
+          payload.error ?? fallbackErrorMessage,
         );
       }
 
-      window.location.href = payload.authorizationUrl;
+      setGoogleCalendarAuthorizationUrl(payload.authorizationUrl);
+      setGoogleCalendarMessage(
+        "Google authorization is ready. If it does not open automatically, use the button below.",
+      );
+      window.location.assign(payload.authorizationUrl);
+      window.setTimeout(() => setIsGoogleCalendarBusy(false), 1500);
     } catch (error) {
       setGoogleCalendarError(getGoogleCalendarUiError(error));
+      setGoogleCalendarMessage(null);
       setIsGoogleCalendarBusy(false);
     }
+  }
+
+  async function connectGoogleCalendar() {
+    await startGoogleCalendarAuthorization(
+      "/api/google-calendar/connect",
+      "Google Calendar connection could not start.",
+    );
+  }
+
+  async function enableGoogleCalendarSync() {
+    await startGoogleCalendarAuthorization(
+      "/api/google-calendar/enable-sync",
+      "Google Calendar sync permission could not start.",
+    );
   }
 
   async function syncGoogleCalendar() {
     setIsGoogleCalendarBusy(true);
     setGoogleCalendarError(null);
     setGoogleCalendarMessage(null);
+    setGoogleCalendarAuthorizationUrl(null);
 
     try {
       const accessToken = await getSupabaseAccessToken();
@@ -395,6 +451,7 @@ export function IntegrationsPage() {
     setIsGoogleCalendarBusy(true);
     setGoogleCalendarError(null);
     setGoogleCalendarMessage(null);
+    setGoogleCalendarAuthorizationUrl(null);
 
     try {
       const accessToken = await getSupabaseAccessToken();
@@ -412,6 +469,9 @@ export function IntegrationsPage() {
 
       setGoogleCalendarStatus("not_connected");
       setGoogleCalendarLastSyncedAt(null);
+      setGoogleCalendarSyncCalendarName(null);
+      setGoogleCalendarSyncEnabled(false);
+      setGoogleCalendarWriteGrantedAt(null);
       setGoogleCalendarMessage("Google Calendar disconnected.");
     } catch (error) {
       setGoogleCalendarError(getGoogleCalendarUiError(error));
@@ -469,6 +529,12 @@ export function IntegrationsPage() {
         timeStyle: "short",
       }).format(new Date(googleCalendarLastSyncedAt))
     : null;
+  const googleCalendarWriteGrantedLabel = googleCalendarWriteGrantedAt
+    ? new Intl.DateTimeFormat("en-US", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(googleCalendarWriteGrantedAt))
+    : null;
 
   function renderGoogleCalendarActions() {
     return (
@@ -485,20 +551,44 @@ export function IntegrationsPage() {
               }
               variant="subtle"
             >
-              {googleCalendarStatusLabel}
+              Read-only {googleCalendarStatusLabel.toLowerCase()}
             </Badge>
             <Badge className="bg-brand-ink/[0.04] text-brand-ink/54" variant="subtle">
               Read-only
+            </Badge>
+            <Badge
+              className={
+                googleCalendarSyncEnabled
+                  ? "bg-brand-teal/10 text-brand-teal"
+                  : "bg-brand-ink/[0.05] text-brand-ink/55"
+              }
+              variant="subtle"
+            >
+              Calendar sync{" "}
+              {googleCalendarSyncEnabled ? "enabled" : "not enabled"}
             </Badge>
           </div>
           <p className="mt-3 text-sm leading-6 text-brand-ink/62">
             Schedule Builder can read upcoming Google Calendar events for
             planning context. It cannot create, edit, or delete Google Calendar
-            events.
+            events unless you separately enable calendar sync.
+          </p>
+          <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+            Calendar sync creates a dedicated Schedule Builder Google Calendar.
+            No Weekly Plan blocks are synced yet.
           </p>
           {googleCalendarLastSyncLabel ? (
             <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/38">
-              Last sync: {googleCalendarLastSyncLabel}
+              Last read-only sync: {googleCalendarLastSyncLabel}
+            </p>
+          ) : null}
+          {googleCalendarSyncEnabled ? (
+            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/38">
+              Sync calendar:{" "}
+              {googleCalendarSyncCalendarName ?? "Schedule Builder"}
+              {googleCalendarWriteGrantedLabel
+                ? ` • Enabled ${googleCalendarWriteGrantedLabel}`
+                : ""}
             </p>
           ) : null}
         </div>
@@ -515,6 +605,15 @@ export function IntegrationsPage() {
           </p>
         ) : null}
 
+        {googleCalendarAuthorizationUrl ? (
+          <a
+            className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-teal/20 bg-brand-teal/10 px-6 text-sm font-semibold text-brand-teal transition-all hover:-translate-y-0.5 hover:bg-brand-teal/15 sm:w-auto"
+            href={googleCalendarAuthorizationUrl}
+          >
+            Open Google authorization
+          </a>
+        ) : null}
+
         <div className="flex flex-wrap gap-3">
           {googleCalendarStatus === "connected" ? (
             <>
@@ -524,7 +623,19 @@ export function IntegrationsPage() {
                 type="button"
                 onClick={syncGoogleCalendar}
               >
-                {isGoogleCalendarBusy ? "Syncing..." : "Sync calendar"}
+                {isGoogleCalendarBusy ? "Refreshing..." : "Refresh events"}
+              </button>
+              <button
+                className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-ink/10 bg-white/75 px-6 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white disabled:cursor-not-allowed disabled:opacity-55 sm:w-auto"
+                disabled={isGoogleCalendarBusy || googleCalendarSyncEnabled}
+                type="button"
+                onClick={enableGoogleCalendarSync}
+              >
+                {isGoogleCalendarBusy
+                  ? "Opening Google..."
+                  : googleCalendarSyncEnabled
+                    ? "Calendar sync enabled"
+                    : "Enable Calendar Sync"}
               </button>
               <button
                 className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-ink/10 bg-white/75 px-6 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white disabled:cursor-not-allowed disabled:opacity-55 sm:w-auto"

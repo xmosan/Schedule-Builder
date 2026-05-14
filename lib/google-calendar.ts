@@ -9,6 +9,11 @@ import {
 export const googleCalendarSource = "google_calendar";
 export const googleCalendarReadonlyScope =
   "https://www.googleapis.com/auth/calendar.readonly";
+export const googleCalendarAppCreatedScope =
+  "https://www.googleapis.com/auth/calendar.app.created";
+export const scheduleBuilderGoogleCalendarName = "Schedule Builder";
+
+const googleCalendarSyncStatePrefix = "sync:";
 
 export type GoogleCalendarConnectionStatus =
   | "connected"
@@ -29,9 +34,14 @@ export type GoogleCalendarConnectionRow = {
   refresh_token: string | null;
   scope: string;
   status: GoogleCalendarConnectionStatus;
+  sync_calendar_id: string | null;
+  sync_calendar_name: string | null;
+  sync_enabled: boolean;
   token_type: string | null;
   updated_at: string;
   user_id: string;
+  write_granted_at: string | null;
+  write_scope: string | null;
 };
 
 type GoogleTokenResponse = {
@@ -71,6 +81,14 @@ type GoogleCalendarEventsResponse = {
   };
   items?: GoogleCalendarApiEvent[];
   nextPageToken?: string;
+};
+
+type GoogleCalendarResourceResponse = {
+  error?: {
+    message?: string;
+  };
+  id?: string;
+  summary?: string;
 };
 
 let serviceClient: SupabaseClient | null = null;
@@ -191,7 +209,18 @@ export async function getAuthenticatedGoogleCalendarUser(request: NextRequest) {
   };
 }
 
-export function createGoogleCalendarAuthorizationUrl(state: string) {
+export function createGoogleCalendarSyncState() {
+  return `${googleCalendarSyncStatePrefix}${crypto.randomUUID()}`;
+}
+
+export function isGoogleCalendarSyncState(state: string | null) {
+  return Boolean(state?.startsWith(googleCalendarSyncStatePrefix));
+}
+
+export function createGoogleCalendarAuthorizationUrl(
+  state: string,
+  scope = googleCalendarReadonlyScope,
+) {
   const { clientId, redirectUri } = getGoogleClientConfig();
   const params = new URLSearchParams({
     access_type: "offline",
@@ -200,11 +229,29 @@ export function createGoogleCalendarAuthorizationUrl(state: string) {
     prompt: "consent",
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: googleCalendarReadonlyScope,
+    scope,
     state,
   });
 
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+export function mergeGoogleCalendarScopes(...scopeValues: Array<string | null | undefined>) {
+  return [
+    ...new Set(
+      scopeValues
+        .flatMap((scope) => scope?.split(/\s+/) ?? [])
+        .map((scope) => scope.trim())
+        .filter(Boolean),
+    ),
+  ].join(" ");
+}
+
+export function hasGoogleCalendarScope(
+  scopeValue: string | null | undefined,
+  expectedScope: string,
+) {
+  return Boolean(scopeValue?.split(/\s+/).includes(expectedScope));
 }
 
 async function postGoogleTokenRequest(
@@ -443,6 +490,38 @@ export async function fetchGoogleCalendarEvents(
   } while (pageToken);
 
   return events;
+}
+
+export async function createScheduleBuilderGoogleCalendar(accessToken: string) {
+  const response = await fetch("https://www.googleapis.com/calendar/v3/calendars", {
+    body: JSON.stringify({
+      description:
+        "Calendar created by Schedule Builder for user-approved weekly plan sync.",
+      summary: scheduleBuilderGoogleCalendarName,
+    }),
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const payload = (await response.json()) as GoogleCalendarResourceResponse;
+
+  if (!response.ok || payload.error) {
+    throw new Error(
+      payload.error?.message ??
+        "Schedule Builder calendar could not be created.",
+    );
+  }
+
+  if (!payload.id) {
+    throw new Error("Google did not return the Schedule Builder calendar ID.");
+  }
+
+  return {
+    id: payload.id,
+    summary: payload.summary ?? scheduleBuilderGoogleCalendarName,
+  };
 }
 
 export async function syncGoogleCalendarForUser(

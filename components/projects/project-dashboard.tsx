@@ -74,6 +74,10 @@ function getSchedulerSection(pathname: string): SchedulerSection {
 }
 
 function getSchedulerErrorMessage(error: unknown) {
+  if (typeof error === "string") {
+    return error;
+  }
+
   if (error instanceof Error) {
     return error.message;
   }
@@ -88,6 +92,16 @@ function getSchedulerErrorMessage(error: unknown) {
   }
 
   return "Please try again shortly.";
+}
+
+function getFriendlyAuthErrorMessage(error: unknown) {
+  const message = getSchedulerErrorMessage(error);
+
+  if (/unable to exchange external code/i.test(message)) {
+    return "Google sign-in could not finish. The Google authorization code may have expired or the Supabase Google provider callback settings may need to be checked. Please start again with Continue with Google.";
+  }
+
+  return message;
 }
 
 function isMissingPlannerProfilesTable(error: unknown) {
@@ -113,8 +127,12 @@ function getOnboardingProfileErrorMessage(error: unknown) {
 
 function getAuthRedirectUrl() {
   const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
+  const currentOrigin = window.location.origin.replace(/\/$/, "");
+  const isLocalOrigin =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
 
-  return configuredSiteUrl || window.location.origin.replace(/\/$/, "");
+  return isLocalOrigin ? currentOrigin : configuredSiteUrl || currentOrigin;
 }
 
 function getAuthUrlErrorMessage() {
@@ -133,7 +151,9 @@ function getAuthUrlErrorMessage() {
     return null;
   }
 
-  return errorDescription ?? `Authentication failed: ${errorCode}`;
+  return getFriendlyAuthErrorMessage(
+    errorDescription ?? `Authentication failed: ${errorCode}`,
+  );
 }
 
 function clearAuthUrlError() {
@@ -298,7 +318,7 @@ export function ProjectDashboard() {
     try {
       client = getSupabaseBrowserClient();
     } catch (error) {
-      setAuthError(getSchedulerErrorMessage(error));
+      setAuthError(getFriendlyAuthErrorMessage(error));
       setAuthStatus("signed_out");
       return;
     }
@@ -323,7 +343,7 @@ export function ProjectDashboard() {
         }
 
         if (error) {
-          setAuthError(error.message);
+          setAuthError(getFriendlyAuthErrorMessage(error));
         }
 
         const nextUser = data.session?.user ?? null;
@@ -334,7 +354,7 @@ export function ProjectDashboard() {
           return;
         }
 
-        setAuthError(getSchedulerErrorMessage(error));
+        setAuthError(getFriendlyAuthErrorMessage(error));
         setAuthStatus("signed_out");
       }
     }
@@ -746,10 +766,10 @@ export function ProjectDashboard() {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
-        setAuthError(error.message);
+        setAuthError(getFriendlyAuthErrorMessage(error));
       }
     } catch (error) {
-      setAuthError(getSchedulerErrorMessage(error));
+      setAuthError(getFriendlyAuthErrorMessage(error));
     } finally {
       setIsAuthSubmitting(false);
     }
@@ -775,7 +795,7 @@ export function ProjectDashboard() {
       });
 
       if (error) {
-        setAuthError(error.message);
+        setAuthError(getFriendlyAuthErrorMessage(error));
         return;
       }
 
@@ -783,7 +803,7 @@ export function ProjectDashboard() {
         setAuthMessage("Check your email to confirm your account, then sign in.");
       }
     } catch (error) {
-      setAuthError(getSchedulerErrorMessage(error));
+      setAuthError(getFriendlyAuthErrorMessage(error));
     } finally {
       setIsAuthSubmitting(false);
     }
@@ -808,13 +828,13 @@ export function ProjectDashboard() {
       });
 
       if (error) {
-        setAuthError(error.message);
+        setAuthError(getFriendlyAuthErrorMessage(error));
         return;
       }
 
       setAuthMessage("Magic link sent. Open the email on this device to sign in.");
     } catch (error) {
-      setAuthError(getSchedulerErrorMessage(error));
+      setAuthError(getFriendlyAuthErrorMessage(error));
     } finally {
       setIsAuthSubmitting(false);
     }
@@ -842,10 +862,10 @@ export function ProjectDashboard() {
         return;
       }
 
-      setAuthError(error.message);
+      setAuthError(getFriendlyAuthErrorMessage(error));
       setAuthMessage(null);
     } catch (error) {
-      setAuthError(getSchedulerErrorMessage(error));
+      setAuthError(getFriendlyAuthErrorMessage(error));
       setAuthMessage(null);
     } finally {
       setIsAuthSubmitting(false);
