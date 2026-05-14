@@ -401,32 +401,48 @@ export async function fetchGoogleCalendarEvents(
   rangeStartIso: string,
   rangeEndIso: string,
 ) {
-  const params = new URLSearchParams({
-    maxResults: "2500",
-    orderBy: "startTime",
-    singleEvents: "true",
-    timeMax: rangeEndIso,
-    timeMin: rangeStartIso,
-  });
-  const response = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
+  const events: ImportedCalendarEventDraft[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({
+      maxResults: "2500",
+      orderBy: "startTime",
+      singleEvents: "true",
+      timeMax: rangeEndIso,
+      timeMin: rangeStartIso,
+    });
+
+    if (pageToken) {
+      params.set("pageToken", pageToken);
+    }
+
+    const response = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       },
-    },
-  );
-  const payload = (await response.json()) as GoogleCalendarEventsResponse;
-
-  if (!response.ok || payload.error) {
-    throw new Error(
-      payload.error?.message ?? "Google Calendar events could not be loaded.",
     );
-  }
+    const payload = (await response.json()) as GoogleCalendarEventsResponse;
 
-  return (payload.items ?? [])
-    .map(mapGoogleEventToDraft)
-    .filter((event): event is ImportedCalendarEventDraft => event !== null);
+    if (!response.ok || payload.error) {
+      throw new Error(
+        payload.error?.message ?? "Google Calendar events could not be loaded.",
+      );
+    }
+
+    events.push(
+      ...(payload.items ?? [])
+        .map(mapGoogleEventToDraft)
+        .filter((event): event is ImportedCalendarEventDraft => event !== null),
+    );
+
+    pageToken = payload.nextPageToken;
+  } while (pageToken);
+
+  return events;
 }
 
 export async function syncGoogleCalendarForUser(

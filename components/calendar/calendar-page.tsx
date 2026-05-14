@@ -1031,8 +1031,13 @@ export function CalendarPage() {
     [planBlocks, workShifts],
   );
   const planImportedEventConflicts = useMemo(
-    () => findWeeklyPlanImportedEventConflicts(planBlocks, importedEvents),
-    [importedEvents, planBlocks],
+    () =>
+      findWeeklyPlanImportedEventConflicts(
+        planBlocks,
+        importedEvents,
+        weekStartDate,
+      ),
+    [importedEvents, planBlocks, weekStartDate],
   );
 
   const conflictByBlockId = useMemo(
