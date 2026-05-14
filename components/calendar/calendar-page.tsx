@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { IcsImportPanel } from "@/components/calendar/ics-import-panel";
 import {
   CalendarIcon,
@@ -22,6 +22,7 @@ import {
   buildCalendarDays,
   buildCalendarMonth,
   calendarWeekDays,
+  getCurrentWeekStart,
   getPlanBlockTimeLabel,
   type CalendarDaySchedule,
   type CalendarMonthDaySchedule,
@@ -76,11 +77,11 @@ const filterItems: Array<{
 }> = [
   {
     key: "workShifts",
-    label: "Work shifts",
+    label: "Work",
   },
   {
     key: "planBlocks",
-    label: "Plan blocks",
+    label: "Plan",
   },
   {
     key: "deadlines",
@@ -88,21 +89,29 @@ const filterItems: Array<{
   },
   {
     key: "importedEvents",
-    label: "External events",
+    label: "External",
   },
   {
     key: "flexible",
-    label: "Flexible blocks",
+    label: "Flexible",
   },
 ];
 
 type MonthIndicatorTone =
   | "conflict"
   | "deadline"
+  | "external"
   | "flexible"
-  | "imported"
+  | "google"
+  | "ics"
   | "plan"
   | "work";
+
+type CalendarEventGroup = {
+  children: ReactNode;
+  count: number;
+  label: string;
+};
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -174,6 +183,27 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
   };
 }
 
+function getImportedEventSourceTone(
+  source: ImportedCalendarEvent["source"],
+): Extract<MonthIndicatorTone, "external" | "google" | "ics"> {
+  if (source === "google_calendar") {
+    return "google";
+  }
+
+  if (source === "ics") {
+    return "ics";
+  }
+
+  return "external";
+}
+
+function splitPlanBlocks(planBlocks: WeeklyPlanBlock[]) {
+  return {
+    flexiblePlanBlocks: planBlocks.filter((block) => !block.startTime),
+    timedPlanBlocks: planBlocks.filter((block) => block.startTime),
+  };
+}
+
 function getMonthEventSummary(
   day: CalendarMonthDaySchedule,
   filters: CalendarFilters,
@@ -181,11 +211,8 @@ function getMonthEventSummary(
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>,
 ) {
   const visibleDay = getVisibleDayData(day, filters);
-  const timedPlanBlocks = visibleDay.planBlocks.filter(
-    (block) => block.startTime,
-  );
-  const flexiblePlanBlocks = visibleDay.planBlocks.filter(
-    (block) => !block.startTime,
+  const { flexiblePlanBlocks, timedPlanBlocks } = splitPlanBlocks(
+    visibleDay.planBlocks,
   );
   const indicators: Array<{
     count: number;
@@ -239,19 +266,29 @@ function getMonthEventSummary(
     indicators.push({
       count: visibleDay.deadlines.length,
       id: "deadline",
-      label: "Deadline",
+      label: "Due",
       tone: "deadline",
     });
   }
 
-  if (visibleDay.importedEvents.length > 0) {
+  const importedEventsBySource = visibleDay.importedEvents.reduce(
+    (groups, event) => {
+      const tone = getImportedEventSourceTone(event.source);
+      groups.set(tone, (groups.get(tone) ?? 0) + 1);
+      return groups;
+    },
+    new Map<Extract<MonthIndicatorTone, "external" | "google" | "ics">, number>(),
+  );
+
+  importedEventsBySource.forEach((count, tone) => {
     indicators.push({
-      count: visibleDay.importedEvents.length,
-      id: "imported",
-      label: "Imported",
-      tone: "imported",
+      count,
+      id: tone,
+      label:
+        tone === "google" ? "Google" : tone === "ics" ? "ICS" : "External",
+      tone,
     });
-  }
+  });
 
   return {
     indicators,
@@ -277,7 +314,15 @@ function getMonthEventToneClass(tone: MonthIndicatorTone) {
     return "border-brand-coral/16 bg-brand-coral/[0.08] text-brand-coral";
   }
 
-  if (tone === "imported") {
+  if (tone === "google") {
+    return "border-brand-teal/16 bg-brand-teal/[0.08] text-brand-teal";
+  }
+
+  if (tone === "ics") {
+    return "border-brand-ocean/14 bg-brand-ocean/[0.065] text-brand-ocean";
+  }
+
+  if (tone === "external") {
     return "border-brand-ink/10 bg-brand-ink/[0.045] text-brand-ink/70";
   }
 
@@ -292,27 +337,86 @@ function addMonthsToDate(date: Date, amount: number) {
   return new Date(date.getFullYear(), date.getMonth() + amount, 1);
 }
 
+function addDaysToDate(date: Date, amount: number) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + amount);
+  return nextDate;
+}
+
+function EventCardShell({
+  accent,
+  badges,
+  children,
+  meta,
+  title,
+}: {
+  accent: "deadline" | "external" | "google" | "ics" | "plan" | "work";
+  badges: ReactNode;
+  children?: ReactNode;
+  meta?: string;
+  title: string;
+}) {
+  const accentClass =
+    accent === "work"
+      ? "border-brand-ocean/14 bg-brand-ocean/[0.055]"
+      : accent === "deadline"
+        ? "border-brand-coral/14 bg-brand-coral/[0.055]"
+        : accent === "plan"
+          ? "border-brand-teal/14 bg-brand-teal/[0.055]"
+          : accent === "google"
+            ? "border-brand-teal/14 bg-brand-teal/[0.065]"
+            : accent === "ics"
+              ? "border-brand-ocean/12 bg-brand-ocean/[0.045]"
+              : "border-brand-ink/10 bg-brand-ink/[0.035]";
+
+  return (
+    <article
+      className={cn(
+        "rounded-[22px] border p-4 shadow-[0_12px_28px_rgba(18,32,47,0.035)]",
+        accentClass,
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        {badges}
+        {meta ? (
+          <span className="text-xs font-semibold text-brand-ink/45">
+            {meta}
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
+        {title}
+      </p>
+      {children}
+    </article>
+  );
+}
+
 function WorkShiftEvent({ shift }: { shift: WorkShift }) {
   return (
-    <div className="rounded-[22px] border border-brand-ocean/12 bg-brand-ocean/[0.055] p-4">
-      <div className="flex flex-wrap items-center gap-2">
+    <EventCardShell
+      accent="work"
+      badges={
         <Badge className="bg-brand-ocean/10 text-brand-ocean" variant="subtle">
           Work shift
         </Badge>
-        <span className="text-xs font-semibold text-brand-ink/45">
-          Unavailable
-        </span>
-      </div>
-      <p className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
-        {formatWorkShiftRange(shift)} •{" "}
-        {formatHours(getWorkShiftDurationHours(shift))}
-      </p>
+      }
+      meta={`${formatWorkShiftRange(shift)} • ${formatHours(
+        getWorkShiftDurationHours(shift),
+      )}`}
+      title="Unavailable"
+    >
       {shift.location ? (
         <p className="mt-2 text-sm font-medium leading-6 text-brand-ink/65">
           {shift.location}
         </p>
       ) : null}
-    </div>
+      {shift.notes ? (
+        <p className="mt-1 line-clamp-2 text-sm leading-6 text-brand-ink/56">
+          {shift.notes}
+        </p>
+      ) : null}
+    </EventCardShell>
   );
 }
 
@@ -328,30 +432,23 @@ function PlanBlockEvent({
   const hasConflict = Boolean(workConflict || importedConflict);
 
   return (
-    <div
-      className={cn(
-        "rounded-[22px] border p-4",
-        hasConflict
-          ? "border-brand-coral/20 bg-brand-coral/[0.055]"
-          : "border-brand-teal/12 bg-brand-teal/[0.055]",
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
-          Plan block
-        </Badge>
-        {hasConflict ? (
-          <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
-            Conflict
+    <EventCardShell
+      accent={hasConflict ? "deadline" : "plan"}
+      badges={
+        <>
+          <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
+            {block.startTime ? "Plan block" : "Flexible block"}
           </Badge>
-        ) : null}
-        <span className="text-xs font-semibold text-brand-ink/45">
-          {getPlanBlockTimeLabel(block)}
-        </span>
-      </div>
-      <p className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
-        {block.projectName}
-      </p>
+          {hasConflict ? (
+            <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+              Conflict
+            </Badge>
+          ) : null}
+        </>
+      }
+      meta={getPlanBlockTimeLabel(block)}
+      title={block.projectName}
+    >
       <p className="mt-1 text-sm leading-6 text-brand-ink/65">
         {block.plannedTask}
       </p>
@@ -365,7 +462,7 @@ function PlanBlockEvent({
           {importedConflict.message}
         </p>
       ) : null}
-    </div>
+    </EventCardShell>
   );
 }
 
@@ -377,17 +474,20 @@ function DeadlineEvent({
   projectName: string;
 }) {
   return (
-    <div className="rounded-[22px] border border-brand-coral/12 bg-brand-coral/[0.055] p-4">
-      <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
-        Deadline
-      </Badge>
-      <p className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
-        {projectName}
-      </p>
+    <EventCardShell
+      accent="deadline"
+      badges={
+        <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+          Deadline
+        </Badge>
+      }
+      meta={deadlineText}
+      title={projectName}
+    >
       <p className="mt-1 text-sm leading-6 text-brand-ink/65">
-        {deadlineText}
+        Project deadline
       </p>
-    </div>
+    </EventCardShell>
   );
 }
 
@@ -396,22 +496,25 @@ function ImportedCalendarEventCard({
 }: {
   event: ImportedCalendarEvent;
 }) {
+  const sourceTone = getImportedEventSourceTone(event.source);
+  const sourceLabel = formatImportedEventSource(event.source);
+
   return (
-    <div className="rounded-[22px] border border-brand-ink/10 bg-brand-ink/[0.035] p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge className="bg-brand-ink/8 text-brand-ink/70" variant="subtle">
-          External event
-        </Badge>
-        <Badge className="bg-brand-ink/[0.045] text-brand-ink/52" variant="subtle">
-          Source: {formatImportedEventSource(event.source)}
-        </Badge>
-        <span className="text-xs font-semibold text-brand-ink/45">
-          {formatImportedEventTimeRange(event)}
-        </span>
-      </div>
-      <p className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
-        {event.title}
-      </p>
+    <EventCardShell
+      accent={sourceTone}
+      badges={
+        <>
+          <Badge className={getMonthEventToneClass(sourceTone)} variant="subtle">
+            {sourceLabel}
+          </Badge>
+          <Badge className="bg-brand-ink/[0.045] text-brand-ink/52" variant="subtle">
+            Read-only
+          </Badge>
+        </>
+      }
+      meta={formatImportedEventTimeRange(event)}
+      title={event.title}
+    >
       {event.location ? (
         <p className="mt-1 text-sm leading-6 text-brand-ink/62">
           {event.location}
@@ -422,11 +525,107 @@ function ImportedCalendarEventCard({
           {event.description}
         </p>
       ) : null}
+    </EventCardShell>
+  );
+}
+
+function CalendarEventGroupSection({ children, count, label }: CalendarEventGroup) {
+  if (count === 0) {
+    return null;
+  }
+
+  return (
+    <section className="space-y-2.5">
+      <div className="flex items-center gap-2">
+        <span className="h-1.5 w-1.5 rounded-full bg-brand-ink/22" />
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-ink/42">
+          {label}
+        </p>
+        <span className="rounded-full bg-brand-ink/[0.045] px-2 py-0.5 text-[11px] font-semibold text-brand-ink/42">
+          {count}
+        </span>
+      </div>
+      <div className="grid gap-3">{children}</div>
+    </section>
+  );
+}
+
+function DayEventGroups({
+  conflictByBlockId,
+  day,
+  importedConflictByBlockId,
+}: {
+  conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
+  day: ReturnType<typeof getVisibleDayData>;
+  importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
+}) {
+  const { flexiblePlanBlocks, timedPlanBlocks } = splitPlanBlocks(
+    day.planBlocks,
+  );
+
+  return (
+    <div className="space-y-4">
+      <CalendarEventGroupSection
+        count={day.workShifts.length}
+        label="Work shifts"
+      >
+        {day.workShifts.map((shift) => (
+          <WorkShiftEvent key={shift.id} shift={shift} />
+        ))}
+      </CalendarEventGroupSection>
+
+      <CalendarEventGroupSection
+        count={day.importedEvents.length}
+        label="External events"
+      >
+        {day.importedEvents.map((event) => (
+          <ImportedCalendarEventCard key={event.id} event={event} />
+        ))}
+      </CalendarEventGroupSection>
+
+      <CalendarEventGroupSection
+        count={timedPlanBlocks.length}
+        label="Plan blocks"
+      >
+        {timedPlanBlocks.map((block) => (
+          <PlanBlockEvent
+            key={block.id}
+            block={block}
+            importedConflict={importedConflictByBlockId.get(block.id)}
+            workConflict={conflictByBlockId.get(block.id)}
+          />
+        ))}
+      </CalendarEventGroupSection>
+
+      <CalendarEventGroupSection
+        count={flexiblePlanBlocks.length}
+        label="Flexible blocks"
+      >
+        {flexiblePlanBlocks.map((block) => (
+          <PlanBlockEvent
+            key={block.id}
+            block={block}
+            importedConflict={importedConflictByBlockId.get(block.id)}
+            workConflict={conflictByBlockId.get(block.id)}
+          />
+        ))}
+      </CalendarEventGroupSection>
+
+      <CalendarEventGroupSection count={day.deadlines.length} label="Deadlines">
+        {day.deadlines.map((deadline) => (
+          <DeadlineEvent
+            key={`${deadline.projectId}-${deadline.deadlineText}`}
+            deadlineText={deadline.deadlineText}
+            projectName={deadline.projectName}
+          />
+        ))}
+      </CalendarEventGroupSection>
     </div>
   );
 }
 
 function MonthIndicatorBadge({
+  count,
   label,
   tone,
 }: {
@@ -441,6 +640,7 @@ function MonthIndicatorBadge({
       )}`}
     >
       {label}
+      {count > 1 ? ` ${count}` : ""}
     </span>
   );
 }
@@ -451,7 +651,11 @@ function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
       ? "bg-brand-coral"
       : tone === "work"
       ? "bg-brand-ocean"
-      : tone === "imported"
+      : tone === "google"
+        ? "bg-brand-teal"
+      : tone === "ics"
+        ? "bg-brand-ocean"
+      : tone === "external"
         ? "bg-brand-ink/55"
       : tone === "deadline"
         ? "bg-brand-coral"
@@ -487,7 +691,7 @@ function MonthDayDetail({
   const visibleDay = getVisibleDayData(day, filters);
 
   return (
-    <Card className="h-fit rounded-[30px] border-white/70 bg-white/86">
+    <Card className="h-fit rounded-[30px] border-white/70 bg-white/90 shadow-[0_18px_45px_rgba(18,32,47,0.06)] lg:sticky lg:top-6">
       <CardContent className="p-4 sm:p-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -503,7 +707,7 @@ function MonthDayDetail({
           </Badge>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="mt-4">
           {status === "loading" ? (
             <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
               Loading calendar...
@@ -513,38 +717,35 @@ function MonthDayDetail({
           {status !== "loading" && !visibleDay.hasEvents ? (
             <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4">
               <p className="text-sm font-semibold text-brand-ink/70">
-                Open day
+                Nothing scheduled here yet.
               </p>
               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                No work shifts, plan blocks, external events, or deadlines yet.
+                No work shifts, plan blocks, or external events.
               </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Link
+                  className="inline-flex h-9 items-center justify-center rounded-full bg-brand-ink px-3 text-xs font-semibold text-white"
+                  href="/plan"
+                >
+                  Add plan block
+                </Link>
+                <Link
+                  className="inline-flex h-9 items-center justify-center rounded-full border border-brand-ink/10 bg-white/78 px-3 text-xs font-semibold text-brand-ink"
+                  href="/work"
+                >
+                  Add work shift
+                </Link>
+              </div>
             </div>
           ) : null}
 
-          {visibleDay.workShifts.map((shift) => (
-            <WorkShiftEvent key={shift.id} shift={shift} />
-          ))}
-
-          {visibleDay.planBlocks.map((block) => (
-            <PlanBlockEvent
-              key={block.id}
-              block={block}
-              importedConflict={importedConflictByBlockId.get(block.id)}
-              workConflict={conflictByBlockId.get(block.id)}
+          {status !== "loading" && visibleDay.hasEvents ? (
+            <DayEventGroups
+              conflictByBlockId={conflictByBlockId}
+              day={visibleDay}
+              importedConflictByBlockId={importedConflictByBlockId}
             />
-          ))}
-
-          {visibleDay.deadlines.map((deadline) => (
-            <DeadlineEvent
-              key={`${deadline.projectId}-${deadline.deadlineText}`}
-              deadlineText={deadline.deadlineText}
-              projectName={deadline.projectName}
-            />
-          ))}
-
-          {visibleDay.importedEvents.map((event) => (
-            <ImportedCalendarEventCard key={event.id} event={event} />
-          ))}
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -570,8 +771,21 @@ function CalendarMonthView({
   setSelectedMonthIso: (isoDate: string) => void;
   status: CalendarStatus;
 }) {
+  const hasVisibleMonthItems = monthCalendar.days.some((day) => {
+    if (!day.isCurrentMonth) {
+      return false;
+    }
+
+    return getMonthEventSummary(
+      day,
+      filters,
+      conflictByBlockId,
+      importedConflictByBlockId,
+    ).totalItems > 0;
+  });
+
   return (
-    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_360px] items-start">
+    <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
       <Card className="overflow-hidden rounded-[32px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
         <CardContent className="p-3 sm:p-5 lg:p-6">
           <div className="mb-4 flex flex-col gap-2 px-1 sm:flex-row sm:items-end sm:justify-between">
@@ -580,13 +794,12 @@ function CalendarMonthView({
                 {monthCalendar.monthLabel}
               </h2>
               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                Weekly plan blocks currently reflect your active weekly plan.
-                Work shifts repeat on matching weekdays.
+                Compact overview. Select a day to see full event details.
               </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-7 gap-1 sm:gap-2">
+          <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
             {calendarWeekDays.map((day) => (
               <div
                 key={day}
@@ -613,13 +826,13 @@ function CalendarMonthView({
                 <button
                   key={day.isoDate}
                   aria-label={`${day.day}, ${day.dateLabel}`}
-                  className={`min-h-[72px] rounded-[18px] border p-2 text-left transition sm:min-h-[128px] sm:rounded-[24px] sm:p-3 ${
+                  className={`min-h-[76px] rounded-[18px] border p-2 text-left transition sm:min-h-[122px] sm:rounded-[24px] sm:p-3 lg:min-h-[132px] ${
                     day.isCurrentMonth
-                      ? "border-brand-ink/8 bg-white/82 hover:border-brand-teal/20 hover:bg-brand-teal/[0.035]"
-                      : "border-transparent bg-brand-ink/[0.025] text-brand-ink/26"
+                      ? "border-brand-ink/8 bg-white/82 hover:-translate-y-0.5 hover:border-brand-teal/20 hover:bg-brand-teal/[0.035]"
+                      : "border-transparent bg-brand-ink/[0.025] text-brand-ink/24"
                   } ${
                     isSelected
-                      ? "border-brand-teal/30 bg-brand-teal/[0.055] shadow-[0_12px_28px_rgba(20,121,110,0.08)]"
+                      ? "border-brand-teal/35 bg-brand-teal/[0.075] shadow-[0_12px_28px_rgba(20,121,110,0.1)]"
                       : ""
                   }`}
                   disabled={!day.isCurrentMonth}
@@ -631,6 +844,8 @@ function CalendarMonthView({
                       className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold ${
                         day.isToday
                           ? "bg-brand-ink text-white"
+                          : isSelected
+                            ? "bg-brand-teal text-white"
                           : day.isCurrentMonth
                             ? "text-brand-ink/72"
                             : "text-brand-ink/28"
@@ -675,6 +890,12 @@ function CalendarMonthView({
               );
             })}
           </div>
+
+          {status !== "loading" && !hasVisibleMonthItems ? (
+            <div className="mt-4 rounded-[24px] border border-dashed border-brand-ink/12 bg-white/62 p-4 text-sm leading-6 text-brand-ink/55">
+              No calendar items match these filters for this month.
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -699,6 +920,9 @@ export function CalendarPage() {
   const [importedEvents, setImportedEvents] = useState<ImportedCalendarEvent[]>([]);
   const [filters, setFilters] = useState<CalendarFilters>(defaultFilters);
   const [view, setView] = useState<CalendarView>("week");
+  const [weekStartDate, setWeekStartDate] = useState(() =>
+    getCurrentWeekStart(),
+  );
   const [monthDate, setMonthDate] = useState(() => new Date());
   const [selectedMonthIso, setSelectedMonthIso] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -784,9 +1008,10 @@ export function CalendarPage() {
         importedEvents,
         planBlocks,
         projects,
+        weekStart: weekStartDate,
         workShifts,
       }),
-    [importedEvents, planBlocks, projects, workShifts],
+    [importedEvents, planBlocks, projects, weekStartDate, workShifts],
   );
 
   const monthCalendar = useMemo(
@@ -849,8 +1074,13 @@ export function CalendarPage() {
       (sum, day) => sum + day.importedEvents.length,
       0,
     );
+    const deadlineCount = calendar.days.reduce(
+      (sum, day) => sum + day.deadlines.length,
+      0,
+    );
 
     return {
+      deadlineCount,
       daysWithCommitments,
       importedEventCount,
       openDays: Math.max(0, 7 - daysWithCommitments),
@@ -882,9 +1112,11 @@ export function CalendarPage() {
       0,
     );
     const openDays = visibleDays.filter((day) => !day.hasEvents).length;
+    const hasFilteredEvents = visibleDays.some((day) => day.hasEvents);
 
     return {
       deadlines,
+      hasFilteredEvents,
       importedEventCount,
       openDays,
       plannedBlocks,
@@ -896,25 +1128,29 @@ export function CalendarPage() {
     view === "week"
       ? [
           {
-            label: "Work hours",
+            label: "Work commitments",
             value: formatHours(weekSummary.workHours),
           },
           {
-            label: "Project hours",
+            label: "Plan blocks",
             value: formatEstimatedHours(weekSummary.plannedProjectHours),
-          },
-          {
-            label: "Days committed",
-            value: weekSummary.daysWithCommitments,
           },
           {
             label: "External events",
             value: weekSummary.importedEventCount,
           },
+          {
+            label: "Open days",
+            value: weekSummary.openDays,
+          },
+          {
+            label: "Deadlines",
+            value: weekSummary.deadlineCount,
+          },
         ]
       : [
           {
-            label: "Work shift days",
+            label: "Work days",
             value: monthSummary.workShiftDays,
           },
           {
@@ -929,6 +1165,10 @@ export function CalendarPage() {
             label: "External",
             value: monthSummary.importedEventCount,
           },
+          {
+            label: "Open days",
+            value: monthSummary.openDays,
+          },
         ];
 
   const selectedMonthDay =
@@ -938,6 +1178,23 @@ export function CalendarPage() {
     monthCalendar.days.find((day) => day.isCurrentMonth && day.isToday) ??
     monthCalendar.days.find((day) => day.isCurrentMonth) ??
     null;
+  const googleCalendarEventCount = importedEvents.filter(
+    (event) => event.source === "google_calendar",
+  ).length;
+  const icsEventCount = importedEvents.filter(
+    (event) => event.source === "ics",
+  ).length;
+  const externalStatusLabel =
+    googleCalendarEventCount > 0
+      ? "Google Calendar connected"
+      : icsEventCount > 0
+        ? "ICS events included"
+        : "External events ready";
+  const deadlinesNeedingExactDates = (
+    view === "week"
+      ? calendar.upcomingDeadlines
+      : monthCalendar.upcomingDeadlines
+  ).filter((deadline) => !deadline.isoDate);
 
   function toggleFilter(key: keyof CalendarFilters) {
     setFilters((current) => ({
@@ -951,9 +1208,17 @@ export function CalendarPage() {
     setSelectedMonthIso(null);
   }
 
+  function changeWeek(amount: number) {
+    setWeekStartDate((current) => addDaysToDate(current, amount * 7));
+  }
+
   function returnToCurrentMonth() {
     setMonthDate(new Date());
     setSelectedMonthIso(null);
+  }
+
+  function returnToCurrentWeek() {
+    setWeekStartDate(getCurrentWeekStart());
   }
 
   return (
@@ -962,80 +1227,114 @@ export function CalendarPage() {
         <SchedulerNav />
 
         <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_360px] lg:items-end">
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_420px] xl:items-end">
             <div className="max-w-3xl">
-              <h1 className="text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+              <div className="inline-flex items-center gap-2 rounded-full border border-brand-teal/12 bg-brand-teal/8 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-brand-teal">
+                <CalendarIcon className="h-4 w-4" />
+                Central schedule hub
+              </div>
+              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
                 Calendar
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                See work shifts, planned blocks, external events, and project
-                deadlines in one calendar view.
+                See work shifts, planned blocks, external events, and deadlines
+                in one schedule.
               </p>
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <div className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/78 p-1 shadow-[0_12px_28px_rgba(18,32,47,0.06)]">
-                  {(["week", "month"] as const).map((nextView) => (
+              <div className="mt-5 flex flex-wrap gap-2">
+                <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
+                  {externalStatusLabel}
+                </Badge>
+                {googleCalendarEventCount > 0 ? (
+                  <Badge className="bg-brand-ink/[0.045] text-brand-ink/56" variant="subtle">
+                    Google Calendar events are read-only
+                  </Badge>
+                ) : null}
+                {planWorkConflicts.length + planImportedEventConflicts.length > 0 ? (
+                  <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                    {planWorkConflicts.length + planImportedEventConflicts.length} conflict
+                    {planWorkConflicts.length + planImportedEventConflicts.length === 1
+                      ? ""
+                      : "s"}
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+
+            <Card className="rounded-[30px] border-white/70 bg-white/90 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
+              <CardContent className="space-y-4 p-4 sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:flex-col xl:items-stretch">
+                  <div className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/78 p-1 shadow-[0_12px_28px_rgba(18,32,47,0.06)]">
+                    {(["week", "month"] as const).map((nextView) => (
+                      <button
+                        key={nextView}
+                        aria-pressed={view === nextView}
+                        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                          view === nextView
+                            ? "bg-brand-ink text-white shadow-[0_10px_24px_rgba(18,32,47,0.16)]"
+                            : "text-brand-ink/58 hover:bg-brand-ink/5 hover:text-brand-ink"
+                        }`}
+                        type="button"
+                        onClick={() => setView(nextView)}
+                      >
+                        {nextView === "week" ? "Week" : "Month"}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
-                      key={nextView}
-                      aria-pressed={view === nextView}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                        view === nextView
-                          ? "bg-brand-ink text-white shadow-[0_10px_24px_rgba(18,32,47,0.16)]"
-                          : "text-brand-ink/58 hover:bg-brand-ink/5 hover:text-brand-ink"
-                      }`}
+                      className="rounded-full border border-brand-ink/10 bg-white/76 px-3 py-2 text-sm font-semibold text-brand-ink/62 transition hover:bg-white hover:text-brand-ink"
                       type="button"
-                      onClick={() => setView(nextView)}
+                      onClick={() =>
+                        view === "week" ? changeWeek(-1) : changeMonth(-1)
+                      }
                     >
-                      {nextView === "week" ? "Week" : "Month"}
+                      Previous
                     </button>
-                  ))}
+                    <button
+                      className="rounded-full border border-brand-teal/15 bg-brand-teal/8 px-3 py-2 text-sm font-semibold text-brand-teal transition hover:bg-brand-teal/12"
+                      type="button"
+                      onClick={
+                        view === "week"
+                          ? returnToCurrentWeek
+                          : returnToCurrentMonth
+                      }
+                    >
+                      {view === "week" ? "Today" : "This month"}
+                    </button>
+                    <button
+                      className="rounded-full border border-brand-ink/10 bg-white/76 px-3 py-2 text-sm font-semibold text-brand-ink/62 transition hover:bg-white hover:text-brand-ink"
+                      type="button"
+                      onClick={() =>
+                        view === "week" ? changeWeek(1) : changeMonth(1)
+                      }
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
 
-                <p className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/72 px-4 py-2 text-sm font-semibold text-brand-ink/62">
+                <p className="rounded-[22px] border border-brand-ink/8 bg-white/70 px-4 py-3 text-sm font-semibold text-brand-ink/62">
                   {view === "week"
                     ? calendar.weekRangeLabel
                     : monthCalendar.monthLabel}
                 </p>
 
-                {view === "month" ? (
-                  <div className="inline-flex w-fit flex-wrap gap-2">
-                    <button
-                      className="rounded-full border border-brand-ink/10 bg-white/76 px-3 py-2 text-sm font-semibold text-brand-ink/62 hover:bg-white hover:text-brand-ink"
-                      type="button"
-                      onClick={() => changeMonth(-1)}
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 xl:grid-cols-2">
+                  {summaryCards.map((card) => (
+                    <div
+                      key={card.label}
+                      className="rounded-[20px] border border-brand-ink/[0.06] bg-white/72 p-3"
                     >
-                      Previous
-                    </button>
-                    <button
-                      className="rounded-full border border-brand-teal/15 bg-brand-teal/8 px-3 py-2 text-sm font-semibold text-brand-teal hover:bg-brand-teal/12"
-                      type="button"
-                      onClick={returnToCurrentMonth}
-                    >
-                      This month
-                    </button>
-                    <button
-                      className="rounded-full border border-brand-ink/10 bg-white/76 px-3 py-2 text-sm font-semibold text-brand-ink/62 hover:bg-white hover:text-brand-ink"
-                      type="button"
-                      onClick={() => changeMonth(1)}
-                    >
-                      Next
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <Card className="rounded-[26px] border-white/70 bg-white/88">
-              <CardContent className="grid grid-cols-2 gap-3 p-4 sm:p-5">
-                {summaryCards.map((card) => (
-                  <div key={card.label} className="rounded-[22px] bg-white/70 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
-                      {card.label}
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
-                      {card.value}
-                    </p>
-                  </div>
-                ))}
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-ink/40">
+                        {card.label}
+                      </p>
+                      <p className="mt-2 text-xl font-semibold tracking-[-0.04em] text-brand-ink">
+                        {card.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -1063,63 +1362,80 @@ export function CalendarPage() {
 
         {status !== "signed_out" ? (
           <>
-            <section className="flex flex-col gap-4 rounded-[26px] border border-white/70 bg-white/60 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="mr-2 text-sm font-semibold text-brand-ink/50">Filters:</span>
-                {filterItems.map((item) => (
-                  <button
-                    key={item.key}
-                    aria-pressed={filters[item.key]}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${
-                      filters[item.key]
-                        ? "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
-                        : "border-brand-ink/10 bg-white/70 text-brand-ink/48"
-                    }`}
-                    type="button"
-                    onClick={() => toggleFilter(item.key)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+            <section className="grid gap-3 rounded-[28px] border border-white/70 bg-white/68 p-3 shadow-[0_12px_32px_rgba(18,32,47,0.045)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center sm:p-4">
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/38">
+                  Show on calendar
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {filterItems.map((item) => (
+                    <button
+                      key={item.key}
+                      aria-pressed={filters[item.key]}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${
+                        filters[item.key]
+                          ? "border-brand-teal/20 bg-brand-teal/10 text-brand-teal shadow-[0_8px_18px_rgba(20,121,110,0.06)]"
+                          : "border-brand-ink/10 bg-white/70 text-brand-ink/48 hover:bg-white hover:text-brand-ink/68"
+                      }`}
+                      type="button"
+                      onClick={() => toggleFilter(item.key)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  className="inline-flex h-9 items-center gap-1.5 rounded-full bg-brand-ink px-4 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(18,32,47,0.12)] hover:bg-brand-teal sm:text-sm"
-                  href="/plan"
-                >
-                  <PlusIcon className="h-3.5 w-3.5" />
-                  Plan
-                </Link>
-                <Link
-                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink hover:bg-white sm:text-sm"
-                  href="/work"
-                >
-                  <ClockIcon className="h-3.5 w-3.5" />
-                  Shift
-                </Link>
-                <Link
-                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink hover:bg-white sm:text-sm"
-                  href="/projects"
-                >
-                  <FolderStackIcon className="h-3.5 w-3.5" />
-                  Projects
-                </Link>
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/38 lg:text-right">
+                  Quick actions
+                </p>
+                <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                  <Link
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full bg-brand-ink px-4 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(18,32,47,0.12)] transition hover:-translate-y-0.5 hover:bg-brand-teal sm:text-sm"
+                    href="/plan"
+                  >
+                    <PlusIcon className="h-3.5 w-3.5" />
+                    Add plan block
+                  </Link>
+                  <Link
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:bg-white sm:text-sm"
+                    href="/work"
+                  >
+                    <ClockIcon className="h-3.5 w-3.5" />
+                    Add work shift
+                  </Link>
+                  <a
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:bg-white sm:text-sm"
+                    href="#import-ics"
+                  >
+                    Import ICS
+                  </a>
+                  <Link
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:bg-white sm:text-sm"
+                    href="/projects"
+                  >
+                    <FolderStackIcon className="h-3.5 w-3.5" />
+                    Projects
+                  </Link>
+                </div>
               </div>
             </section>
 
-            <IcsImportPanel
-              compact
-              onImported={(events) =>
-                setImportedEvents((current) =>
-                  [...current, ...events].sort(
-                    (first, second) =>
-                      new Date(first.startsAt).getTime() -
-                      new Date(second.startsAt).getTime(),
-                  ),
-                )
-              }
-            />
+            <section id="import-ics" className="scroll-mt-6">
+              <IcsImportPanel
+                compact
+                onImported={(events) =>
+                  setImportedEvents((current) =>
+                    [...current, ...events].sort(
+                      (first, second) =>
+                        new Date(first.startsAt).getTime() -
+                        new Date(second.startsAt).getTime(),
+                    ),
+                  )
+                }
+              />
+            </section>
 
             {error ? (
               <p className="rounded-[22px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral">
@@ -1131,18 +1447,34 @@ export function CalendarPage() {
               <section className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
                 {calendar.days.map((day) => {
                   const visibleDay = getVisibleDayData(day, filters);
+                  const conflictCount = visibleDay.planBlocks.filter(
+                    (block) =>
+                      conflictByBlockId.has(block.id) ||
+                      importedConflictByBlockId.has(block.id),
+                  ).length;
 
                   return (
                     <Card
                       key={day.day}
-                      className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)] sm:rounded-[34px]"
+                      className="h-full overflow-hidden rounded-[30px] border-white/70 bg-white/90 shadow-[0_18px_45px_rgba(18,32,47,0.065)] sm:rounded-[34px]"
                     >
                       <CardContent className="flex h-full flex-col p-4 sm:p-5 lg:p-6">
                         <div className="mb-4 flex flex-col gap-3 border-b border-brand-ink/8 pb-4 sm:flex-row sm:items-start sm:justify-between">
                           <div>
-                            <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-                              {day.day}
-                            </h2>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+                                {day.day}
+                              </h2>
+                              {conflictCount > 0 ? (
+                                <Badge
+                                  className="bg-brand-coral/10 text-brand-coral"
+                                  variant="subtle"
+                                >
+                                  {conflictCount} conflict
+                                  {conflictCount === 1 ? "" : "s"}
+                                </Badge>
+                              ) : null}
+                            </div>
                             <p className="mt-1 text-sm font-medium text-brand-ink/50">
                               {day.dateLabel}
                             </p>
@@ -1168,35 +1500,18 @@ export function CalendarPage() {
                                 Open day
                               </p>
                               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                                No work shifts, plan blocks, external events, or deadlines yet.
+                                No work shifts, plan blocks, or external events.
                               </p>
                             </div>
                           ) : null}
 
-                          {visibleDay.workShifts.map((shift) => (
-                            <WorkShiftEvent key={shift.id} shift={shift} />
-                          ))}
-
-                          {visibleDay.planBlocks.map((block) => (
-                            <PlanBlockEvent
-                              key={block.id}
-                              block={block}
-                              importedConflict={importedConflictByBlockId.get(block.id)}
-                              workConflict={conflictByBlockId.get(block.id)}
+                          {status !== "loading" && visibleDay.hasEvents ? (
+                            <DayEventGroups
+                              conflictByBlockId={conflictByBlockId}
+                              day={visibleDay}
+                              importedConflictByBlockId={importedConflictByBlockId}
                             />
-                          ))}
-
-                          {visibleDay.deadlines.map((deadline) => (
-                            <DeadlineEvent
-                              key={`${deadline.projectId}-${deadline.deadlineText}`}
-                              deadlineText={deadline.deadlineText}
-                              projectName={deadline.projectName}
-                            />
-                          ))}
-
-                          {visibleDay.importedEvents.map((event) => (
-                            <ImportedCalendarEventCard key={event.id} event={event} />
-                          ))}
+                          ) : null}
                         </div>
                       </CardContent>
                     </Card>
@@ -1216,11 +1531,8 @@ export function CalendarPage() {
               />
             )}
 
-            {filters.deadlines &&
-            (view === "week"
-              ? calendar.upcomingDeadlines.length
-              : monthCalendar.upcomingDeadlines.length) > 0 ? (
-              <Card className="rounded-[30px] border-white/70 bg-white/86">
+            {filters.deadlines && deadlinesNeedingExactDates.length > 0 ? (
+              <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.05)]">
                 <CardContent className="p-4 sm:p-6">
                   <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink">
                     Deadlines needing dates
@@ -1229,16 +1541,28 @@ export function CalendarPage() {
                     Add exact dates to place these on your calendar.
                   </p>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    {(view === "week"
-                      ? calendar.upcomingDeadlines
-                      : monthCalendar.upcomingDeadlines
-                    ).map((deadline) => (
-                        <DeadlineEvent
+                    {deadlinesNeedingExactDates.map((deadline) => (
+                      <div
                           key={`${deadline.projectId}-${deadline.deadlineText}`}
-                          deadlineText={deadline.deadlineText}
-                          projectName={deadline.projectName}
-                        />
-                      ))}
+                        className="rounded-[22px] border border-brand-coral/12 bg-brand-coral/[0.045] p-4"
+                      >
+                        <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                          Needs exact date
+                        </Badge>
+                        <p className="mt-3 text-base font-semibold tracking-[-0.02em] text-brand-ink">
+                          {deadline.projectName}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-brand-ink/62">
+                          {deadline.deadlineText}
+                        </p>
+                        <Link
+                          className="mt-4 inline-flex h-9 items-center justify-center rounded-full border border-brand-ink/10 bg-white/78 px-3 text-xs font-semibold text-brand-ink transition hover:bg-white"
+                          href="/projects"
+                        >
+                          Edit project
+                        </Link>
+                      </div>
+                    ))}
                   </div>
                 </CardContent>
               </Card>
