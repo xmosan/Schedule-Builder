@@ -79,10 +79,20 @@ type GoogleCalendarSyncStatus = {
 
 type GoogleCalendarSyncStatusResponse = {
   error?: string;
+  removedSyncedEvents?: GoogleCalendarRemovedSyncedEvent[];
   statuses?: GoogleCalendarSyncStatus[];
   syncCalendarName?: string | null;
   syncEnabled?: boolean;
   weekStartDate?: string;
+};
+
+type GoogleCalendarRemovedSyncedEvent = {
+  googleEventHtmlLink?: string | null;
+  id: string;
+  lastSyncedAt?: string | null;
+  syncedEndsAt: string;
+  syncedStartsAt: string;
+  syncedTitle: string;
 };
 
 type PreSyncConflict = {
@@ -254,6 +264,31 @@ function formatBlockDayDate(day: WeekDay, weekStartValue: string) {
   return `${day}, ${formatShortDate(date)}`;
 }
 
+function formatSyncedEventRange(startsAt: string, endsAt: string) {
+  const startDate = new Date(startsAt);
+  const endDate = new Date(endsAt);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return "Original synced time";
+  }
+
+  const dateLabel = startDate.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    weekday: "long",
+  });
+  const startTime = startDate.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const endTime = endDate.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return `${dateLabel} • ${startTime} - ${endTime}`;
+}
+
 function getSyncStatusLabel(status: GoogleCalendarSyncStatusValue) {
   if (status === "synced") {
     return "Synced";
@@ -363,6 +398,9 @@ export function WeeklyPlanSection({
   const [googleSyncStatuses, setGoogleSyncStatuses] = useState<
     Record<string, GoogleCalendarSyncStatus>
   >({});
+  const [removedGoogleSyncEvents, setRemovedGoogleSyncEvents] = useState<
+    GoogleCalendarRemovedSyncedEvent[]
+  >([]);
   const [googleSyncResults, setGoogleSyncResults] = useState<
     Record<string, GoogleCalendarSyncBlockResult>
   >({});
@@ -456,6 +494,7 @@ export function WeeklyPlanSection({
 
         setGoogleSyncEnabled(Boolean(payload.syncEnabled));
         setGoogleSyncCalendarName(payload.syncCalendarName ?? "Schedule Builder");
+        setRemovedGoogleSyncEvents(payload.removedSyncedEvents ?? []);
         setGoogleSyncStatuses(
           (payload.statuses ?? []).reduce<
             Record<string, GoogleCalendarSyncStatus>
@@ -470,6 +509,7 @@ export function WeeklyPlanSection({
         }
 
         setGoogleSyncEnabled(false);
+        setRemovedGoogleSyncEvents([]);
         setGoogleSyncError(getGoogleSyncDisplayError(syncStatusError));
       } finally {
         if (isActive) {
@@ -483,7 +523,7 @@ export function WeeklyPlanSection({
     return () => {
       isActive = false;
     };
-  }, [exportWeekStart]);
+  }, [exportWeekStart, planBlocks]);
 
   useEffect(() => {
     setGoogleSyncSelectedIds((current) => {
@@ -693,6 +733,13 @@ export function WeeklyPlanSection({
       ),
     [planBlocks],
   );
+  const needsAttentionSyncCount = useMemo(
+    () =>
+      Object.values(googleSyncStatuses).filter(
+        (status) => status.syncStatus === "needs_attention",
+      ).length,
+    [googleSyncStatuses],
+  );
   const canSyncSelectedBlocks =
     googleSyncEnabled && selectedGoogleSyncIds.length > 0 && !isGoogleSyncing;
   const selectedGoogleSyncConflictCount = useMemo(
@@ -751,7 +798,7 @@ export function WeeklyPlanSection({
     const status = googleSyncStatuses[block.id];
 
     if (status?.syncStatus === "needs_attention") {
-      return "This block was synced before, but the block has changed. V1 will not update Google Calendar automatically.";
+      return "This block changed after syncing. Google Calendar still has the older version.";
     }
 
     if (status?.syncStatus === "synced") {
@@ -871,6 +918,10 @@ export function WeeklyPlanSection({
 
   async function saveBlockStartTime(block: WeeklyPlanBlock) {
     const startTime = normalizeStartTime(timeEditValue);
+    const existingSyncStatus = googleSyncStatuses[block.id]?.syncStatus;
+    const changedSyncedBlock =
+      existingSyncStatus === "synced" &&
+      (normalizeStartTime(block.startTime ?? "") ?? "") !== startTime;
 
     if (!startTime) {
       setTimeEditError("Choose a valid start time before syncing this block.");
@@ -892,13 +943,34 @@ export function WeeklyPlanSection({
         delete next[block.id];
         return next;
       });
-      setGoogleSyncSelectedIds((current) => ({
-        ...current,
-        [block.id]: true,
-      }));
+      if (changedSyncedBlock) {
+        setGoogleSyncStatuses((current) => ({
+          ...current,
+          ...(current[block.id]
+            ? {
+                [block.id]: {
+                  ...current[block.id],
+                  syncStatus: "needs_attention" as const,
+                },
+              }
+            : {}),
+        }));
+        setGoogleSyncSelectedIds((current) => {
+          const next = { ...current };
+          delete next[block.id];
+          return next;
+        });
+      } else {
+        setGoogleSyncSelectedIds((current) => ({
+          ...current,
+          [block.id]: true,
+        }));
+      }
       setIsConfirmingGoogleSyncConflicts(false);
       setGoogleSyncMessage(
-        `${block.projectName} now has a start time and can be selected for Google Calendar sync.`,
+        changedSyncedBlock
+          ? `${block.projectName} changed after syncing. Google Calendar still has the older version.`
+          : `${block.projectName} now has a start time and can be selected for Google Calendar sync.`,
       );
       cancelEditingBlockTime();
     } catch (updateError) {
@@ -1951,7 +2023,7 @@ export function WeeklyPlanSection({
                   Enable Google sync
                 </Link>
               ) : (
-                <div className="mt-4 grid grid-cols-2 gap-2">
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
                     <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-ink/38">
                       Ready
@@ -1966,6 +2038,14 @@ export function WeeklyPlanSection({
                     </p>
                     <p className="mt-1 text-lg font-semibold text-brand-ink">
                       {flexibleSyncBlocks.length}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-ink/38">
+                      Needs review
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-brand-ink">
+                      {needsAttentionSyncCount}
                     </p>
                   </div>
                 </div>
@@ -1990,6 +2070,57 @@ export function WeeklyPlanSection({
                   Start by adding one block to a day above.
                 </p>
               </div>
+              ) : null}
+
+              {removedGoogleSyncEvents.length > 0 ? (
+                <div className="rounded-[26px] border border-brand-coral/14 bg-brand-coral/[0.055] p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-base font-semibold text-brand-ink">
+                        Google events from removed blocks
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        Some synced Google events may remain after their
+                        Schedule Builder blocks were removed.
+                      </p>
+                    </div>
+                    <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                      {removedGoogleSyncEvents.length} event
+                      {removedGoogleSyncEvents.length === 1 ? "" : "s"}
+                    </Badge>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {removedGoogleSyncEvents.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4"
+                      >
+                        <p className="text-sm font-semibold text-brand-ink">
+                          {event.syncedTitle}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-brand-ink/56">
+                          {formatSyncedEventRange(
+                            event.syncedStartsAt,
+                            event.syncedEndsAt,
+                          )}
+                        </p>
+                        <p className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-brand-ink/52">
+                          Google Calendar still has this event. Schedule Builder
+                          will not delete it automatically in V1.
+                        </p>
+                        {event.googleEventHtmlLink ? (
+                          <a
+                            aria-label={`Open removed block Google Calendar event ${event.syncedTitle}`}
+                            className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
+                            href={event.googleEventHtmlLink}
+                          >
+                            Open in Google Calendar
+                          </a>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               ) : null}
 
               <div className="rounded-[26px] border border-brand-teal/12 bg-white/70 p-4">

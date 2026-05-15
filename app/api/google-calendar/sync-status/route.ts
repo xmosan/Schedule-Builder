@@ -22,6 +22,8 @@ type GoogleCalendarSyncedEventRow = {
   id: string;
   last_synced_at: string;
   sync_status: "synced" | "needs_attention";
+  synced_ends_at: string;
+  synced_starts_at: string;
   synced_title: string;
   weekly_plan_block_id: string | null;
   block_snapshot: unknown;
@@ -121,7 +123,7 @@ export async function GET(request: NextRequest) {
       serviceClient
         .from("google_calendar_synced_events")
         .select(
-          "id, weekly_plan_block_id, sync_status, google_event_id, google_event_html_link, synced_title, last_synced_at, block_snapshot",
+          "id, weekly_plan_block_id, sync_status, google_event_id, google_event_html_link, synced_title, synced_starts_at, synced_ends_at, last_synced_at, block_snapshot",
         )
         .eq("user_id", userId)
         .eq("week_start_date", weekStartDate),
@@ -171,13 +173,18 @@ export async function GET(request: NextRequest) {
 
     const needsAttentionIds = syncRows
       .filter(
-        (row) =>
-          row.weekly_plan_block_id &&
-          row.sync_status === "synced" &&
-          !snapshotsMatch(
-            row.block_snapshot,
-            blocksById.get(row.weekly_plan_block_id),
-          ),
+        (row) => {
+          const currentBlock = row.weekly_plan_block_id
+            ? blocksById.get(row.weekly_plan_block_id)
+            : undefined;
+
+          return (
+            row.weekly_plan_block_id &&
+            currentBlock &&
+            row.sync_status === "synced" &&
+            !snapshotsMatch(row.block_snapshot, currentBlock)
+          );
+        },
       )
       .map((row) => row.id);
 
@@ -193,8 +200,26 @@ export async function GET(request: NextRequest) {
       syncCalendarName:
         connectionResult.data?.sync_calendar_name ?? "Schedule Builder",
       syncEnabled: Boolean(connectionResult.data?.sync_enabled),
+      removedSyncedEvents: syncRows
+        .filter(
+          (row) =>
+            !row.weekly_plan_block_id ||
+            !blocksById.has(row.weekly_plan_block_id),
+        )
+        .map((row) => ({
+          googleEventHtmlLink: row.google_event_html_link,
+          id: row.id,
+          lastSyncedAt: row.last_synced_at,
+          syncedEndsAt: row.synced_ends_at,
+          syncedStartsAt: row.synced_starts_at,
+          syncedTitle: row.synced_title,
+        })),
       statuses: syncRows
-        .filter((row) => row.weekly_plan_block_id)
+        .filter(
+          (row) =>
+            row.weekly_plan_block_id &&
+            blocksById.has(row.weekly_plan_block_id),
+        )
         .map((row) => ({
           googleEventId: row.google_event_id,
           googleEventHtmlLink: row.google_event_html_link,
