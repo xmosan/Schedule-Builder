@@ -17,6 +17,7 @@ type WeeklyPlanBlockRow = {
 };
 
 type GoogleCalendarSyncedEventRow = {
+  google_event_id: string;
   google_event_html_link: string | null;
   id: string;
   last_synced_at: string;
@@ -120,7 +121,7 @@ export async function GET(request: NextRequest) {
       serviceClient
         .from("google_calendar_synced_events")
         .select(
-          "id, weekly_plan_block_id, sync_status, google_event_html_link, synced_title, last_synced_at, block_snapshot",
+          "id, weekly_plan_block_id, sync_status, google_event_id, google_event_html_link, synced_title, last_synced_at, block_snapshot",
         )
         .eq("user_id", userId)
         .eq("week_start_date", weekStartDate),
@@ -195,6 +196,7 @@ export async function GET(request: NextRequest) {
       statuses: syncRows
         .filter((row) => row.weekly_plan_block_id)
         .map((row) => ({
+          googleEventId: row.google_event_id,
           googleEventHtmlLink: row.google_event_html_link,
           lastSyncedAt: row.last_synced_at,
           syncStatus: needsAttentionIds.includes(row.id)

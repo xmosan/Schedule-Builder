@@ -69,6 +69,7 @@ type GoogleCalendarSyncStatusValue =
   | "synced";
 
 type GoogleCalendarSyncStatus = {
+  googleEventId?: string | null;
   googleEventHtmlLink?: string | null;
   lastSyncedAt?: string | null;
   syncStatus: Exclude<GoogleCalendarSyncStatusValue, "failed" | "not_synced">;
@@ -82,6 +83,12 @@ type GoogleCalendarSyncStatusResponse = {
   syncCalendarName?: string | null;
   syncEnabled?: boolean;
   weekStartDate?: string;
+};
+
+type PreSyncConflict = {
+  detail: string;
+  label: string;
+  tone: "ready" | "warning";
 };
 
 type GoogleCalendarSyncBlockResult = {
@@ -219,6 +226,34 @@ function formatWeekRangeFromInput(value: string) {
   return `${formatShortDate(monday)} - ${formatShortDate(sunday)}`;
 }
 
+function getWeekDateForDay(value: string, day: WeekDay) {
+  const startDate = parseDateInput(value);
+
+  if (!startDate) {
+    return null;
+  }
+
+  const monday = parseDateInput(getWeekMondayInputValue(startDate));
+
+  if (!monday) {
+    return null;
+  }
+
+  const date = new Date(monday);
+  date.setDate(monday.getDate() + weekDays.indexOf(day));
+  return date;
+}
+
+function formatBlockDayDate(day: WeekDay, weekStartValue: string) {
+  const date = getWeekDateForDay(weekStartValue, day);
+
+  if (!date) {
+    return day;
+  }
+
+  return `${day}, ${formatShortDate(date)}`;
+}
+
 function getSyncStatusLabel(status: GoogleCalendarSyncStatusValue) {
   if (status === "synced") {
     return "Synced";
@@ -249,6 +284,49 @@ function getSyncStatusClassName(status: GoogleCalendarSyncStatusValue) {
   }
 
   return "bg-brand-ink/[0.045] text-brand-ink/52";
+}
+
+function getBlockTimeRangeMinutes(block: WeeklyPlanBlock) {
+  const startMinutes = parseStartTimeToMinutes(block.startTime);
+
+  if (startMinutes === null) {
+    return null;
+  }
+
+  return {
+    end: startMinutes + block.estimatedHours * 60,
+    start: startMinutes,
+  };
+}
+
+function weeklyPlanBlocksOverlap(
+  firstBlock: WeeklyPlanBlock,
+  secondBlock: WeeklyPlanBlock,
+) {
+  if (firstBlock.id === secondBlock.id || firstBlock.day !== secondBlock.day) {
+    return false;
+  }
+
+  const firstRange = getBlockTimeRangeMinutes(firstBlock);
+  const secondRange = getBlockTimeRangeMinutes(secondBlock);
+
+  if (!firstRange || !secondRange) {
+    return false;
+  }
+
+  return firstRange.start < secondRange.end && firstRange.end > secondRange.start;
+}
+
+function getExternalConflictLabel(event: ImportedCalendarEvent) {
+  if (event.source === "google_calendar") {
+    return "May overlap with Google Calendar event";
+  }
+
+  if (event.source === "ics") {
+    return "May overlap with ICS event";
+  }
+
+  return "May overlap with external event";
 }
 
 export function WeeklyPlanSection({
@@ -297,6 +375,8 @@ export function WeeklyPlanSection({
   );
   const [isGoogleSyncLoading, setIsGoogleSyncLoading] = useState(false);
   const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
+  const [isConfirmingGoogleSyncConflicts, setIsConfirmingGoogleSyncConflicts] =
+    useState(false);
   const [timeEditBlockId, setTimeEditBlockId] = useState<string | null>(null);
   const [timeEditError, setTimeEditError] = useState<string | null>(null);
   const [timeEditValue, setTimeEditValue] = useState("");
@@ -577,6 +657,13 @@ export function WeeklyPlanSection({
         .map(([blockId]) => blockId),
     [googleSyncSelectedIds],
   );
+  const selectedGoogleSyncBlocks = useMemo(
+    () =>
+      selectedGoogleSyncIds
+        .map((blockId) => planBlocks.find((block) => block.id === blockId))
+        .filter((block): block is WeeklyPlanBlock => Boolean(block)),
+    [planBlocks, selectedGoogleSyncIds],
+  );
   const syncWeekStartDate = useMemo(
     () => (exportWeekStart ? parseDateInput(exportWeekStart) : null),
     [exportWeekStart],
@@ -608,6 +695,21 @@ export function WeeklyPlanSection({
   );
   const canSyncSelectedBlocks =
     googleSyncEnabled && selectedGoogleSyncIds.length > 0 && !isGoogleSyncing;
+  const selectedGoogleSyncConflictCount = useMemo(
+    () =>
+      selectedGoogleSyncBlocks.reduce(
+        (count, block) => count + getBlockPreSyncConflicts(block).length,
+        0,
+      ),
+    [
+      selectedGoogleSyncBlocks,
+      googleSyncStatuses,
+      importedEvents,
+      planBlocks,
+      syncWeekStartDate,
+      workShifts,
+    ],
+  );
 
   function clearDraftWarnings() {
     setDuplicateWarningKey(null);
@@ -669,27 +771,70 @@ export function WeeklyPlanSection({
     );
   }
 
-  function getBlockGoogleSyncWarnings(block: WeeklyPlanBlock) {
+  function getImportedEventsForConflictReview(block: WeeklyPlanBlock) {
+    const syncedGoogleEventId = googleSyncStatuses[block.id]?.googleEventId;
+
+    return importedEvents.filter(
+      (event) =>
+        !(
+          event.source === "google_calendar" &&
+          syncedGoogleEventId &&
+          event.externalUid === syncedGoogleEventId
+        ),
+    );
+  }
+
+  function getOverlappingWeeklyPlanBlock(block: WeeklyPlanBlock) {
+    return planBlocks.find((candidate) =>
+      weeklyPlanBlocksOverlap(block, candidate),
+    );
+  }
+
+  function getBlockPreSyncConflicts(block: WeeklyPlanBlock): PreSyncConflict[] {
     if (!syncWeekStartDate) {
-      return [] as string[];
+      return [] as PreSyncConflict[];
     }
 
     const workConflict = getWeeklyPlanWorkConflictForBlock(block, workShifts);
     const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
       block,
-      importedEvents,
+      getImportedEventsForConflictReview(block),
       syncWeekStartDate,
     );
+    const planConflict = getOverlappingWeeklyPlanBlock(block);
+    const conflicts: Array<PreSyncConflict | null> = [
+      workConflict
+        ? {
+            detail: workConflict.shiftRangeLabel,
+            label: "May overlap with work shift",
+            tone: "warning",
+          }
+        : null,
+      importedConflict
+        ? {
+            detail: importedConflict.event.title,
+            label: getExternalConflictLabel(importedConflict.event),
+            tone: "warning",
+          }
+        : null,
+      planConflict
+        ? {
+            detail: planConflict.projectName,
+            label: "May overlap with another plan block",
+            tone: "warning",
+          }
+        : null,
+    ];
 
-    return [
-      workConflict ? "This time may overlap with a saved work shift." : null,
-      importedConflict ? "This time may overlap with an imported event." : null,
-    ].filter((message): message is string => Boolean(message));
+    return conflicts.filter(
+      (conflict): conflict is PreSyncConflict => conflict !== null,
+    );
   }
 
   function toggleGoogleSyncSelection(block: WeeklyPlanBlock) {
     setGoogleSyncError(null);
     setGoogleSyncMessage(null);
+    setIsConfirmingGoogleSyncConflicts(false);
     setGoogleSyncSelectedIds((current) => ({
       ...current,
       [block.id]: !current[block.id],
@@ -706,6 +851,7 @@ export function WeeklyPlanSection({
     setGoogleSyncMessage(null);
     setGoogleSyncResults({});
     setGoogleSyncSelectedIds({});
+    setIsConfirmingGoogleSyncConflicts(false);
   }
 
   function startEditingBlockTime(block: WeeklyPlanBlock) {
@@ -714,6 +860,7 @@ export function WeeklyPlanSection({
     setTimeEditError(null);
     setGoogleSyncError(null);
     setGoogleSyncMessage(null);
+    setIsConfirmingGoogleSyncConflicts(false);
   }
 
   function cancelEditingBlockTime() {
@@ -749,6 +896,7 @@ export function WeeklyPlanSection({
         ...current,
         [block.id]: true,
       }));
+      setIsConfirmingGoogleSyncConflicts(false);
       setGoogleSyncMessage(
         `${block.projectName} now has a start time and can be selected for Google Calendar sync.`,
       );
@@ -944,6 +1092,16 @@ export function WeeklyPlanSection({
       return;
     }
 
+    if (
+      selectedGoogleSyncConflictCount > 0 &&
+      !isConfirmingGoogleSyncConflicts
+    ) {
+      setIsConfirmingGoogleSyncConflicts(true);
+      setGoogleSyncMessage(null);
+      setGoogleSyncError(null);
+      return;
+    }
+
     setIsGoogleSyncing(true);
 
     try {
@@ -1002,6 +1160,7 @@ export function WeeklyPlanSection({
         return next;
       });
       setGoogleSyncSelectedIds({});
+      setIsConfirmingGoogleSyncConflicts(false);
       setGoogleSyncCalendarName(payload.syncCalendarName ?? googleSyncCalendarName);
 
       if (failed > 0) {
@@ -1020,6 +1179,7 @@ export function WeeklyPlanSection({
         );
       }
     } catch (syncError) {
+      setIsConfirmingGoogleSyncConflicts(false);
       setGoogleSyncError(getGoogleSyncDisplayError(syncError));
     } finally {
       setIsGoogleSyncing(false);
@@ -1839,7 +1999,8 @@ export function WeeklyPlanSection({
                       Ready to sync
                     </h3>
                     <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                      Timed blocks can be selected for Google Calendar.
+                      Select the timed blocks you want to send. Each card shows
+                      the exact day and time.
                     </p>
                   </div>
                   <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
@@ -1865,11 +2026,28 @@ export function WeeklyPlanSection({
                       syncStatus === "synced" || syncStatus === "needs_attention";
                     const isSelectable = googleSyncEnabled && !isAlreadySynced;
                     const syncMessage = getBlockGoogleSyncMessage(block);
-                    const syncWarnings = getBlockGoogleSyncWarnings(block);
+                    const preSyncConflicts = getBlockPreSyncConflicts(block);
+                    const isSelected = Boolean(googleSyncSelectedIds[block.id]);
+                    const reviewBadges: PreSyncConflict[] =
+                      preSyncConflicts.length > 0
+                        ? preSyncConflicts
+                        : isSelected && isSelectable
+                          ? [
+                              {
+                                detail: "No overlaps found",
+                                label: "Ready to sync",
+                                tone: "ready",
+                              },
+                            ]
+                          : [];
                     const syncResult = googleSyncResults[block.id];
                     const googleEventLink =
                       googleSyncStatuses[block.id]?.googleEventHtmlLink ??
                       syncResult?.googleEventHtmlLink;
+                    const blockDayDate = formatBlockDayDate(
+                      block.day,
+                      exportWeekStart,
+                    );
 
                     return (
                       <div
@@ -1885,13 +2063,16 @@ export function WeeklyPlanSection({
                           <label className="flex min-w-0 items-start gap-3">
                             <input
                               aria-label={`Select ${block.projectName} for Google Calendar sync`}
-                              checked={Boolean(googleSyncSelectedIds[block.id])}
+                              checked={isSelected}
                               className="mt-1 h-5 w-5 rounded border-brand-ink/20 accent-brand-teal"
                               disabled={!isSelectable || isGoogleSyncing}
                               type="checkbox"
                               onChange={() => toggleGoogleSyncSelection(block)}
                             />
                             <span className="min-w-0">
+                              <span className="mb-2 inline-flex rounded-full bg-brand-ink/[0.045] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-ink/55">
+                                {blockDayDate}
+                              </span>
                               <span className="block text-sm font-semibold text-brand-ink">
                                 {block.projectName}
                               </span>
@@ -1911,15 +2092,21 @@ export function WeeklyPlanSection({
                           </div>
                         </div>
 
-                        {syncWarnings.length > 0 ? (
-                          <div className="mt-3 space-y-2">
-                            {syncWarnings.map((warning) => (
-                              <p
-                                key={warning}
-                                className="rounded-2xl border border-brand-coral/14 bg-brand-coral/[0.07] px-3 py-2 text-xs font-semibold leading-5 text-brand-coral"
+                        {reviewBadges.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {reviewBadges.map((item) => (
+                              <span
+                                key={`${item.label}-${item.detail}`}
+                                className={cn(
+                                  "inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold",
+                                  item.tone === "ready"
+                                    ? "bg-brand-teal/10 text-brand-teal"
+                                    : "bg-brand-coral/10 text-brand-coral",
+                                )}
+                                title={item.detail}
                               >
-                                {warning}
-                              </p>
+                                {item.label}
+                              </span>
                             ))}
                           </div>
                         ) : null}
@@ -1939,12 +2126,11 @@ export function WeeklyPlanSection({
 
                         {googleEventLink ? (
                           <a
-                            className="mt-3 inline-flex text-xs font-semibold text-brand-teal underline-offset-4 hover:underline"
+                            aria-label={`Open synced Google Calendar event for ${block.projectName}`}
+                            className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
                             href={googleEventLink}
-                            rel="noreferrer"
-                            target="_blank"
                           >
-                            View Google event
+                            Open in Google Calendar
                           </a>
                         ) : null}
                       </div>
@@ -1969,31 +2155,41 @@ export function WeeklyPlanSection({
                     </Badge>
                   </div>
                   <div className="mt-4 grid gap-3">
-                    {flexibleSyncBlocks.map((block) => (
-                      <div
-                        key={block.id}
-                        className="rounded-[22px] border border-brand-ink/8 bg-white/72 p-4"
-                      >
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-brand-ink">
-                              {block.projectName}
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-brand-ink/62">
-                              {block.plannedTask}
-                            </p>
+                    {flexibleSyncBlocks.map((block) => {
+                      const blockDayDate = formatBlockDayDate(
+                        block.day,
+                        exportWeekStart,
+                      );
+
+                      return (
+                        <div
+                          key={block.id}
+                          className="rounded-[22px] border border-brand-ink/8 bg-white/72 p-4"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <span className="mb-2 inline-flex rounded-full bg-brand-ink/[0.045] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-ink/55">
+                                {blockDayDate}
+                              </span>
+                              <p className="text-sm font-semibold text-brand-ink">
+                                {block.projectName}
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-brand-ink/62">
+                                {block.plannedTask}
+                              </p>
+                            </div>
+                            <Badge variant="subtle">
+                              Anytime •{" "}
+                              {formatEstimatedHours(block.estimatedHours)}
+                            </Badge>
                           </div>
-                          <Badge variant="subtle">
-                            Anytime •{" "}
-                            {formatEstimatedHours(block.estimatedHours)}
-                          </Badge>
+                          {renderStartTimeControl(
+                            block,
+                            "Add a start time to make this block eligible for Google Calendar sync.",
+                          )}
                         </div>
-                        {renderStartTimeControl(
-                          block,
-                          "Add a start time to make this block eligible for Google Calendar sync.",
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ) : null}
@@ -2012,6 +2208,19 @@ export function WeeklyPlanSection({
             </p>
           ) : null}
 
+          {isConfirmingGoogleSyncConflicts &&
+          selectedGoogleSyncConflictCount > 0 ? (
+            <div className="mt-4 rounded-[22px] border border-brand-coral/18 bg-brand-coral/[0.075] p-4">
+              <p className="text-sm font-semibold text-brand-coral">
+                Some selected blocks may overlap existing commitments.
+              </p>
+              <p className="mt-1 text-sm leading-6 text-brand-coral/80">
+                Review the warning badges above. Sync anyway if you still want
+                these blocks on your Schedule Builder Google Calendar.
+              </p>
+            </div>
+          ) : null}
+
           {googleSyncEnabled ? (
             <Button
               className="mt-4 w-full"
@@ -2021,6 +2230,9 @@ export function WeeklyPlanSection({
             >
               {isGoogleSyncing
                 ? "Syncing selected..."
+                : isConfirmingGoogleSyncConflicts &&
+                    selectedGoogleSyncConflictCount > 0
+                  ? "Sync anyway"
                 : selectedGoogleSyncIds.length > 0
                   ? `Sync selected (${selectedGoogleSyncIds.length})`
                   : "Sync selected"}
