@@ -8,6 +8,7 @@ import {
 } from "@/lib/weekly-plan";
 import {
   formatImportedEventTimeRange,
+  isScheduleBuilderExportedEvent,
   type ImportedCalendarEvent,
 } from "@/lib/imported-calendar";
 import {
@@ -216,6 +217,10 @@ export function weeklyPlanBlockOverlapsImportedEvent(
   event: ImportedCalendarEvent,
   weekStart = getCurrentWeekStart(),
 ) {
+  if (isScheduleBuilderExportedEvent(event)) {
+    return false;
+  }
+
   const blockStartMinutes = parseStartTimeToMinutes(block.startTime);
 
   if (blockStartMinutes === null) {

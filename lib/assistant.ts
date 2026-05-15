@@ -27,6 +27,7 @@ import {
 } from "@/lib/schedule-conflicts";
 import {
   getImportedEventDurationHours,
+  isScheduleBuilderExportedEvent,
   type ImportedCalendarEvent,
 } from "@/lib/imported-calendar";
 import {
@@ -322,6 +323,9 @@ function getLeastLoadedDay(
   workShifts: WorkShift[] = [],
   importedEvents: ImportedCalendarEvent[] = [],
 ): WeekDay {
+  const externalImportedEvents = importedEvents.filter(
+    (event) => !isScheduleBuilderExportedEvent(event),
+  );
   const hoursByDay = new Map<WeekDay, number>(
     weekDays.map((day) => [day, 0]),
   );
@@ -333,7 +337,7 @@ function getLeastLoadedDay(
     );
   });
 
-  importedEvents.forEach((event) => {
+  externalImportedEvents.forEach((event) => {
     const eventDate = new Date(event.startsAt);
 
     if (Number.isNaN(eventDate.getTime())) {
@@ -496,13 +500,16 @@ export function createAssistantContextSummary(
   workShifts: WorkShift[] = [],
   importedCalendarEvents: ImportedCalendarEvent[] = [],
 ): AssistantContextSummary {
+  const externalImportedEvents = importedCalendarEvents.filter(
+    (event) => !isScheduleBuilderExportedEvent(event),
+  );
   const workConflicts = findWeeklyPlanWorkConflicts(
     weeklyPlanBlocks,
     workShifts,
   );
   const importedEventConflicts = findWeeklyPlanImportedEventConflicts(
     weeklyPlanBlocks,
-    importedCalendarEvents,
+    externalImportedEvents,
   );
   const deadlineBuckets = getProjectDeadlineBuckets(projects);
 
@@ -512,7 +519,7 @@ export function createAssistantContextSummary(
     deadlinesNeedingDatesCount: deadlineBuckets.deadlinesNeedingDates.length,
     deadlinesWithDatesCount: deadlineBuckets.exactDeadlines.length,
     importedEventConflictCount: importedEventConflicts.length,
-    importedEventsCount: importedCalendarEvents.length,
+    importedEventsCount: externalImportedEvents.length,
     plannedWeeklyHours: getPlannedHours(projects),
     plannerType,
     totalWeeklyBlockHours: weeklyPlanBlocks.reduce(
@@ -535,13 +542,16 @@ export function createAssistantPlanningContext(
   workShifts: WorkShift[] = [],
   importedCalendarEvents: ImportedCalendarEvent[] = [],
 ): AssistantPlanningContext {
+  const externalImportedEvents = importedCalendarEvents.filter(
+    (event) => !isScheduleBuilderExportedEvent(event),
+  );
   const calendarConflicts = findWeeklyPlanWorkConflicts(
     weeklyPlanBlocks,
     workShifts,
   );
   const importedEventConflicts = findWeeklyPlanImportedEventConflicts(
     weeklyPlanBlocks,
-    importedCalendarEvents,
+    externalImportedEvents,
   );
   const deadlineBuckets = getProjectDeadlineBuckets(projects);
 
@@ -551,12 +561,12 @@ export function createAssistantPlanningContext(
       weeklyPlanBlocks,
       plannerType,
       workShifts,
-      importedCalendarEvents,
+      externalImportedEvents,
     ),
     calendarConflicts,
     deadlinesNeedingDates: deadlineBuckets.deadlinesNeedingDates,
     deadlinesWithDates: deadlineBuckets.exactDeadlines,
-    importedCalendarEvents,
+    importedCalendarEvents: externalImportedEvents,
     importedEventConflicts,
     projects,
     weeklyPlanBlocks,
@@ -784,6 +794,7 @@ export function getRelevantImportedCalendarEvents(
   ).getTime();
 
   return importedCalendarEvents
+    .filter((event) => !isScheduleBuilderExportedEvent(event))
     .filter((event) => {
       const startsAt = new Date(event.startsAt).getTime();
 

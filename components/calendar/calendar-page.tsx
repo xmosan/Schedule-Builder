@@ -16,6 +16,7 @@ import {
   formatImportedEventSource,
   formatImportedEventTimeRange,
   getImportedEventDurationHours,
+  isScheduleBuilderExportedEvent,
   type ImportedCalendarEvent,
 } from "@/lib/imported-calendar";
 import {
@@ -115,6 +116,7 @@ type MonthIndicatorTone =
   | "google"
   | "ics"
   | "plan"
+  | "scheduleBuilder"
   | "work";
 
 type CalendarEventGroup = {
@@ -181,13 +183,16 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
     : [];
   const deadlines = filters.deadlines ? day.deadlines : [];
   const importedEvents = filters.importedEvents ? day.importedEvents : [];
+  const externalCommitmentEvents = importedEvents.filter(
+    (event) => !isScheduleBuilderExportedEvent(event),
+  );
   const scheduledHours =
     workShifts.reduce(
       (sum, shift) => sum + getWorkShiftDurationHours(shift),
       0,
     ) +
     planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0) +
-    importedEvents.reduce(
+    externalCommitmentEvents.reduce(
       (sum, event) => sum + getImportedEventDurationHours(event),
       0,
     );
@@ -207,13 +212,17 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
 }
 
 function getImportedEventSourceTone(
-  source: ImportedCalendarEvent["source"],
-): Extract<MonthIndicatorTone, "external" | "google" | "ics"> {
-  if (source === "google_calendar") {
+  event: ImportedCalendarEvent,
+): Extract<MonthIndicatorTone, "external" | "google" | "ics" | "scheduleBuilder"> {
+  if (isScheduleBuilderExportedEvent(event)) {
+    return "scheduleBuilder";
+  }
+
+  if (event.source === "google_calendar") {
     return "google";
   }
 
-  if (source === "ics") {
+  if (event.source === "ics") {
     return "ics";
   }
 
@@ -296,11 +305,14 @@ function getMonthEventSummary(
 
   const importedEventsBySource = visibleDay.importedEvents.reduce(
     (groups, event) => {
-      const tone = getImportedEventSourceTone(event.source);
+      const tone = getImportedEventSourceTone(event);
       groups.set(tone, (groups.get(tone) ?? 0) + 1);
       return groups;
     },
-    new Map<Extract<MonthIndicatorTone, "external" | "google" | "ics">, number>(),
+    new Map<
+      Extract<MonthIndicatorTone, "external" | "google" | "ics" | "scheduleBuilder">,
+      number
+    >(),
   );
 
   importedEventsBySource.forEach((count, tone) => {
@@ -308,7 +320,13 @@ function getMonthEventSummary(
       count,
       id: tone,
       label:
-        tone === "google" ? "Google" : tone === "ics" ? "ICS" : "External",
+        tone === "google"
+          ? "Google"
+          : tone === "ics"
+            ? "ICS"
+            : tone === "scheduleBuilder"
+              ? "SB export"
+              : "External",
       tone,
     });
   });
@@ -343,6 +361,10 @@ function getMonthEventToneClass(tone: MonthIndicatorTone) {
 
   if (tone === "ics") {
     return "border-brand-ocean/14 bg-brand-ocean/[0.065] text-brand-ocean";
+  }
+
+  if (tone === "scheduleBuilder") {
+    return "border-brand-teal/12 bg-brand-teal/[0.045] text-brand-teal/72";
   }
 
   if (tone === "external") {
@@ -531,12 +553,13 @@ function ImportedCalendarEventCard({
 }: {
   event: ImportedCalendarEvent;
 }) {
-  const sourceTone = getImportedEventSourceTone(event.source);
-  const sourceLabel = formatImportedEventSource(event.source);
+  const sourceTone = getImportedEventSourceTone(event);
+  const sourceLabel = formatImportedEventSource(event);
+  const cardAccent = sourceTone === "scheduleBuilder" ? "ics" : sourceTone;
 
   return (
     <EventCardShell
-      accent={sourceTone}
+      accent={cardAccent}
       badges={
         <>
           <Badge className={getMonthEventToneClass(sourceTone)} variant="subtle">
@@ -613,7 +636,7 @@ function DayEventGroups({
 
       <CalendarEventGroupSection
         count={day.importedEvents.length}
-        label="External events"
+        label="Calendar events"
       >
         {day.importedEvents.map((event) => (
           <ImportedCalendarEventCard key={event.id} event={event} />
@@ -694,6 +717,8 @@ function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
         ? "bg-brand-teal"
       : tone === "ics"
         ? "bg-brand-ocean"
+      : tone === "scheduleBuilder"
+        ? "bg-brand-teal/55"
       : tone === "external"
         ? "bg-brand-ink/55"
       : tone === "deadline"
@@ -1208,7 +1233,11 @@ export function CalendarPage() {
       );
     }).length;
     const importedEventCount = calendar.days.reduce(
-      (sum, day) => sum + day.importedEvents.length,
+      (sum, day) =>
+        sum +
+        day.importedEvents.filter(
+          (event) => !isScheduleBuilderExportedEvent(event),
+        ).length,
       0,
     );
     const deadlineCount = calendar.days.reduce(
@@ -1245,7 +1274,11 @@ export function CalendarPage() {
       0,
     );
     const importedEventCount = visibleDays.reduce(
-      (sum, day) => sum + day.importedEvents.length,
+      (sum, day) =>
+        sum +
+        day.importedEvents.filter(
+          (event) => !isScheduleBuilderExportedEvent(event),
+        ).length,
       0,
     );
     const openDays = visibleDays.filter((day) => !day.hasEvents).length;
@@ -1319,13 +1352,18 @@ export function CalendarPage() {
     (event) => event.source === "google_calendar",
   ).length;
   const icsEventCount = importedEvents.filter(
-    (event) => event.source === "ics",
+    (event) => event.source === "ics" && !isScheduleBuilderExportedEvent(event),
+  ).length;
+  const scheduleBuilderExportCount = importedEvents.filter(
+    isScheduleBuilderExportedEvent,
   ).length;
   const externalStatusLabel =
     googleCalendarEventCount > 0
       ? "Google Calendar connected"
       : icsEventCount > 0
         ? "ICS events included"
+        : scheduleBuilderExportCount > 0
+          ? "Schedule Builder exports included"
         : "External events ready";
   const deadlinesNeedingExactDates = (
     view === "week"

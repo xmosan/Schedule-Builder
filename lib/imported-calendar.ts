@@ -16,12 +16,47 @@ export type ImportedCalendarEventDraft = Omit<
   "id" | "importedAt"
 >;
 
+type ImportedCalendarEventSourceShape = Pick<
+  ImportedCalendarEvent,
+  "description" | "externalUid" | "source" | "title"
+>;
+
+const scheduleBuilderExportTitlePattern = /^schedule builder:/i;
+const scheduleBuilderExportDescriptionPattern = /exported from schedule builder/i;
+const scheduleBuilderExportUidPattern = /@schedule-builder$/i;
+
 function getEventDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function formatImportedEventSource(source: string) {
+export function isScheduleBuilderExportedEvent(
+  event: ImportedCalendarEventSourceShape,
+) {
+  if (event.source !== "ics") {
+    return false;
+  }
+
+  return (
+    scheduleBuilderExportTitlePattern.test(event.title.trim()) ||
+    scheduleBuilderExportDescriptionPattern.test(event.description) ||
+    scheduleBuilderExportUidPattern.test(event.externalUid.trim())
+  );
+}
+
+export function formatImportedEventSource(
+  sourceOrEvent: string | ImportedCalendarEventSourceShape,
+) {
+  if (
+    typeof sourceOrEvent !== "string" &&
+    isScheduleBuilderExportedEvent(sourceOrEvent)
+  ) {
+    return "Schedule Builder export";
+  }
+
+  const source =
+    typeof sourceOrEvent === "string" ? sourceOrEvent : sourceOrEvent.source;
+
   if (source === "ics") {
     return "ICS";
   }
