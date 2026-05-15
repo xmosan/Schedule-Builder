@@ -712,33 +712,45 @@ export function WeeklyPlanSection({
     () => formatWeekRangeFromInput(exportWeekStart),
     [exportWeekStart],
   );
-  const timedSyncBlockCount = useMemo(
-    () =>
-      planBlocks.filter(
-        (block) => parseStartTimeToMinutes(block.startTime) !== null,
-      ).length,
-    [planBlocks],
-  );
   const readySyncBlocks = useMemo(
     () =>
       planBlocks.filter(
-        (block) => parseStartTimeToMinutes(block.startTime) !== null,
+        (block) =>
+          parseStartTimeToMinutes(block.startTime) !== null &&
+          !["needs_attention", "synced"].includes(
+            getBlockGoogleSyncStatus(block),
+          ),
       ),
-    [planBlocks],
+    [googleSyncResults, googleSyncStatuses, planBlocks],
+  );
+  const alreadySyncedSyncBlocks = useMemo(
+    () =>
+      planBlocks.filter(
+        (block) => getBlockGoogleSyncStatus(block) === "synced",
+      ),
+    [googleSyncResults, googleSyncStatuses, planBlocks],
+  );
+  const needsAttentionSyncBlocks = useMemo(
+    () =>
+      planBlocks.filter(
+        (block) => getBlockGoogleSyncStatus(block) === "needs_attention",
+      ),
+    [googleSyncResults, googleSyncStatuses, planBlocks],
   );
   const flexibleSyncBlocks = useMemo(
     () =>
       planBlocks.filter(
-        (block) => parseStartTimeToMinutes(block.startTime) === null,
+        (block) =>
+          parseStartTimeToMinutes(block.startTime) === null &&
+          !["needs_attention", "synced"].includes(
+            getBlockGoogleSyncStatus(block),
+          ),
       ),
-    [planBlocks],
+    [googleSyncResults, googleSyncStatuses, planBlocks],
   );
-  const needsAttentionSyncCount = useMemo(
-    () =>
-      Object.values(googleSyncStatuses).filter(
-        (status) => status.syncStatus === "needs_attention",
-      ).length,
-    [googleSyncStatuses],
+  const readySyncBlockIds = useMemo(
+    () => new Set(readySyncBlocks.map((block) => block.id)),
+    [readySyncBlocks],
   );
   const canSyncSelectedBlocks =
     googleSyncEnabled && selectedGoogleSyncIds.length > 0 && !isGoogleSyncing;
@@ -757,6 +769,20 @@ export function WeeklyPlanSection({
       workShifts,
     ],
   );
+
+  useEffect(() => {
+    setGoogleSyncSelectedIds((current) => {
+      const next: Record<string, boolean> = {};
+
+      Object.entries(current).forEach(([blockId, isSelected]) => {
+        if (isSelected && readySyncBlockIds.has(blockId)) {
+          next[blockId] = true;
+        }
+      });
+
+      return next;
+    });
+  }, [readySyncBlockIds]);
 
   function clearDraftWarnings() {
     setDuplicateWarningKey(null);
@@ -806,6 +832,14 @@ export function WeeklyPlanSection({
     }
 
     return null;
+  }
+
+  function getBlockGoogleEventLink(block: WeeklyPlanBlock) {
+    return (
+      googleSyncStatuses[block.id]?.googleEventHtmlLink ??
+      googleSyncResults[block.id]?.googleEventHtmlLink ??
+      null
+    );
   }
 
   function isStaleStartTimeSyncFailure(block: WeeklyPlanBlock) {
@@ -2023,13 +2057,21 @@ export function WeeklyPlanSection({
                   Enable Google sync
                 </Link>
               ) : (
-                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
                     <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-ink/38">
-                      Ready
+                      Ready to sync
                     </p>
                     <p className="mt-1 text-lg font-semibold text-brand-ink">
-                      {timedSyncBlockCount}
+                      {readySyncBlocks.length}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-ink/38">
+                      Synced
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-brand-ink">
+                      {alreadySyncedSyncBlocks.length}
                     </p>
                   </div>
                   <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
@@ -2042,10 +2084,10 @@ export function WeeklyPlanSection({
                   </div>
                   <div className="rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2">
                     <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-ink/38">
-                      Needs review
+                      Needs attention
                     </p>
                     <p className="mt-1 text-lg font-semibold text-brand-ink">
-                      {needsAttentionSyncCount}
+                      {needsAttentionSyncBlocks.length}
                     </p>
                   </div>
                 </div>
@@ -2072,57 +2114,7 @@ export function WeeklyPlanSection({
               </div>
               ) : null}
 
-              {removedGoogleSyncEvents.length > 0 ? (
-                <div className="rounded-[26px] border border-brand-coral/14 bg-brand-coral/[0.055] p-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <h3 className="text-base font-semibold text-brand-ink">
-                        Google events from removed blocks
-                      </h3>
-                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                        Some synced Google events may remain after their
-                        Schedule Builder blocks were removed.
-                      </p>
-                    </div>
-                    <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
-                      {removedGoogleSyncEvents.length} event
-                      {removedGoogleSyncEvents.length === 1 ? "" : "s"}
-                    </Badge>
-                  </div>
-                  <div className="mt-4 grid gap-3">
-                    {removedGoogleSyncEvents.map((event) => (
-                      <div
-                        key={event.id}
-                        className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4"
-                      >
-                        <p className="text-sm font-semibold text-brand-ink">
-                          {event.syncedTitle}
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-brand-ink/56">
-                          {formatSyncedEventRange(
-                            event.syncedStartsAt,
-                            event.syncedEndsAt,
-                          )}
-                        </p>
-                        <p className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-brand-ink/52">
-                          Google Calendar still has this event. Schedule Builder
-                          will not delete it automatically in V1.
-                        </p>
-                        {event.googleEventHtmlLink ? (
-                          <a
-                            aria-label={`Open removed block Google Calendar event ${event.syncedTitle}`}
-                            className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
-                            href={event.googleEventHtmlLink}
-                          >
-                            Open in Google Calendar
-                          </a>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
+              {readySyncBlocks.length > 0 ? (
               <div className="rounded-[26px] border border-brand-teal/12 bg-white/70 p-4">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
@@ -2140,22 +2132,9 @@ export function WeeklyPlanSection({
                 </div>
 
                 <div className="mt-4 grid gap-3">
-                  {readySyncBlocks.length === 0 ? (
-                    <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/55 p-4">
-                      <p className="text-sm font-semibold text-brand-ink/70">
-                        No timed blocks ready yet.
-                      </p>
-                      <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                        Add start times to sync blocks to Google Calendar.
-                      </p>
-                    </div>
-                  ) : null}
-
                   {readySyncBlocks.map((block) => {
                     const syncStatus = getBlockGoogleSyncStatus(block);
-                    const isAlreadySynced =
-                      syncStatus === "synced" || syncStatus === "needs_attention";
-                    const isSelectable = googleSyncEnabled && !isAlreadySynced;
+                    const isSelectable = googleSyncEnabled;
                     const syncMessage = getBlockGoogleSyncMessage(block);
                     const preSyncConflicts = getBlockPreSyncConflicts(block);
                     const isSelected = Boolean(googleSyncSelectedIds[block.id]);
@@ -2171,10 +2150,7 @@ export function WeeklyPlanSection({
                               },
                             ]
                           : [];
-                    const syncResult = googleSyncResults[block.id];
-                    const googleEventLink =
-                      googleSyncStatuses[block.id]?.googleEventHtmlLink ??
-                      syncResult?.googleEventHtmlLink;
+                    const googleEventLink = getBlockGoogleEventLink(block);
                     const blockDayDate = formatBlockDayDate(
                       block.day,
                       exportWeekStart,
@@ -2269,6 +2245,151 @@ export function WeeklyPlanSection({
                   })}
                 </div>
               </div>
+              ) : null}
+
+              {alreadySyncedSyncBlocks.length > 0 ? (
+                <div className="rounded-[26px] border border-brand-teal/12 bg-white/68 p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-base font-semibold text-brand-ink">
+                        Already synced
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                        These blocks are already on your Schedule Builder Google
+                        Calendar.
+                      </p>
+                    </div>
+                    <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
+                      {alreadySyncedSyncBlocks.length} synced
+                    </Badge>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {alreadySyncedSyncBlocks.map((block) => {
+                      const googleEventLink = getBlockGoogleEventLink(block);
+                      const blockDayDate = formatBlockDayDate(
+                        block.day,
+                        exportWeekStart,
+                      );
+
+                      return (
+                        <div
+                          key={block.id}
+                          className="rounded-[22px] border border-brand-ink/8 bg-white/74 p-4"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <span className="mb-2 inline-flex rounded-full bg-brand-ink/[0.045] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-ink/55">
+                                {blockDayDate}
+                              </span>
+                              <p className="text-sm font-semibold text-brand-ink">
+                                {block.projectName}
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-brand-ink/62">
+                                {block.plannedTask}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2 sm:justify-end">
+                              <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
+                                Synced
+                              </Badge>
+                              <Badge className="bg-brand-teal/8 text-brand-teal" variant="subtle">
+                                {formatStartTime(block.startTime)} •{" "}
+                                {formatEstimatedHours(block.estimatedHours)}
+                              </Badge>
+                            </div>
+                          </div>
+                          <p className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-brand-ink/50">
+                            Already added to Google Calendar.
+                          </p>
+                          {googleEventLink ? (
+                            <a
+                              aria-label={`Open synced Google Calendar event for ${block.projectName}`}
+                              className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
+                              href={googleEventLink}
+                            >
+                              Open in Google Calendar
+                            </a>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {needsAttentionSyncBlocks.length > 0 ? (
+                <div className="rounded-[26px] border border-brand-coral/14 bg-brand-coral/[0.045] p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-base font-semibold text-brand-ink">
+                        Needs attention
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/55">
+                        These blocks changed after syncing.
+                      </p>
+                    </div>
+                    <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                      {needsAttentionSyncBlocks.length} to review
+                    </Badge>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {needsAttentionSyncBlocks.map((block) => {
+                      const googleEventLink = getBlockGoogleEventLink(block);
+                      const blockDayDate = formatBlockDayDate(
+                        block.day,
+                        exportWeekStart,
+                      );
+                      const timeLabel =
+                        parseStartTimeToMinutes(block.startTime) !== null
+                          ? formatStartTime(block.startTime)
+                          : "Anytime";
+
+                      return (
+                        <div
+                          key={block.id}
+                          className="rounded-[22px] border border-brand-coral/12 bg-white/76 p-4"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <span className="mb-2 inline-flex rounded-full bg-brand-coral/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-coral">
+                                {blockDayDate}
+                              </span>
+                              <p className="text-sm font-semibold text-brand-ink">
+                                {block.projectName}
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-brand-ink/62">
+                                {block.plannedTask}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2 sm:justify-end">
+                              <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                                Needs attention
+                              </Badge>
+                              <Badge variant="subtle">
+                                {timeLabel} •{" "}
+                                {formatEstimatedHours(block.estimatedHours)}
+                              </Badge>
+                            </div>
+                          </div>
+                          <p className="mt-3 rounded-2xl border border-brand-coral/12 bg-brand-coral/[0.055] px-3 py-2 text-xs font-semibold leading-5 text-brand-coral">
+                            This block changed after syncing. Google Calendar
+                            may still have the older version.
+                          </p>
+                          {googleEventLink ? (
+                            <a
+                              aria-label={`Open older Google Calendar event for ${block.projectName}`}
+                              className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
+                              href={googleEventLink}
+                            >
+                              Open in Google Calendar
+                            </a>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
               {flexibleSyncBlocks.length > 0 ? (
                 <div className="rounded-[26px] border border-brand-ink/8 bg-white/62 p-4">
@@ -2324,6 +2445,56 @@ export function WeeklyPlanSection({
                   </div>
                 </div>
               ) : null}
+
+              {removedGoogleSyncEvents.length > 0 ? (
+                <div className="rounded-[26px] border border-brand-coral/14 bg-brand-coral/[0.055] p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-base font-semibold text-brand-ink">
+                        Calendar events still in Google
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        These events were synced before, but their Schedule
+                        Builder blocks were removed.
+                      </p>
+                    </div>
+                    <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                      {removedGoogleSyncEvents.length} event
+                      {removedGoogleSyncEvents.length === 1 ? "" : "s"}
+                    </Badge>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {removedGoogleSyncEvents.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4"
+                      >
+                        <p className="text-sm font-semibold text-brand-ink">
+                          {event.syncedTitle}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-brand-ink/56">
+                          {formatSyncedEventRange(
+                            event.syncedStartsAt,
+                            event.syncedEndsAt,
+                          )}
+                        </p>
+                        <p className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-brand-ink/52">
+                          This event still exists in Google Calendar.
+                        </p>
+                        {event.googleEventHtmlLink ? (
+                          <a
+                            aria-label={`Open removed block Google Calendar event ${event.syncedTitle}`}
+                            className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
+                            href={event.googleEventHtmlLink}
+                          >
+                            Open in Google Calendar
+                          </a>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -2371,8 +2542,8 @@ export function WeeklyPlanSection({
           ) : null}
 
           <p className="mt-3 text-sm leading-6 text-brand-ink/50">
-            Google sync is one-way in V1. Schedule Builder will not update or
-            delete Google Calendar events automatically.
+            Google sync is one-way. Schedule Builder will not update or delete
+            Google Calendar events automatically.
           </p>
         </CardContent>
       </Card>
