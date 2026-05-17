@@ -139,6 +139,16 @@ function createBlockSnapshot(block: WeeklyPlanBlock) {
   };
 }
 
+function getGoogleCalendarEventTitle(block: WeeklyPlanBlock) {
+  const projectName = block.projectName.trim();
+
+  if (!projectName || projectName.toLowerCase() === "schedule builder") {
+    return "Schedule Builder plan block";
+  }
+
+  return `Schedule Builder: ${projectName}`;
+}
+
 function getBlockEventDate(weekStartDate: string, day: WeekDay) {
   return addDaysToIsoDate(weekStartDate, weekDays.indexOf(day));
 }
@@ -376,7 +386,7 @@ export async function POST(request: NextRequest) {
           workResult.data,
           importedResult.data,
         );
-        const title = `Schedule Builder: ${block.projectName}`;
+        const title = getGoogleCalendarEventTitle(block);
         const description = [
           `Planned task: ${block.plannedTask}`,
           `Duration: ${formatEstimatedHours(block.estimatedHours)}`,

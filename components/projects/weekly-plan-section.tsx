@@ -272,21 +272,37 @@ function formatSyncedEventRange(startsAt: string, endsAt: string) {
     return "Original synced time";
   }
 
+  const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const dateLabel = startDate.toLocaleDateString(undefined, {
     day: "numeric",
     month: "short",
+    timeZone: localTimeZone,
     weekday: "long",
   });
   const startTime = startDate.toLocaleTimeString(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    timeZone: localTimeZone,
   });
   const endTime = endDate.toLocaleTimeString(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    timeZone: localTimeZone,
   });
 
   return `${dateLabel} • ${startTime} - ${endTime}`;
+}
+
+function formatGoogleSyncDisplayTitle(title: string) {
+  const trimmedTitle = title.trim();
+  const prefix = "Schedule Builder:";
+
+  if (trimmedTitle.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const projectTitle = trimmedTitle.slice(prefix.length).trim();
+    return projectTitle || "Schedule Builder plan block";
+  }
+
+  return trimmedTitle || "Schedule Builder plan block";
 }
 
 function getSyncStatusLabel(status: GoogleCalendarSyncStatusValue) {
@@ -753,7 +769,10 @@ export function WeeklyPlanSection({
     [readySyncBlocks],
   );
   const canSyncSelectedBlocks =
-    googleSyncEnabled && selectedGoogleSyncIds.length > 0 && !isGoogleSyncing;
+    googleSyncEnabled &&
+    readySyncBlocks.length > 0 &&
+    selectedGoogleSyncIds.length > 0 &&
+    !isGoogleSyncing;
   const selectedGoogleSyncConflictCount = useMemo(
     () =>
       selectedGoogleSyncBlocks.reduce(
@@ -2464,34 +2483,40 @@ export function WeeklyPlanSection({
                     </Badge>
                   </div>
                   <div className="mt-4 grid gap-3">
-                    {removedGoogleSyncEvents.map((event) => (
-                      <div
-                        key={event.id}
-                        className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4"
-                      >
-                        <p className="text-sm font-semibold text-brand-ink">
-                          {event.syncedTitle}
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-brand-ink/56">
-                          {formatSyncedEventRange(
-                            event.syncedStartsAt,
-                            event.syncedEndsAt,
-                          )}
-                        </p>
-                        <p className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-brand-ink/52">
-                          This event still exists in Google Calendar.
-                        </p>
-                        {event.googleEventHtmlLink ? (
-                          <a
-                            aria-label={`Open removed block Google Calendar event ${event.syncedTitle}`}
-                            className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
-                            href={event.googleEventHtmlLink}
-                          >
-                            Open in Google Calendar
-                          </a>
-                        ) : null}
-                      </div>
-                    ))}
+                    {removedGoogleSyncEvents.map((event) => {
+                      const displayTitle = formatGoogleSyncDisplayTitle(
+                        event.syncedTitle,
+                      );
+
+                      return (
+                        <div
+                          key={event.id}
+                          className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4"
+                        >
+                          <p className="text-sm font-semibold text-brand-ink">
+                            {displayTitle}
+                          </p>
+                          <p className="mt-1 text-sm leading-6 text-brand-ink/56">
+                            {formatSyncedEventRange(
+                              event.syncedStartsAt,
+                              event.syncedEndsAt,
+                            )}
+                          </p>
+                          <p className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-brand-ink/52">
+                            This event still exists in Google Calendar.
+                          </p>
+                          {event.googleEventHtmlLink ? (
+                            <a
+                              aria-label={`Open removed block Google Calendar event ${displayTitle}`}
+                              className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
+                              href={event.googleEventHtmlLink}
+                            >
+                              Open in Google Calendar
+                            </a>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : null}
@@ -2523,7 +2548,14 @@ export function WeeklyPlanSection({
             </div>
           ) : null}
 
-          {googleSyncEnabled ? (
+          {googleSyncEnabled && readySyncBlocks.length === 0 ? (
+            <p className="mt-4 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-sm font-semibold leading-6 text-brand-ink/55">
+              No blocks ready to sync. Add a start time to a block before
+              syncing.
+            </p>
+          ) : null}
+
+          {googleSyncEnabled && readySyncBlocks.length > 0 ? (
             <Button
               className="mt-4 w-full"
               disabled={!canSyncSelectedBlocks}
