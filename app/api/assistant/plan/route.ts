@@ -8,11 +8,13 @@ import {
   createContextOnlyAssistantResponse,
   createFallbackAssistantResponse,
   filterAssistantSuggestions,
+  getAssistantCurrentWeekStartInput,
   getRelevantImportedCalendarEvents,
   hasPlanningIntent,
   isGreetingPrompt,
   isVaguePrompt,
   normalizeAssistantSuggestions,
+  type AssistantGoogleSyncRow,
   type AssistantPlanReviewResponse,
   type AssistantPlanningContext,
   type AssistantSuggestionType,
@@ -300,18 +302,33 @@ async function getAuthenticatedUser(
 }
 
 async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
+  const syncWeekStartDate = getAssistantCurrentWeekStartInput();
   const [
     profileResult,
     projectsResult,
     weeklyPlanResult,
     workShiftsResult,
     importedEventsResult,
+    googleSyncConnectionResult,
+    googleSyncRowsResult,
   ] = await Promise.all([
     fetchPlannerProfileForUser(supabase, userId),
     fetchProjectsForUser(supabase, userId),
     fetchWeeklyPlanBlocksForUser(supabase, userId),
     fetchWorkShiftsForUser(supabase, userId),
     fetchImportedCalendarEventsForUser(supabase, userId),
+    supabase
+      .from("google_calendar_connections")
+      .select("sync_enabled, sync_calendar_name")
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabase
+      .from("google_calendar_synced_events")
+      .select(
+        "weekly_plan_block_id, sync_status, google_event_html_link, synced_title, block_snapshot",
+      )
+      .eq("user_id", userId)
+      .eq("week_start_date", syncWeekStartDate),
   ]);
   const loadErrors = [
     profileResult.error,
@@ -319,12 +336,27 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
     weeklyPlanResult.error,
     workShiftsResult.error,
     importedEventsResult.error,
+    googleSyncConnectionResult.error,
+    googleSyncRowsResult.error,
   ].filter(Boolean);
 
   const profile = profileResult.error == null ? profileResult.data : null;
   const plannerType: PlannerType | "Unknown" = profile
     ? profile.plannerType
     : "Unknown";
+  const googleSyncRows: AssistantGoogleSyncRow[] =
+    googleSyncRowsResult.error == null
+      ? ((googleSyncRowsResult.data ?? []).map((row) => ({
+          blockSnapshot: row.block_snapshot,
+          googleEventHtmlLink: row.google_event_html_link,
+          syncStatus:
+            row.sync_status === "needs_attention"
+              ? ("needs_attention" as const)
+              : ("synced" as const),
+          syncedTitle: row.synced_title,
+          weeklyPlanBlockId: row.weekly_plan_block_id,
+        })) satisfies AssistantGoogleSyncRow[])
+      : [];
 
   return {
     context: createAssistantPlanningContext(
@@ -335,6 +367,18 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
       importedEventsResult.error == null
         ? getRelevantImportedCalendarEvents(importedEventsResult.data)
         : [],
+      googleSyncRows,
+      {
+        syncCalendarName:
+          googleSyncConnectionResult.error == null
+            ? googleSyncConnectionResult.data?.sync_calendar_name
+            : null,
+        syncEnabled:
+          googleSyncConnectionResult.error == null
+            ? Boolean(googleSyncConnectionResult.data?.sync_enabled)
+            : false,
+        weekStartDate: syncWeekStartDate,
+      },
     ),
     profile,
     warning:
@@ -380,6 +424,9 @@ function createAiPrompt(
     "Prefer additive weekly plan suggestions for active projects.",
     "Use the work schedule as unavailable time. Avoid suggesting weekly project blocks during work shifts.",
     "Use imported calendar events as commitments and unavailable time. Avoid suggesting weekly project blocks during imported event times.",
+    "Google Calendar sync is manual and one-way. Never claim you synced blocks, sent events to Google Calendar, or updated Google Calendar.",
+    "If the user asks to sync to Google Calendar, explain what is ready and tell them to review the Weekly Plan page and click Sync selected themselves.",
+    "Use Google sync context to answer questions about ready blocks, synced blocks, blocks needing start times, blocks needing attention, overnight blocks, and conflicts.",
     "Some weekly plan blocks have start times. If a timed weekly block overlaps a saved work shift, return a workload_warning that says it may overlap a saved work shift.",
     "If a timed weekly block overlaps an imported calendar event, return a workload_warning that says it may overlap an imported calendar event.",
     "When suggesting new weekly blocks, prefer evenings, Friday, Saturday, Sunday, or flexible blocks when weekday work shifts make daytime unavailable.",
@@ -427,6 +474,13 @@ function createAiPrompt(
     `Imported calendar events: ${context.importedEventsCount}`,
     `Imported event conflicts: ${context.importedEventConflictCount}`,
     `Calendar conflicts: ${context.calendarConflictCount}`,
+    `Google sync enabled: ${context.googleSync.syncEnabled}`,
+    `Google sync calendar: ${context.googleSync.syncCalendarName ?? "Schedule Builder"}`,
+    `Google sync ready blocks: ${context.googleSyncReadyCount}`,
+    `Google sync already synced blocks: ${context.googleSyncSyncedCount}`,
+    `Google sync needs start time blocks: ${context.googleSyncNeedsTimeCount}`,
+    `Google sync needs attention blocks: ${context.googleSyncNeedsAttentionCount}`,
+    `Google sync overnight blocks: ${context.googleSyncOvernightCount}`,
     `Exact-dated deadlines: ${context.deadlinesWithDatesCount}`,
     `Deadlines needing dates: ${context.deadlinesNeedingDatesCount}`,
     "",
@@ -503,6 +557,20 @@ function createAiPrompt(
       })),
     ),
     "",
+    "Google Calendar sync context:",
+    JSON.stringify({
+      syncEnabled: context.googleSync.syncEnabled,
+      syncCalendarName: context.googleSync.syncCalendarName,
+      currentWeekStart: context.googleSync.currentWeekStart,
+      readyBlocks: context.googleSync.readyBlocks,
+      syncedBlocks: context.googleSync.syncedBlocks,
+      needsTimeBlocks: context.googleSync.needsTimeBlocks,
+      needsAttentionBlocks: context.googleSync.needsAttentionBlocks,
+      overnightBlocks: context.googleSync.overnightBlocks,
+      conflictBlocks: context.googleSync.conflictBlocks,
+      removedSyncedEvents: context.googleSync.removedSyncedEvents,
+    }),
+    "",
     "Exact project deadlines:",
     JSON.stringify(context.deadlinesWithDates),
     "",
@@ -530,6 +598,9 @@ function createAssistantMessagePrompt(
     "If imported calendar events exist, treat them as unavailable commitments and reference them naturally for planning/open-time requests.",
     "If timed weekly blocks overlap work shifts, mention the conflict clearly without moving anything.",
     "If timed weekly blocks overlap imported calendar events, mention the conflict clearly without moving anything.",
+    "Google Calendar sync is manual and one-way. Never say you synced, sent, updated, or deleted Google Calendar events.",
+    "If the user asks about Google Calendar sync, explain the sync readiness from context and direct them back to the Weekly Plan page to select blocks and click Sync selected.",
+    "Mention blocks that need start times, blocks needing attention, overnight blocks, and conflicts when they matter.",
     "Avoid repeating the same opening wording from prior assistant messages.",
     "Never claim anything was saved or changed.",
     "The app can create projects, update next actions, and add weekly blocks only after the user applies a reviewed action card.",
@@ -556,6 +627,12 @@ function createAssistantMessagePrompt(
       importedEventsCount: context.importedEventsCount,
       importedEventConflictCount: context.importedEventConflictCount,
       calendarConflictCount: context.calendarConflictCount,
+      googleSync: context.googleSync,
+      googleSyncReadyCount: context.googleSyncReadyCount,
+      googleSyncSyncedCount: context.googleSyncSyncedCount,
+      googleSyncNeedsTimeCount: context.googleSyncNeedsTimeCount,
+      googleSyncNeedsAttentionCount: context.googleSyncNeedsAttentionCount,
+      googleSyncOvernightCount: context.googleSyncOvernightCount,
       deadlinesWithDates: context.deadlinesWithDates,
       deadlinesNeedingDates: context.deadlinesNeedingDates,
       projects: context.projects.map((project) => ({

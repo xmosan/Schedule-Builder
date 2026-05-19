@@ -20,6 +20,8 @@ import {
   findWeeklyPlanImportedEventConflicts,
   findWeeklyPlanWorkConflicts,
   getDayWorkShiftRanges,
+  getWeeklyPlanImportedEventConflictForBlock,
+  getWeeklyPlanWorkConflictForBlock,
   getWorkHoursByDay,
   getWorkScheduleSummary,
   type WeeklyPlanImportedEventConflict,
@@ -31,6 +33,9 @@ import {
   type ImportedCalendarEvent,
 } from "@/lib/imported-calendar";
 import {
+  formatEstimatedHours,
+  formatStartTime,
+  parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
   type WeeklyPlanBlock,
@@ -69,6 +74,11 @@ export type AssistantContextSummary = {
   calendarConflictCount: number;
   deadlinesNeedingDatesCount: number;
   deadlinesWithDatesCount: number;
+  googleSyncNeedsAttentionCount: number;
+  googleSyncNeedsTimeCount: number;
+  googleSyncOvernightCount: number;
+  googleSyncReadyCount: number;
+  googleSyncSyncedCount: number;
   importedEventConflictCount: number;
   importedEventsCount: number;
   plannedWeeklyHours: number;
@@ -83,6 +93,7 @@ export type AssistantPlanningContext = AssistantContextSummary & {
   calendarConflicts: WeeklyPlanWorkConflict[];
   deadlinesNeedingDates: CalendarDeadline[];
   deadlinesWithDates: CalendarDeadline[];
+  googleSync: AssistantGoogleSyncContext;
   importedCalendarEvents: ImportedCalendarEvent[];
   importedEventConflicts: WeeklyPlanImportedEventConflict[];
   projects: Project[];
@@ -142,6 +153,40 @@ type AssistantHistoryItem = {
   role: "assistant" | "user";
 };
 
+export type AssistantGoogleSyncRow = {
+  blockSnapshot?: unknown;
+  googleEventHtmlLink?: string | null;
+  syncStatus: "synced" | "needs_attention";
+  syncedTitle?: string | null;
+  weeklyPlanBlockId: string | null;
+};
+
+export type AssistantGoogleSyncBlock = {
+  day: WeekDay;
+  durationHours: number;
+  id: string;
+  plannedTask: string;
+  projectName: string;
+  startTime: string | null;
+  warnings: string[];
+};
+
+export type AssistantGoogleSyncContext = {
+  conflictBlocks: AssistantGoogleSyncBlock[];
+  currentWeekStart: string;
+  needsAttentionBlocks: AssistantGoogleSyncBlock[];
+  needsTimeBlocks: AssistantGoogleSyncBlock[];
+  overnightBlocks: AssistantGoogleSyncBlock[];
+  readyBlocks: AssistantGoogleSyncBlock[];
+  removedSyncedEvents: Array<{
+    googleEventHtmlLink?: string | null;
+    syncedTitle?: string | null;
+  }>;
+  syncCalendarName: string | null;
+  syncEnabled: boolean;
+  syncedBlocks: AssistantGoogleSyncBlock[];
+};
+
 const maxDefaultAssistantCards = 4;
 const maxDefaultWarningCards = 2;
 const importedEventLookaheadDays = 30;
@@ -149,7 +194,7 @@ const importedEventLookaheadDays = 30;
 const greetingPattern = /^(hey|hello|hi|salam|assalamu alaikum|yo|sup|good morning|good afternoon|good evening)[\s!.?]*$/i;
 const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don't know|not sure|surprise me)[\s!.?]*$/i;
 const planningIntentPattern =
-  /\b(plan|schedule|week|weekly|block|blocks|overlap|conflict|conflicts|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study)\b/i;
+  /\b(plan|schedule|week|weekly|block|blocks|overlap|conflict|conflicts|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study|sync|synced|google calendar|start time|start times)\b/i;
 const focusPromptPattern = /\b(focus|first|top 3|top priority|priorit|what should i do)\b/i;
 const balancePromptPattern = /\bbalance\b/i;
 const overloadPromptPattern = /\b(overload|overloaded|too much|busy|overlap|conflict|conflicts)\b/i;
@@ -160,6 +205,8 @@ const projectDraftPromptPattern =
   /\b(create|add|start|draft|make|save)\b.*\b(project|goal|initiative|class|course|work)\b|\bnew project\b/i;
 const projectUpdatePromptPattern =
   /\b(change|update|edit|move|set|shift|rename|adjust|confirm)\b.*\b(project|deadline|due date|priority|category|weekly hours|hours|next action|name)\b|\b(due date|deadline)\b.*\b(later|earlier|after|before|to|on|by)\b/i;
+const googleSyncPromptPattern =
+  /\b(sync|synced|google calendar|send to google|calendar sync|ready to sync|start time|start times|needs time|prepare.*calendar|before syncing|what.*sync|still.*sync|fix.*sync)\b/i;
 
 export function isGreetingPrompt(prompt: string) {
   return greetingPattern.test(prompt.trim());
@@ -174,9 +221,14 @@ export function hasPlanningIntent(prompt: string) {
 
   return (
     planningIntentPattern.test(normalizedPrompt) ||
+    googleSyncPromptPattern.test(normalizedPrompt) ||
     projectDraftPromptPattern.test(normalizedPrompt) ||
     projectUpdatePromptPattern.test(normalizedPrompt)
   );
+}
+
+export function hasGoogleSyncIntent(prompt: string) {
+  return googleSyncPromptPattern.test(prompt.trim());
 }
 
 function didRecentlyOfferPlanningDirections(
@@ -499,6 +551,9 @@ export function createAssistantContextSummary(
   plannerType: PlannerType | "Unknown",
   workShifts: WorkShift[] = [],
   importedCalendarEvents: ImportedCalendarEvent[] = [],
+  googleSync: AssistantGoogleSyncContext = createAssistantGoogleSyncContext({
+    weeklyPlanBlocks,
+  }),
 ): AssistantContextSummary {
   const externalImportedEvents = importedCalendarEvents.filter(
     (event) => !isScheduleBuilderExportedEvent(event),
@@ -518,6 +573,11 @@ export function createAssistantContextSummary(
     calendarConflictCount: workConflicts.length + importedEventConflicts.length,
     deadlinesNeedingDatesCount: deadlineBuckets.deadlinesNeedingDates.length,
     deadlinesWithDatesCount: deadlineBuckets.exactDeadlines.length,
+    googleSyncNeedsAttentionCount: googleSync.needsAttentionBlocks.length,
+    googleSyncNeedsTimeCount: googleSync.needsTimeBlocks.length,
+    googleSyncOvernightCount: googleSync.overnightBlocks.length,
+    googleSyncReadyCount: googleSync.readyBlocks.length,
+    googleSyncSyncedCount: googleSync.syncedBlocks.length,
     importedEventConflictCount: importedEventConflicts.length,
     importedEventsCount: externalImportedEvents.length,
     plannedWeeklyHours: getPlannedHours(projects),
@@ -541,6 +601,12 @@ export function createAssistantPlanningContext(
   plannerType: PlannerType | "Unknown",
   workShifts: WorkShift[] = [],
   importedCalendarEvents: ImportedCalendarEvent[] = [],
+  googleSyncRows: AssistantGoogleSyncRow[] = [],
+  googleSyncOptions: {
+    syncCalendarName?: string | null;
+    syncEnabled?: boolean;
+    weekStartDate?: string;
+  } = {},
 ): AssistantPlanningContext {
   const externalImportedEvents = importedCalendarEvents.filter(
     (event) => !isScheduleBuilderExportedEvent(event),
@@ -554,6 +620,16 @@ export function createAssistantPlanningContext(
     externalImportedEvents,
   );
   const deadlineBuckets = getProjectDeadlineBuckets(projects);
+  const googleSync = createAssistantGoogleSyncContext({
+    importedCalendarEvents: externalImportedEvents,
+    syncCalendarName: googleSyncOptions.syncCalendarName ?? null,
+    syncEnabled: Boolean(googleSyncOptions.syncEnabled),
+    syncRows: googleSyncRows,
+    weekStartDate:
+      googleSyncOptions.weekStartDate ?? getAssistantCurrentWeekStartInput(),
+    weeklyPlanBlocks,
+    workShifts,
+  });
 
   return {
     ...createAssistantContextSummary(
@@ -562,10 +638,12 @@ export function createAssistantPlanningContext(
       plannerType,
       workShifts,
       externalImportedEvents,
+      googleSync,
     ),
     calendarConflicts,
     deadlinesNeedingDates: deadlineBuckets.deadlinesNeedingDates,
     deadlinesWithDates: deadlineBuckets.exactDeadlines,
+    googleSync,
     importedCalendarEvents: externalImportedEvents,
     importedEventConflicts,
     projects,
@@ -630,6 +708,11 @@ function createAssistantResponseFromSuggestions({
       calendarConflictCount: context.calendarConflictCount,
       deadlinesNeedingDatesCount: context.deadlinesNeedingDatesCount,
       deadlinesWithDatesCount: context.deadlinesWithDatesCount,
+      googleSyncNeedsAttentionCount: context.googleSyncNeedsAttentionCount,
+      googleSyncNeedsTimeCount: context.googleSyncNeedsTimeCount,
+      googleSyncOvernightCount: context.googleSyncOvernightCount,
+      googleSyncReadyCount: context.googleSyncReadyCount,
+      googleSyncSyncedCount: context.googleSyncSyncedCount,
       importedEventConflictCount: context.importedEventConflictCount,
       importedEventsCount: context.importedEventsCount,
       plannedWeeklyHours: context.plannedWeeklyHours,
@@ -659,6 +742,11 @@ export function createContextOnlyAssistantResponse(
       calendarConflictCount: context.calendarConflictCount,
       deadlinesNeedingDatesCount: context.deadlinesNeedingDatesCount,
       deadlinesWithDatesCount: context.deadlinesWithDatesCount,
+      googleSyncNeedsAttentionCount: context.googleSyncNeedsAttentionCount,
+      googleSyncNeedsTimeCount: context.googleSyncNeedsTimeCount,
+      googleSyncOvernightCount: context.googleSyncOvernightCount,
+      googleSyncReadyCount: context.googleSyncReadyCount,
+      googleSyncSyncedCount: context.googleSyncSyncedCount,
       importedEventConflictCount: context.importedEventConflictCount,
       importedEventsCount: context.importedEventsCount,
       plannedWeeklyHours: context.plannedWeeklyHours,
@@ -783,6 +871,18 @@ function getCurrentWeekStart(referenceDate = new Date()) {
   return addDays(localDate, mondayOffset);
 }
 
+function toInputDate(date: Date) {
+  return [
+    String(date.getFullYear()).padStart(4, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+export function getAssistantCurrentWeekStartInput(referenceDate = new Date()) {
+  return toInputDate(getCurrentWeekStart(referenceDate));
+}
+
 export function getRelevantImportedCalendarEvents(
   importedCalendarEvents: ImportedCalendarEvent[],
   referenceDate = new Date(),
@@ -809,6 +909,196 @@ export function getRelevantImportedCalendarEvents(
         new Date(first.startsAt).getTime() - new Date(second.startsAt).getTime(),
     )
     .slice(0, 80);
+}
+
+function createGoogleSyncBlock(
+  block: WeeklyPlanBlock,
+  warnings: string[] = [],
+): AssistantGoogleSyncBlock {
+  return {
+    day: block.day,
+    durationHours: block.estimatedHours,
+    id: block.id,
+    plannedTask: block.plannedTask,
+    projectName: block.projectName,
+    startTime: block.startTime ?? null,
+    warnings,
+  };
+}
+
+function createGoogleSyncBlockSnapshot(block: WeeklyPlanBlock) {
+  return {
+    day: block.day,
+    estimatedHours: block.estimatedHours,
+    id: block.id,
+    plannedTask: block.plannedTask,
+    projectName: block.projectName,
+    startTime: block.startTime ?? "",
+  };
+}
+
+function googleSyncSnapshotMatches(
+  snapshot: unknown,
+  block: WeeklyPlanBlock | undefined,
+) {
+  if (!block || typeof snapshot !== "object" || snapshot === null) {
+    return false;
+  }
+
+  const expected = createGoogleSyncBlockSnapshot(block);
+  const candidate = snapshot as Partial<typeof expected>;
+
+  return (
+    candidate.day === expected.day &&
+    Number(candidate.estimatedHours) === expected.estimatedHours &&
+    candidate.id === expected.id &&
+    candidate.plannedTask === expected.plannedTask &&
+    candidate.projectName === expected.projectName &&
+    (candidate.startTime ?? "") === expected.startTime
+  );
+}
+
+function googleSyncBlockEndsAfterMidnight(block: WeeklyPlanBlock) {
+  const startMinutes = parseStartTimeToMinutes(block.startTime);
+
+  return Boolean(startMinutes !== null && startMinutes + block.estimatedHours * 60 > 1440);
+}
+
+function getGoogleSyncBlockWarnings({
+  block,
+  importedEvents,
+  weekStart,
+  workShifts,
+}: {
+  block: WeeklyPlanBlock;
+  importedEvents: ImportedCalendarEvent[];
+  weekStart: Date;
+  workShifts: WorkShift[];
+}) {
+  const warnings: string[] = [];
+  const workConflict = getWeeklyPlanWorkConflictForBlock(block, workShifts);
+  const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
+    block,
+    importedEvents,
+    weekStart,
+  );
+
+  if (workConflict) {
+    warnings.push(`May overlap with work shift (${workConflict.shiftRangeLabel})`);
+  }
+
+  if (importedConflict) {
+    warnings.push(`May overlap with ${importedConflict.event.title}`);
+  }
+
+  if (googleSyncBlockEndsAfterMidnight(block)) {
+    warnings.push("This block ends after midnight.");
+  }
+
+  return warnings;
+}
+
+export function createAssistantGoogleSyncContext({
+  importedCalendarEvents = [],
+  syncCalendarName = null,
+  syncEnabled = false,
+  syncRows = [],
+  weekStartDate = getAssistantCurrentWeekStartInput(),
+  weeklyPlanBlocks,
+  workShifts = [],
+}: {
+  importedCalendarEvents?: ImportedCalendarEvent[];
+  syncCalendarName?: string | null;
+  syncEnabled?: boolean;
+  syncRows?: AssistantGoogleSyncRow[];
+  weekStartDate?: string;
+  weeklyPlanBlocks: WeeklyPlanBlock[];
+  workShifts?: WorkShift[];
+}): AssistantGoogleSyncContext {
+  const weekStart = new Date(`${weekStartDate}T00:00:00`);
+  const blocksById = new Map(
+    weeklyPlanBlocks.map((block) => [block.id, block]),
+  );
+  const syncStatusByBlockId = new Map<
+    string,
+    "synced" | "needs_attention"
+  >();
+  const removedSyncedEvents: AssistantGoogleSyncContext["removedSyncedEvents"] =
+    [];
+
+  syncRows.forEach((row) => {
+    const block = row.weeklyPlanBlockId
+      ? blocksById.get(row.weeklyPlanBlockId)
+      : undefined;
+
+    if (!row.weeklyPlanBlockId || !block) {
+      removedSyncedEvents.push({
+        googleEventHtmlLink: row.googleEventHtmlLink,
+        syncedTitle: row.syncedTitle,
+      });
+      return;
+    }
+
+    const syncStatus =
+      row.syncStatus === "synced" &&
+      !googleSyncSnapshotMatches(row.blockSnapshot, block)
+        ? "needs_attention"
+        : row.syncStatus;
+
+    syncStatusByBlockId.set(row.weeklyPlanBlockId, syncStatus);
+  });
+
+  const context: AssistantGoogleSyncContext = {
+    conflictBlocks: [],
+    currentWeekStart: weekStartDate,
+    needsAttentionBlocks: [],
+    needsTimeBlocks: [],
+    overnightBlocks: [],
+    readyBlocks: [],
+    removedSyncedEvents,
+    syncCalendarName,
+    syncEnabled,
+    syncedBlocks: [],
+  };
+
+  weeklyPlanBlocks.forEach((block) => {
+    const warnings = getGoogleSyncBlockWarnings({
+      block,
+      importedEvents: importedCalendarEvents,
+      weekStart,
+      workShifts,
+    });
+    const syncBlock = createGoogleSyncBlock(block, warnings);
+    const syncStatus = syncStatusByBlockId.get(block.id);
+    const hasStartTime = parseStartTimeToMinutes(block.startTime) !== null;
+
+    if (warnings.length > 0) {
+      context.conflictBlocks.push(syncBlock);
+    }
+
+    if (googleSyncBlockEndsAfterMidnight(block)) {
+      context.overnightBlocks.push(syncBlock);
+    }
+
+    if (syncStatus === "synced") {
+      context.syncedBlocks.push(syncBlock);
+      return;
+    }
+
+    if (syncStatus === "needs_attention") {
+      context.needsAttentionBlocks.push(syncBlock);
+      return;
+    }
+
+    if (hasStartTime) {
+      context.readyBlocks.push(syncBlock);
+      return;
+    }
+
+    context.needsTimeBlocks.push(syncBlock);
+  });
+
+  return context;
 }
 
 function normalizeProjectSearchText(value: string) {
@@ -950,6 +1240,167 @@ export function createCalendarConflictSuggestions(
   return [...workWarnings, ...importedWarnings];
 }
 
+function formatGoogleSyncBlock(block: AssistantGoogleSyncBlock) {
+  const timeText = block.startTime ? formatStartTime(block.startTime) : "Anytime";
+
+  return `${block.projectName} on ${block.day} at ${timeText} (${formatEstimatedHours(
+    block.durationHours,
+  )})`;
+}
+
+function formatGoogleSyncBlockList(blocks: AssistantGoogleSyncBlock[]) {
+  if (blocks.length === 0) {
+    return "";
+  }
+
+  const labels = blocks.slice(0, 3).map(formatGoogleSyncBlock);
+  const remainder = blocks.length - labels.length;
+
+  return `${labels.join("; ")}${remainder > 0 ? `; +${remainder} more` : ""}`;
+}
+
+function createGoogleSyncFallbackSuggestions(
+  context: AssistantPlanningContext,
+) {
+  const suggestions: AssistantSuggestion[] = [];
+
+  if (context.googleSync.needsTimeBlocks.length > 0) {
+    const description = `${formatGoogleSyncBlockList(
+      context.googleSync.needsTimeBlocks,
+    )} need start times before they can be selected for Google Calendar sync.`;
+
+    suggestions.push({
+      id: "google-sync-needs-time",
+      type: "workload_warning",
+      title: "Add start times before syncing",
+      description,
+      confidence: 0.9,
+      summary: description,
+      rationale:
+        "Flexible blocks are not sent to Google Calendar until the user adds start times.",
+      severity: "warning",
+    });
+  }
+
+  if (context.googleSync.overnightBlocks.length > 0) {
+    const description = `${formatGoogleSyncBlockList(
+      context.googleSync.overnightBlocks,
+    )} end after midnight. Review the time before syncing.`;
+
+    suggestions.push({
+      id: "google-sync-overnight",
+      type: "workload_warning",
+      title: "Review overnight blocks",
+      description,
+      confidence: 0.88,
+      summary: description,
+      rationale:
+        "Blocks that cross midnight can be valid, but users should confirm the intended calendar date.",
+      severity: "warning",
+    });
+  }
+
+  if (context.googleSync.needsAttentionBlocks.length > 0) {
+    const description = `${formatGoogleSyncBlockList(
+      context.googleSync.needsAttentionBlocks,
+    )} changed after syncing. Google Calendar may still have the older version.`;
+
+    suggestions.push({
+      id: "google-sync-needs-attention",
+      type: "workload_warning",
+      title: "Review changed synced blocks",
+      description,
+      confidence: 0.9,
+      summary: description,
+      rationale:
+        "Google sync is manual and one-way, so edited blocks are not updated in Google Calendar automatically.",
+      severity: "warning",
+    });
+  }
+
+  const conflictedBlocks = context.googleSync.conflictBlocks.filter(
+    (block) => block.warnings.length > 0,
+  );
+
+  if (conflictedBlocks.length > 0) {
+    const description = `${formatGoogleSyncBlockList(
+      conflictedBlocks,
+    )} may overlap existing commitments. Review warnings on the Weekly Plan page before syncing.`;
+
+    suggestions.push({
+      id: "google-sync-conflicts",
+      type: "workload_warning",
+      title: "Check conflicts before syncing",
+      description,
+      confidence: 0.86,
+      summary: description,
+      rationale:
+        "The assistant can flag possible overlaps, but it does not move or sync calendar events.",
+      severity: "warning",
+    });
+  }
+
+  return suggestions;
+}
+
+function createGoogleSyncFallbackMessage(
+  context: AssistantPlanningContext,
+  prompt: string,
+) {
+  const sync = context.googleSync;
+  const manualSyncNote =
+    "Nothing is sent to Google Calendar unless you select blocks and sync them from the Weekly Plan page.";
+  const asksToSync =
+    /\b(sync|send|push|add)\b.*\b(google|calendar)\b/i.test(prompt);
+  const asksForStartTimes = /\b(start time|start times|needs time)\b/i.test(
+    prompt,
+  );
+
+  if (asksForStartTimes) {
+    return sync.needsTimeBlocks.length > 0
+      ? `These blocks still need start times before Google sync: ${formatGoogleSyncBlockList(
+          sync.needsTimeBlocks,
+        )}. ${manualSyncNote}`
+      : `All current unsynced blocks that can be sent to Google Calendar already have start times. You have ${sync.readyBlocks.length} ready to sync. ${manualSyncNote}`;
+  }
+
+  const statusParts = [
+    `${sync.readyBlocks.length} ready to sync`,
+    `${sync.syncedBlocks.length} already synced`,
+    `${sync.needsTimeBlocks.length} need start times`,
+    `${sync.needsAttentionBlocks.length} need attention`,
+  ];
+
+  if (sync.overnightBlocks.length > 0) {
+    statusParts.push(`${sync.overnightBlocks.length} end after midnight`);
+  }
+
+  if (sync.conflictBlocks.length > 0) {
+    statusParts.push(`${sync.conflictBlocks.length} may overlap commitments`);
+  }
+
+  const reviewNote =
+    sync.overnightBlocks.length > 0
+      ? ` I’d review ${formatGoogleSyncBlockList(
+          sync.overnightBlocks,
+        )} because it ends after midnight.`
+      : sync.needsTimeBlocks.length > 0
+        ? ` Add start times to ${formatGoogleSyncBlockList(
+            sync.needsTimeBlocks,
+          )} before syncing.`
+        : "";
+
+  if (asksToSync) {
+    return `I can help you review what is ready, but Google sync is manual. You have ${statusParts.join(
+      ", ",
+    )}.${reviewNote} ${manualSyncNote}`;
+  }
+
+  return `Here’s the Google Calendar sync check: ${statusParts.join(
+    ", ",
+  )}.${reviewNote} ${manualSyncNote}`;
+}
+
 export function createFallbackAssistantResponse(
   context: AssistantPlanningContext,
   prompt: string,
@@ -978,6 +1429,15 @@ export function createFallbackAssistantResponse(
       context,
       message,
       suggestions: [],
+    });
+  }
+
+  if (hasGoogleSyncIntent(prompt)) {
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message: createGoogleSyncFallbackMessage(context, prompt),
+      suggestions: createGoogleSyncFallbackSuggestions(context),
     });
   }
 
