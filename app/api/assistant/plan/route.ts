@@ -10,10 +10,10 @@ import {
   filterAssistantSuggestions,
   getAssistantCurrentWeekStartInput,
   getRelevantImportedCalendarEvents,
-  hasPlanningIntent,
   isGreetingPrompt,
   isVaguePrompt,
   normalizeAssistantSuggestions,
+  shouldGenerateAssistantActionCards,
   type AssistantGoogleSyncRow,
   type AssistantPlanReviewResponse,
   type AssistantPlanningContext,
@@ -405,7 +405,10 @@ function createAiPrompt(
     "If the user is only greeting you, reply conversationally and return zero suggestions.",
     "If the user request is vague, ask one useful follow-up question and return zero or one suggestion.",
     "If the user asks a general question, answer briefly first before proposing schedule changes.",
-    "Only generate suggestion cards when the user is asking for planning help.",
+    "Do not create suggestion cards for every response.",
+    "Return zero suggestions for direct questions, analysis/review requests, Google sync status questions, and open-time searches unless the user clearly asks to change the plan.",
+    "Only generate suggestion cards when the user clearly asks to create, add, move, update, schedule, plan, or generate blocks/projects.",
+    "For 'find open time' requests, list open windows in the message and ask whether the user wants to turn one into a plan block. Return zero suggestions unless they asked to create blocks.",
     "Limit suggestions to 2-4 high-quality items by default.",
     "Return at most 2 warning-style suggestions.",
     "Avoid duplicate or near-duplicate cards.",
@@ -593,7 +596,9 @@ function createAssistantMessagePrompt(
     "If the user greets you, reply warmly and ask what they want to plan. Do not give a full report.",
     "If the user is vague, ask one helpful follow-up question instead of inventing a full schedule.",
     "If the user asks a normal question, answer it first.",
-    "If the user asks for planning help, give a practical summary before separate action cards are shown by the app.",
+    "If the user asks for analysis, sync status, or open time, answer directly and do not promise action cards.",
+    "Only mention review cards when the user clearly asks to create, add, move, update, schedule, plan, or generate blocks/projects.",
+    "For 'find open time' requests, list open windows or likely openings and ask whether the user wants to turn one into a plan block.",
     "If work shifts exist, treat them as unavailable and reference them naturally for planning requests.",
     "If imported calendar events exist, treat them as unavailable commitments and reference them naturally for planning/open-time requests.",
     "If timed weekly blocks overlap work shifts, mention the conflict clearly without moving anything.",
@@ -923,7 +928,7 @@ export async function POST(request: NextRequest) {
       return;
     }
 
-    const shouldGenerateSuggestions = hasPlanningIntent(prompt);
+    const shouldGenerateSuggestions = shouldGenerateAssistantActionCards(prompt);
     let suggestions: AssistantPlanReviewResponse["suggestions"] = [];
     let finalMessage = streamedMessage;
 

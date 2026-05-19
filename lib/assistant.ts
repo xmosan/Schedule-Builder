@@ -195,10 +195,17 @@ const greetingPattern = /^(hey|hello|hi|salam|assalamu alaikum|yo|sup|good morni
 const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don't know|not sure|surprise me)[\s!.?]*$/i;
 const planningIntentPattern =
   /\b(plan|schedule|week|weekly|block|blocks|overlap|conflict|conflicts|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study|sync|synced|google calendar|start time|start times)\b/i;
+const actionCardIntentPattern =
+  /\b(plan my week|plan this week|make a plan|create blocks?|create .*blocks?|add .*blocks?|add a .*block|schedule .*blocks?|schedule my top 3|turn .* into .*blocks?|generate .*blocks?|move|update|change|edit|set|shift|rename|draft|save|create .*project|add .*project|new project|add time|add start time)\b/i;
+const directQuestionPromptPattern =
+  /\?|^(do|does|did|is|are|am|can|could|should|would|what|why|how|which|when|where)\b/i;
+const analysisOnlyPromptPattern =
+  /\b(review|check|analy[sz]e|watch out|look okay|does my schedule|am i overloaded|overloaded days|find overloaded|conflicts?|anything wrong|status|ready)\b/i;
 const focusPromptPattern = /\b(focus|first|top 3|top priority|priorit|what should i do)\b/i;
 const balancePromptPattern = /\bbalance\b/i;
 const overloadPromptPattern = /\b(overload|overloaded|too much|busy|overlap|conflict|conflicts)\b/i;
 const planWeekPromptPattern = /\b(plan my week|plan this week|weekly plan|week)\b/i;
+const studyPromptPattern = /\b(study|school|class|course|exam|assignment)\b/i;
 const openTimePromptPattern =
   /\b(find open time|open time|open slots|free time|available time|availability)\b/i;
 const projectDraftPromptPattern =
@@ -229,6 +236,67 @@ export function hasPlanningIntent(prompt: string) {
 
 export function hasGoogleSyncIntent(prompt: string) {
   return googleSyncPromptPattern.test(prompt.trim());
+}
+
+export function hasOpenTimeIntent(prompt: string) {
+  return openTimePromptPattern.test(prompt.trim());
+}
+
+export function shouldGenerateAssistantActionCards(prompt: string) {
+  const normalizedPrompt = prompt.trim();
+
+  if (
+    !normalizedPrompt ||
+    isGreetingPrompt(normalizedPrompt) ||
+    isVaguePrompt(normalizedPrompt)
+  ) {
+    return false;
+  }
+
+  if (projectDraftPromptPattern.test(normalizedPrompt)) {
+    return true;
+  }
+
+  if (projectUpdatePromptPattern.test(normalizedPrompt)) {
+    return true;
+  }
+
+  if (hasGoogleSyncIntent(normalizedPrompt)) {
+    return (
+      /\b(add|move|update|change|edit|set|shift|schedule|create)\b/i.test(
+        normalizedPrompt,
+      ) && !/\b(sync|send|push)\b.*\b(google|calendar)\b/i.test(normalizedPrompt)
+    );
+  }
+
+  if (
+    hasOpenTimeIntent(normalizedPrompt) &&
+    !/\b(create|add|schedule|turn|make|generate)\b/i.test(normalizedPrompt)
+  ) {
+    return false;
+  }
+
+  if (
+    (directQuestionPromptPattern.test(normalizedPrompt) ||
+      analysisOnlyPromptPattern.test(normalizedPrompt)) &&
+    !actionCardIntentPattern.test(normalizedPrompt)
+  ) {
+    return false;
+  }
+
+  return actionCardIntentPattern.test(normalizedPrompt);
+}
+
+function shouldAnswerWithoutActionCards(prompt: string) {
+  const normalizedPrompt = prompt.trim();
+
+  return (
+    hasGoogleSyncIntent(normalizedPrompt) ||
+    hasOpenTimeIntent(normalizedPrompt) ||
+    focusPromptPattern.test(normalizedPrompt) ||
+    directQuestionPromptPattern.test(normalizedPrompt) ||
+    analysisOnlyPromptPattern.test(normalizedPrompt)
+  ) && !shouldGenerateAssistantActionCards(normalizedPrompt);
 }
 
 function didRecentlyOfferPlanningDirections(
@@ -911,6 +979,194 @@ export function getRelevantImportedCalendarEvents(
     .slice(0, 80);
 }
 
+function formatMinutesAsClock(totalMinutes: number) {
+  const normalizedMinutes = ((Math.round(totalMinutes) % 1440) + 1440) % 1440;
+  const hours = Math.floor(normalizedMinutes / 60);
+  const minutes = normalizedMinutes % 60;
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const displayHour = hours % 12 === 0 ? 12 : hours % 12;
+
+  return `${displayHour}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function getWeekDateKeyForDay(day: WeekDay, weekStart = getCurrentWeekStart()) {
+  return toInputDate(addDays(weekStart, weekDays.indexOf(day)));
+}
+
+function getDateKey(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return toInputDate(date);
+}
+
+type OpenTimeWindow = {
+  day: WeekDay;
+  durationHours: number;
+  endLabel: string;
+  startLabel: string;
+};
+
+function addBusyRange(
+  ranges: Array<{ end: number; start: number }>,
+  start: number | null,
+  end: number | null,
+  dayStart: number,
+  dayEnd: number,
+) {
+  if (start === null || end === null) {
+    return;
+  }
+
+  const clampedStart = Math.max(start, dayStart);
+  const clampedEnd = Math.min(end, dayEnd);
+
+  if (clampedEnd > clampedStart) {
+    ranges.push({ end: clampedEnd, start: clampedStart });
+  }
+}
+
+function getOpenTimeWindows(
+  context: AssistantPlanningContext,
+  options: {
+    dayEnd?: number;
+    dayStart?: number;
+    maxWindows?: number;
+    minimumMinutes?: number;
+  } = {},
+) {
+  const dayStart = options.dayStart ?? 8 * 60;
+  const dayEnd = options.dayEnd ?? 22 * 60;
+  const minimumMinutes = options.minimumMinutes ?? 60;
+  const weekStart = getCurrentWeekStart();
+  const windows: OpenTimeWindow[] = [];
+
+  weekDays.forEach((day) => {
+    const busyRanges: Array<{ end: number; start: number }> = [];
+    const dayDateKey = getWeekDateKeyForDay(day, weekStart);
+
+    context.workShifts
+      .filter((shift) => shift.day === day)
+      .forEach((shift) => {
+        addBusyRange(
+          busyRanges,
+          parseStartTimeToMinutes(shift.startTime),
+          parseStartTimeToMinutes(shift.endTime),
+          dayStart,
+          dayEnd,
+        );
+      });
+
+    context.weeklyPlanBlocks
+      .filter((block) => block.day === day)
+      .forEach((block) => {
+        const start = parseStartTimeToMinutes(block.startTime);
+
+        addBusyRange(
+          busyRanges,
+          start,
+          start === null ? null : start + block.estimatedHours * 60,
+          dayStart,
+          dayEnd,
+        );
+      });
+
+    context.importedCalendarEvents.forEach((event) => {
+      if (getDateKey(event.startsAt) !== dayDateKey) {
+        return;
+      }
+
+      if (event.allDay) {
+        busyRanges.push({ end: dayEnd, start: dayStart });
+        return;
+      }
+
+      const startsAt = new Date(event.startsAt);
+      const endsAt = event.endsAt ? new Date(event.endsAt) : null;
+
+      if (Number.isNaN(startsAt.getTime())) {
+        return;
+      }
+
+      const start = startsAt.getHours() * 60 + startsAt.getMinutes();
+      const end =
+        endsAt && !Number.isNaN(endsAt.getTime())
+          ? endsAt.getHours() * 60 + endsAt.getMinutes()
+          : start + 30;
+
+      addBusyRange(busyRanges, start, end, dayStart, dayEnd);
+    });
+
+    const mergedRanges = busyRanges
+      .sort((first, second) => first.start - second.start)
+      .reduce<Array<{ end: number; start: number }>>((merged, range) => {
+        const previous = merged[merged.length - 1];
+
+        if (!previous || range.start > previous.end) {
+          merged.push({ ...range });
+          return merged;
+        }
+
+        previous.end = Math.max(previous.end, range.end);
+        return merged;
+      }, []);
+
+    let cursor = dayStart;
+
+    mergedRanges.forEach((range) => {
+      if (range.start - cursor >= minimumMinutes) {
+        windows.push({
+          day,
+          durationHours: (range.start - cursor) / 60,
+          endLabel: formatMinutesAsClock(range.start),
+          startLabel: formatMinutesAsClock(cursor),
+        });
+      }
+
+      cursor = Math.max(cursor, range.end);
+    });
+
+    if (dayEnd - cursor >= minimumMinutes) {
+      windows.push({
+        day,
+        durationHours: (dayEnd - cursor) / 60,
+        endLabel: formatMinutesAsClock(dayEnd),
+        startLabel: formatMinutesAsClock(cursor),
+      });
+    }
+  });
+
+  return windows
+    .sort((first, second) => {
+      const durationDifference = second.durationHours - first.durationHours;
+
+      if (durationDifference !== 0) {
+        return durationDifference;
+      }
+
+      return weekDays.indexOf(first.day) - weekDays.indexOf(second.day);
+    })
+    .slice(0, options.maxWindows ?? 5);
+}
+
+function formatOpenTimeWindows(windows: OpenTimeWindow[]) {
+  if (windows.length === 0) {
+    return "";
+  }
+
+  return windows
+    .map(
+      (window) =>
+        `${window.day} ${window.startLabel}-${window.endLabel} (${formatEstimatedHours(
+          window.durationHours,
+        )})`,
+    )
+    .join("; ");
+}
+
 function createGoogleSyncBlock(
   block: WeeklyPlanBlock,
   warnings: string[] = [],
@@ -1351,10 +1607,21 @@ function createGoogleSyncFallbackMessage(
   const manualSyncNote =
     "Nothing is sent to Google Calendar unless you select blocks and sync them from the Weekly Plan page.";
   const asksToSync =
-    /\b(sync|send|push|add)\b.*\b(google|calendar)\b/i.test(prompt);
+    /\b(sync|send|push)\b/i.test(prompt) &&
+    !/\b(what|which|why|how|status|ready|need|needs|mean|meaning)\b/i.test(
+      prompt,
+    );
   const asksForStartTimes = /\b(start time|start times|needs time)\b/i.test(
     prompt,
   );
+  const asksMeaning =
+    /\bwhat (does|is).*synced|synced mean|why.*needs attention|what.*needs attention\b/i.test(
+      prompt,
+    );
+
+  if (asksMeaning) {
+    return `Synced means the block has already been added to your dedicated Schedule Builder Google Calendar. Needs attention means the Schedule Builder block changed after syncing, so Google Calendar may still have the older version. ${manualSyncNote}`;
+  }
 
   if (asksForStartTimes) {
     return sync.needsTimeBlocks.length > 0
@@ -1401,6 +1668,191 @@ function createGoogleSyncFallbackMessage(
   )}.${reviewNote} ${manualSyncNote}`;
 }
 
+function createOpenTimeFallbackMessage(context: AssistantPlanningContext) {
+  const windows = getOpenTimeWindows(context);
+  const flexibleBlocks = context.weeklyPlanBlocks.filter(
+    (block) => !block.startTime,
+  );
+  const contextNote =
+    context.workShiftsCount > 0 || context.importedEventsCount > 0
+      ? "I treated work shifts, timed plan blocks, and external calendar events as commitments."
+      : "I treated your timed plan blocks as commitments.";
+  const flexibleNote =
+    flexibleBlocks.length > 0
+      ? ` You also have ${flexibleBlocks.length} flexible block${
+          flexibleBlocks.length === 1 ? "" : "s"
+        } that can still move around.`
+      : "";
+
+  if (windows.length === 0) {
+    return `${contextNote} I don’t see a clean one-hour opening between 8:00 AM and 10:00 PM this week.${flexibleNote} Want me to help loosen the week or turn a flexible block into a timed one?`;
+  }
+
+  return `${contextNote} The clearest open windows I see are ${formatOpenTimeWindows(
+    windows,
+  )}.${flexibleNote} Want me to turn one of these into a plan block?`;
+}
+
+function createAnalysisFallbackMessage(
+  context: AssistantPlanningContext,
+  prompt: string,
+) {
+  const activeProjects = sortProjectsForFocus(context.projects);
+  const topProject = activeProjects[0];
+
+  if (/\btop 3\b/i.test(prompt)) {
+    const topProjects = activeProjects.slice(0, 3);
+
+    if (topProjects.length === 0) {
+      return "I don’t see active projects to rank yet. Add a project first, and I can help pick your Top 3 from priority, deadline, and next action.";
+    }
+
+    return `I’d make your Top ${topProjects.length}: ${topProjects
+      .map(
+        (project, index) =>
+          `${index + 1}. ${project.name} (${project.priority}, next: ${
+            project.nextAction
+          })`,
+      )
+      .join("; ")}. Want me to turn those into weekly blocks?`;
+  }
+
+  if (focusPromptPattern.test(prompt) && topProject) {
+    return `I’d focus on ${topProject.name} first. It has the strongest priority signal right now, and the next action is: ${topProject.nextAction}. Want me to turn that into a specific work block?`;
+  }
+
+  const watchouts: string[] = [];
+
+  if (context.calendarConflictCount > 0) {
+    watchouts.push(
+      `${context.calendarConflictCount} timed block${
+        context.calendarConflictCount === 1 ? "" : "s"
+      } may overlap work shifts or external calendar events`,
+    );
+  }
+
+  if (context.googleSyncNeedsTimeCount > 0) {
+    watchouts.push(
+      `${context.googleSyncNeedsTimeCount} block${
+        context.googleSyncNeedsTimeCount === 1 ? "" : "s"
+      } need start times before Google sync`,
+    );
+  }
+
+  if (context.googleSyncNeedsAttentionCount > 0) {
+    watchouts.push(
+      `${context.googleSyncNeedsAttentionCount} synced block${
+        context.googleSyncNeedsAttentionCount === 1 ? "" : "s"
+      } need attention because they changed after syncing`,
+    );
+  }
+
+  if (context.googleSyncOvernightCount > 0) {
+    watchouts.push(
+      `${context.googleSyncOvernightCount} block${
+        context.googleSyncOvernightCount === 1 ? "" : "s"
+      } end after midnight`,
+    );
+  }
+
+  if (context.deadlinesNeedingDatesCount > 0) {
+    watchouts.push(
+      `${context.deadlinesNeedingDatesCount} project deadline${
+        context.deadlinesNeedingDatesCount === 1 ? "" : "s"
+      } need exact dates`,
+    );
+  }
+
+  const overloadedDays = weekDays
+    .map((day) => ({
+      day,
+      hours: context.weeklyPlanBlocks
+        .filter((block) => block.day === day)
+        .reduce((sum, block) => sum + block.estimatedHours, 0),
+    }))
+    .filter((item) => item.hours > 6);
+
+  if (overloadedDays.length > 0) {
+    watchouts.push(
+      `${overloadedDays
+        .slice(0, 2)
+        .map((item) => `${item.day} has ${formatEstimatedHours(item.hours)}`)
+        .join(" and ")}`,
+    );
+  }
+
+  if (watchouts.length === 0) {
+    return "Your week looks workable from what I can see. I don’t see obvious conflicts, overloaded days, or sync issues right now. Want me to turn that into a more detailed plan?";
+  }
+
+  return `Here’s what I’d watch: ${watchouts.join(
+    "; ",
+  )}. I’d review those before adding more blocks. Want me to propose specific edits?`;
+}
+
+function createNoObviousFindingsMessage({
+  activeProjects,
+  context,
+  importedCalendarText,
+  lightPlanningDayText,
+  prompt,
+  workScheduleSummary,
+}: {
+  activeProjects: Project[];
+  context: AssistantPlanningContext;
+  importedCalendarText: string | null;
+  lightPlanningDayText: string;
+  prompt: string;
+  workScheduleSummary: string | null;
+}) {
+  const topProject = activeProjects[0];
+
+  if (/\btop 3\b/i.test(prompt)) {
+    return createAnalysisFallbackMessage(context, prompt);
+  }
+
+  if (studyPromptPattern.test(prompt)) {
+    const studyProjects = activeProjects.filter((project) =>
+      [project.name, project.nextAction, project.deadline]
+        .join(" ")
+        .match(studyPromptPattern),
+    );
+
+    if (studyProjects.length > 0) {
+      return `For study time, I’d start with ${studyProjects
+        .slice(0, 2)
+        .map((project) => project.name)
+        .join(" and ")}. ${
+        workScheduleSummary
+          ? `Since your work schedule is ${workScheduleSummary}, I’d use ${lightPlanningDayText} or an evening opening.`
+          : `I’d look at ${lightPlanningDayText} first.`
+      } Want me to create specific study blocks for those?`;
+    }
+
+    return `I can help create study blocks, but I don’t see a study/class project in your active list yet. Tell me the class or exam, or add it as a project, and I’ll turn it into focused blocks.`;
+  }
+
+  if (balancePromptPattern.test(prompt)) {
+    return workScheduleSummary
+      ? `Your balance looks manageable right now. I’d keep work fixed (${workScheduleSummary}) and place project or school focus on ${lightPlanningDayText}${
+          importedCalendarText ? ` while respecting your ${importedCalendarText}` : ""
+        }. Want me to draft a few blocks around that?`
+      : `Your week doesn’t show obvious overload right now. I’d use ${lightPlanningDayText} for deeper focus and keep the rest flexible. Want me to draft a few blocks?`;
+  }
+
+  if (planWeekPromptPattern.test(prompt)) {
+    return topProject
+      ? `For this week, I’d anchor around ${topProject.name} first, then keep the rest light so the plan stays realistic. ${lightPlanningDayText} look like the easiest places to add structure. Want me to create the actual blocks?`
+      : `I don’t see active projects to build a week around yet. Add one project, and I’ll help shape it into a weekly plan.`;
+  }
+
+  if (overloadPromptPattern.test(prompt)) {
+    return `I don’t see a major overload signal right now. The week looks stable enough; if you want a deeper check, I can focus specifically on conflicts, deadlines, or Google sync readiness.`;
+  }
+
+  return "I don’t see an obvious scheduling problem from this angle. Try asking about open time, sync readiness, deadlines, or your Top 3 and I’ll narrow the answer instead of giving you the same broad check.";
+}
+
 export function createFallbackAssistantResponse(
   context: AssistantPlanningContext,
   prompt: string,
@@ -1419,7 +1871,7 @@ export function createFallbackAssistantResponse(
     });
   }
 
-  if (isVaguePrompt(prompt) || !hasPlanningIntent(prompt)) {
+  if (isVaguePrompt(prompt)) {
     const message = didRecentlyOfferPlanningDirections(recentMessages)
       ? "No problem — I can start by helping you choose one of three things: plan your week, find open time, or decide your Top 3. Which one sounds most useful?"
       : "Sure — do you want me to help you plan your week, find open time, or decide what to focus on first?";
@@ -1437,7 +1889,43 @@ export function createFallbackAssistantResponse(
       activeProjects: sortProjectsForFocus(context.projects),
       context,
       message: createGoogleSyncFallbackMessage(context, prompt),
-      suggestions: createGoogleSyncFallbackSuggestions(context),
+      suggestions: shouldGenerateAssistantActionCards(prompt)
+        ? createGoogleSyncFallbackSuggestions(context)
+        : [],
+    });
+  }
+
+  if (
+    hasOpenTimeIntent(prompt) &&
+    !shouldGenerateAssistantActionCards(prompt)
+  ) {
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message: createOpenTimeFallbackMessage(context),
+      suggestions: [],
+    });
+  }
+
+  if (shouldAnswerWithoutActionCards(prompt)) {
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message: createAnalysisFallbackMessage(context, prompt),
+      suggestions: [],
+    });
+  }
+
+  if (!hasPlanningIntent(prompt)) {
+    const message = didRecentlyOfferPlanningDirections(recentMessages)
+      ? "No problem — I can start by helping you choose one of three things: plan your week, find open time, or decide your Top 3. Which one sounds most useful?"
+      : "Sure — do you want me to help you plan your week, find open time, or decide what to focus on first?";
+
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message,
+      suggestions: [],
     });
   }
 
@@ -1637,27 +2125,16 @@ export function createFallbackAssistantResponse(
         }`
       : null;
 
-  if (hasNoObviousFindings) {
-    suggestions.push({
-      id: "fallback-good-shape",
-      type: "workload_warning",
-      title: "Your plan looks workable",
-      description:
-        "I did not find obvious missing deadlines, overloaded days, or high-priority projects without weekly blocks.",
-      confidence: 0.6,
-      summary:
-        "I did not find obvious missing deadlines, overloaded days, or high-priority projects without weekly blocks.",
-      rationale:
-        prompt.trim().length > 0
-          ? "I checked your current projects and weekly plan for obvious planning gaps."
-          : "Ask for a specific planning review to get more targeted suggestions.",
-      severity: "info",
-    });
-  }
-
   const assistantMessage =
     hasNoObviousFindings
-      ? "Your plan looks pretty workable from what I can see. If you want a sharper review, ask me to focus on deadlines, open time, or your Top 3."
+      ? createNoObviousFindingsMessage({
+          activeProjects,
+          context,
+          importedCalendarText,
+          lightPlanningDayText,
+          prompt,
+          workScheduleSummary,
+        })
       : openTimePromptPattern.test(prompt) && workScheduleSummary && importedCalendarText
       ? `Based on your saved work schedule (${workScheduleSummary}) and ${importedCalendarText}, I’d look for open project time around ${lightPlanningDayText} first. I’ll keep suggestions away from fixed commitments unless you choose a flexible block.`
       : openTimePromptPattern.test(prompt) && workScheduleSummary
