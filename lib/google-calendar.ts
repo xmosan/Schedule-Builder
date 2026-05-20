@@ -273,10 +273,47 @@ export function hasGoogleCalendarScope(
 
 export function getScheduleBuilderGoogleCalendarTimeZone() {
   return (
-    process.env.SCHEDULE_BUILDER_TIME_ZONE?.trim() ||
-    process.env.TZ?.trim() ||
+    normalizeGoogleCalendarTimeZone(process.env.SCHEDULE_BUILDER_TIME_ZONE) ??
+    normalizeGoogleCalendarTimeZone(process.env.TZ) ??
+    normalizeGoogleCalendarTimeZone(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    ) ??
     "America/Detroit"
   );
+}
+
+function normalizeGoogleCalendarTimeZone(value: string | null | undefined) {
+  const candidate = value?.trim();
+
+  if (!candidate) {
+    return null;
+  }
+
+  const aliases: Record<string, string> = {
+    "eastern time - detroit": "America/Detroit",
+    "eastern time": "America/New_York",
+    edt: "America/New_York",
+    est: "America/New_York",
+    gmt: "UTC",
+    "gmt+0": "UTC",
+    "gmt+00": "UTC",
+    "gmt+00:00": "UTC",
+    "gmt-0": "UTC",
+    "gmt-00": "UTC",
+    "gmt-00:00": "UTC",
+    utc: "UTC",
+  };
+  const normalizedCandidate = aliases[candidate.toLowerCase()] ?? candidate;
+
+  try {
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: normalizedCandidate,
+    });
+
+    return normalizedCandidate;
+  } catch {
+    return null;
+  }
 }
 
 async function postGoogleTokenRequest(
