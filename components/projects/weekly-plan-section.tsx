@@ -103,6 +103,7 @@ type PreSyncConflict = {
 
 type GoogleCalendarSyncBlockResult = {
   blockId: string;
+  googleEventId?: string | null;
   googleEventHtmlLink?: string | null;
   message: string;
   status: "already_synced" | "failed" | "synced";
@@ -116,6 +117,34 @@ type GoogleCalendarSyncBlocksResponse = {
   syncCalendarName?: string | null;
   weekStartDate?: string;
 };
+
+type GoogleCalendarUpdateSyncedEventResponse = {
+  blockId?: string;
+  error?: string;
+  googleEventId?: string | null;
+  googleEventHtmlLink?: string | null;
+  lastSyncedAt?: string | null;
+  message?: string;
+  syncStatus?: "synced";
+  syncedTitle?: string | null;
+  weeklyPlanBlockId?: string | null;
+};
+
+type GoogleCalendarRemoveSyncedEventResponse = {
+  error?: string;
+  message?: string;
+  syncEventId?: string;
+};
+
+type GoogleSyncMaintenanceConfirmation =
+  | {
+      block: WeeklyPlanBlock;
+      type: "update";
+    }
+  | {
+      event: GoogleCalendarRemovedSyncedEvent;
+      type: "remove";
+    };
 
 const weeklyBlockRemovalAnimationMs = 300;
 
@@ -436,6 +465,12 @@ export function WeeklyPlanSection({
   const [isGoogleSyncLoading, setIsGoogleSyncLoading] = useState(false);
   const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
   const [isConfirmingGoogleSync, setIsConfirmingGoogleSync] = useState(false);
+  const [
+    googleSyncMaintenanceConfirmation,
+    setGoogleSyncMaintenanceConfirmation,
+  ] = useState<GoogleSyncMaintenanceConfirmation | null>(null);
+  const [googleSyncMaintenanceActionId, setGoogleSyncMaintenanceActionId] =
+    useState<string | null>(null);
   const [timeEditBlockId, setTimeEditBlockId] = useState<string | null>(null);
   const [timeEditError, setTimeEditError] = useState<string | null>(null);
   const [timeEditValue, setTimeEditValue] = useState("");
@@ -964,6 +999,8 @@ export function WeeklyPlanSection({
     setGoogleSyncResults({});
     setGoogleSyncSelectedIds({});
     setIsConfirmingGoogleSync(false);
+    setGoogleSyncMaintenanceConfirmation(null);
+    setGoogleSyncMaintenanceActionId(null);
   }
 
   function startEditingBlockTime(block: WeeklyPlanBlock) {
@@ -1283,8 +1320,9 @@ export function WeeklyPlanSection({
         results.forEach((result) => {
           if (result.syncStatus === "synced" || result.syncStatus === "needs_attention") {
             next[result.blockId] = {
-              googleEventHtmlLink: result.googleEventHtmlLink,
-              lastSyncedAt: new Date().toISOString(),
+            googleEventHtmlLink: result.googleEventHtmlLink,
+            googleEventId: result.googleEventId,
+            lastSyncedAt: new Date().toISOString(),
               syncStatus: result.syncStatus,
               weeklyPlanBlockId: result.blockId,
             };
@@ -1317,6 +1355,132 @@ export function WeeklyPlanSection({
       setGoogleSyncError(getGoogleSyncDisplayError(syncError));
     } finally {
       setIsGoogleSyncing(false);
+    }
+  }
+
+  function requestUpdateSyncedGoogleEvent(block: WeeklyPlanBlock) {
+    setGoogleSyncError(null);
+    setGoogleSyncMessage(null);
+    setIsConfirmingGoogleSync(false);
+    setGoogleSyncMaintenanceConfirmation({ block, type: "update" });
+  }
+
+  function requestRemoveSyncedGoogleEvent(event: GoogleCalendarRemovedSyncedEvent) {
+    setGoogleSyncError(null);
+    setGoogleSyncMessage(null);
+    setIsConfirmingGoogleSync(false);
+    setGoogleSyncMaintenanceConfirmation({ event, type: "remove" });
+  }
+
+  async function confirmGoogleSyncMaintenanceAction() {
+    if (!googleSyncMaintenanceConfirmation) {
+      return;
+    }
+
+    setGoogleSyncError(null);
+    setGoogleSyncMessage(null);
+
+    if (googleSyncMaintenanceConfirmation.type === "update") {
+      const { block } = googleSyncMaintenanceConfirmation;
+      setGoogleSyncMaintenanceActionId(`update:${block.id}`);
+
+      try {
+        if (onSavePlanBlocks) {
+          await Promise.resolve(onSavePlanBlocks());
+        }
+
+        const accessToken = await getSupabaseAccessToken();
+        const response = await fetch(
+          "/api/google-calendar/update-synced-event",
+          {
+            body: JSON.stringify({
+              blockId: block.id,
+              weekStartDate: exportWeekStart,
+            }),
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          },
+        );
+        const payload =
+          (await response.json()) as GoogleCalendarUpdateSyncedEventResponse;
+
+        if (!response.ok || payload.error) {
+          throw new Error(
+            payload.error ?? "Google Calendar event could not be updated.",
+          );
+        }
+
+        setGoogleSyncStatuses((current) => ({
+          ...current,
+          [block.id]: {
+            googleEventId:
+              payload.googleEventId ?? current[block.id]?.googleEventId,
+            googleEventHtmlLink:
+              payload.googleEventHtmlLink ??
+              current[block.id]?.googleEventHtmlLink ??
+              null,
+            lastSyncedAt: payload.lastSyncedAt ?? new Date().toISOString(),
+            syncStatus: "synced",
+            syncedTitle: payload.syncedTitle ?? current[block.id]?.syncedTitle,
+            weeklyPlanBlockId: block.id,
+          },
+        }));
+        setGoogleSyncResults((current) => {
+          const next = { ...current };
+          delete next[block.id];
+          return next;
+        });
+        setGoogleSyncMessage(
+          payload.message ?? "Google Calendar event updated.",
+        );
+        setGoogleSyncMaintenanceConfirmation(null);
+      } catch (maintenanceError) {
+        setGoogleSyncError(getGoogleSyncDisplayError(maintenanceError));
+      } finally {
+        setGoogleSyncMaintenanceActionId(null);
+      }
+
+      return;
+    }
+
+    const { event } = googleSyncMaintenanceConfirmation;
+    setGoogleSyncMaintenanceActionId(`remove:${event.id}`);
+
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/google-calendar/remove-synced-event", {
+        body: JSON.stringify({
+          syncEventId: event.id,
+        }),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      const payload =
+        (await response.json()) as GoogleCalendarRemoveSyncedEventResponse;
+
+      if (!response.ok || payload.error) {
+        throw new Error(
+          payload.error ?? "Google Calendar event could not be removed.",
+        );
+      }
+
+      setRemovedGoogleSyncEvents((current) =>
+        current.filter((removedEvent) => removedEvent.id !== event.id),
+      );
+      setGoogleSyncMessage(
+        payload.message ?? "Google Calendar event removed.",
+      );
+      setGoogleSyncMaintenanceConfirmation(null);
+    } catch (maintenanceError) {
+      setGoogleSyncError(getGoogleSyncDisplayError(maintenanceError));
+    } finally {
+      setGoogleSyncMaintenanceActionId(null);
     }
   }
 
@@ -2264,6 +2428,8 @@ export function WeeklyPlanSection({
                             aria-label={`Open synced Google Calendar event for ${block.projectName}`}
                             className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
                             href={googleEventLink}
+                            rel="noreferrer"
+                            target="_blank"
                           >
                             Open in Google Calendar
                           </a>
@@ -2334,6 +2500,8 @@ export function WeeklyPlanSection({
                               aria-label={`Open synced Google Calendar event for ${block.projectName}`}
                               className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
                               href={googleEventLink}
+                              rel="noreferrer"
+                              target="_blank"
                             >
                               Open in Google Calendar
                             </a>
@@ -2403,15 +2571,28 @@ export function WeeklyPlanSection({
                             This block changed after syncing. Google Calendar
                             may still have the older version.
                           </p>
-                          {googleEventLink ? (
-                            <a
-                              aria-label={`Open older Google Calendar event for ${block.projectName}`}
-                              className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
-                              href={googleEventLink}
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {googleEventLink ? (
+                              <a
+                                aria-label={`Open older Google Calendar event for ${block.projectName}`}
+                                className="inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06]"
+                                href={googleEventLink}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                Open in Google Calendar
+                              </a>
+                            ) : null}
+                            <Button
+                              className={googleEventLink ? "" : "sm:col-span-2"}
+                              disabled={Boolean(googleSyncMaintenanceActionId)}
+                              size="sm"
+                              type="button"
+                              onClick={() => requestUpdateSyncedGoogleEvent(block)}
                             >
-                              Open in Google Calendar
-                            </a>
-                          ) : null}
+                              Update Google Calendar event
+                            </Button>
+                          </div>
                         </div>
                       );
                     })}
@@ -2514,15 +2695,31 @@ export function WeeklyPlanSection({
                           <p className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-brand-ink/52">
                             This event still exists in Google Calendar.
                           </p>
-                          {event.googleEventHtmlLink ? (
-                            <a
-                              aria-label={`Open removed block Google Calendar event ${displayTitle}`}
-                              className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06] sm:w-auto"
-                              href={event.googleEventHtmlLink}
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {event.googleEventHtmlLink ? (
+                              <a
+                                aria-label={`Open removed block Google Calendar event ${displayTitle}`}
+                                className="inline-flex h-10 w-full items-center justify-center rounded-full border border-brand-teal/18 bg-white px-4 text-xs font-bold text-brand-teal shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-brand-teal/[0.06]"
+                                href={event.googleEventHtmlLink}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                Open in Google Calendar
+                              </a>
+                            ) : null}
+                            <Button
+                              className={
+                                event.googleEventHtmlLink ? "" : "sm:col-span-2"
+                              }
+                              disabled={Boolean(googleSyncMaintenanceActionId)}
+                              size="sm"
+                              type="button"
+                              variant="outline"
+                              onClick={() => requestRemoveSyncedGoogleEvent(event)}
                             >
-                              Open in Google Calendar
-                            </a>
-                          ) : null}
+                              Remove from Google Calendar
+                            </Button>
+                          </div>
                         </div>
                       );
                     })}
@@ -2626,6 +2823,107 @@ export function WeeklyPlanSection({
                   {isGoogleSyncing
                     ? "Syncing..."
                     : "Sync to Google Calendar"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {googleSyncMaintenanceConfirmation ? (
+            <div className="mt-4 rounded-[24px] border border-brand-ink/10 bg-white/82 p-4 shadow-[0_14px_35px_rgba(18,32,47,0.06)]">
+              {googleSyncMaintenanceConfirmation.type === "update" ? (
+                <>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-brand-ink">
+                        Update Google Calendar event?
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        This will update the existing Google Calendar event to
+                        match the current Schedule Builder block.
+                      </p>
+                    </div>
+                    <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                      Needs attention
+                    </Badge>
+                  </div>
+                  <div className="mt-3 rounded-[18px] border border-brand-ink/8 bg-white/75 p-3">
+                    <p className="text-xs font-bold uppercase tracking-[0.12em] text-brand-ink/42">
+                      {formatBlockDayDate(
+                        googleSyncMaintenanceConfirmation.block.day,
+                        exportWeekStart,
+                      )}
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-brand-ink">
+                      {googleSyncMaintenanceConfirmation.block.projectName}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                      {googleSyncMaintenanceConfirmation.block.plannedTask}
+                    </p>
+                    <Badge className="mt-2 bg-brand-teal/8 text-brand-teal" variant="subtle">
+                      {formatStartTime(
+                        googleSyncMaintenanceConfirmation.block.startTime,
+                      )}{" "}
+                      •{" "}
+                      {formatEstimatedHours(
+                        googleSyncMaintenanceConfirmation.block.estimatedHours,
+                      )}
+                    </Badge>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-brand-ink">
+                        Remove from Google Calendar?
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        This removes the event from your dedicated Schedule
+                        Builder Google Calendar. It will not change local Weekly
+                        Plan blocks.
+                      </p>
+                    </div>
+                    <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+                      Google event
+                    </Badge>
+                  </div>
+                  <div className="mt-3 rounded-[18px] border border-brand-ink/8 bg-white/75 p-3">
+                    <p className="text-sm font-semibold text-brand-ink">
+                      {formatGoogleSyncDisplayTitle(
+                        googleSyncMaintenanceConfirmation.event.syncedTitle,
+                      )}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                      {formatSyncedEventRange(
+                        googleSyncMaintenanceConfirmation.event.syncedStartsAt,
+                        googleSyncMaintenanceConfirmation.event.syncedEndsAt,
+                      )}
+                    </p>
+                  </div>
+                </>
+              )}
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                <Button
+                  disabled={Boolean(googleSyncMaintenanceActionId)}
+                  type="button"
+                  variant="outline"
+                  onClick={() => setGoogleSyncMaintenanceConfirmation(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  disabled={Boolean(googleSyncMaintenanceActionId)}
+                  type="button"
+                  onClick={() => void confirmGoogleSyncMaintenanceAction()}
+                >
+                  {googleSyncMaintenanceActionId
+                    ? googleSyncMaintenanceConfirmation.type === "update"
+                      ? "Updating..."
+                      : "Removing..."
+                    : googleSyncMaintenanceConfirmation.type === "update"
+                      ? "Update Google Calendar event"
+                      : "Remove from Google Calendar"}
                 </Button>
               </div>
             </div>

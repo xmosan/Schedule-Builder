@@ -434,6 +434,7 @@ export async function POST(request: NextRequest) {
 
         results.push({
           blockId,
+          googleEventId: googleEvent.id,
           googleEventHtmlLink:
             (insertedRow as ExistingSyncRow | null)?.google_event_html_link ??
             googleEvent.htmlLink,

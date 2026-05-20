@@ -597,6 +597,95 @@ export async function createScheduleBuilderGoogleCalendarEvent(
   };
 }
 
+export async function updateScheduleBuilderGoogleCalendarEvent(
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+  event: GoogleCalendarTimedEventInput,
+) {
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId,
+    )}/events/${encodeURIComponent(eventId)}`,
+    {
+      body: JSON.stringify({
+        description: event.description,
+        end: {
+          dateTime: event.endsAt,
+          timeZone: event.timeZone,
+        },
+        start: {
+          dateTime: event.startsAt,
+          timeZone: event.timeZone,
+        },
+        summary: event.title,
+      }),
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      method: "PATCH",
+    },
+  );
+  const payload = (await response.json()) as GoogleCalendarCreatedEventResponse;
+
+  if (!response.ok || payload.error) {
+    throw new Error(
+      payload.error?.message ?? "Google Calendar event could not be updated.",
+    );
+  }
+
+  if (!payload.id) {
+    throw new Error("Google did not return the updated event ID.");
+  }
+
+  return {
+    etag: payload.etag ?? null,
+    htmlLink: payload.htmlLink ?? null,
+    id: payload.id,
+  };
+}
+
+export async function deleteScheduleBuilderGoogleCalendarEvent(
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+) {
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId,
+    )}/events/${encodeURIComponent(eventId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      method: "DELETE",
+    },
+  );
+
+  if (response.status === 404 || response.status === 410) {
+    return {
+      deleted: false,
+      notFound: true,
+    };
+  }
+
+  if (!response.ok) {
+    const payload = (await response
+      .json()
+      .catch(() => null)) as GoogleCalendarCreatedEventResponse | null;
+
+    throw new Error(
+      payload?.error?.message ?? "Google Calendar event could not be removed.",
+    );
+  }
+
+  return {
+    deleted: true,
+    notFound: false,
+  };
+}
+
 export async function syncGoogleCalendarForUser(
   serviceClient: SupabaseClient,
   userId: string,
