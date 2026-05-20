@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  createScheduleBuilderGoogleCalendar,
   createScheduleBuilderGoogleCalendarEvent,
   ensureGoogleCalendarAccessToken,
   getAuthenticatedGoogleCalendarUser,
@@ -175,6 +176,27 @@ function getBlockWarnings(
   ].filter((message): message is string => Boolean(message));
 }
 
+function isGoogleScopeError(error: unknown) {
+  const message = getGoogleCalendarErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("insufficient authentication scopes") ||
+    message.includes("insufficient permission") ||
+    message.includes("request had insufficient")
+  );
+}
+
+function isRecoverableSyncCalendarError(error: unknown) {
+  const message = getGoogleCalendarErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("not found") ||
+    message.includes("forbidden") ||
+    message.includes("not authorized") ||
+    message.includes("does not exist")
+  );
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as SyncBlocksRequestBody;
@@ -310,7 +332,59 @@ export async function POST(request: NextRequest) {
       connection,
     );
     const timeZone = getScheduleBuilderGoogleCalendarTimeZone();
+    let syncCalendarId = connection.sync_calendar_id;
+    let syncCalendarName =
+      connection.sync_calendar_name ?? "Schedule Builder";
+    let didRecoverSyncCalendar = false;
     const results = [];
+
+    async function createGoogleEventWithCalendarRecovery(
+      event: Parameters<typeof createScheduleBuilderGoogleCalendarEvent>[2],
+    ) {
+      try {
+        return await createScheduleBuilderGoogleCalendarEvent(
+          accessToken,
+          syncCalendarId,
+          event,
+        );
+      } catch (error) {
+        if (isGoogleScopeError(error)) {
+          throw new Error(
+            "Google Calendar needs fresh sync permission. Open Integrations and enable Calendar Sync again, then retry.",
+          );
+        }
+
+        if (!didRecoverSyncCalendar && isRecoverableSyncCalendarError(error)) {
+          didRecoverSyncCalendar = true;
+
+          const recoveredCalendar = await createScheduleBuilderGoogleCalendar(
+            accessToken,
+          );
+          const { error: updateCalendarError } = await serviceClient
+            .from("google_calendar_connections")
+            .update({
+              sync_calendar_id: recoveredCalendar.id,
+              sync_calendar_name: recoveredCalendar.summary,
+            })
+            .eq("user_id", userId);
+
+          if (updateCalendarError) {
+            throw new Error(updateCalendarError.message);
+          }
+
+          syncCalendarId = recoveredCalendar.id;
+          syncCalendarName = recoveredCalendar.summary;
+
+          return createScheduleBuilderGoogleCalendarEvent(
+            accessToken,
+            syncCalendarId,
+            event,
+          );
+        }
+
+        throw error;
+      }
+    }
 
     for (const blockId of blockIds) {
       const block = blocksById.get(blockId);
@@ -395,22 +469,18 @@ export async function POST(request: NextRequest) {
           "Source: Schedule Builder",
           "Note: Synced from Weekly Plan.",
         ].join("\n");
-        const googleEvent = await createScheduleBuilderGoogleCalendarEvent(
-          accessToken,
-          connection.sync_calendar_id,
-          {
-            description,
-            endsAt,
-            startsAt,
-            timeZone,
-            title,
-          },
-        );
+        const googleEvent = await createGoogleEventWithCalendarRecovery({
+          description,
+          endsAt,
+          startsAt,
+          timeZone,
+          title,
+        });
         const { data: insertedRow, error: insertError } = await serviceClient
           .from("google_calendar_synced_events")
           .insert({
             block_snapshot: createBlockSnapshot(block),
-            google_calendar_id: connection.sync_calendar_id,
+            google_calendar_id: syncCalendarId,
             google_event_etag: googleEvent.etag,
             google_event_html_link: googleEvent.htmlLink,
             google_event_id: googleEvent.id,
@@ -455,8 +525,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       results,
-      syncCalendarName:
-        connection.sync_calendar_name ?? "Schedule Builder",
+      syncCalendarName,
       weekStartDate,
     });
   } catch (error) {

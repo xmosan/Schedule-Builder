@@ -1311,7 +1311,10 @@ export function WeeklyPlanSection({
       const alreadySynced = results.filter(
         (result) => result.status === "already_synced",
       ).length;
-      const failed = results.filter((result) => result.status === "failed").length;
+      const failedResults = results.filter(
+        (result) => result.status === "failed",
+      );
+      const failed = failedResults.length;
 
       setGoogleSyncResults(resultsByBlockId);
       setGoogleSyncStatuses((current) => {
@@ -1331,13 +1334,31 @@ export function WeeklyPlanSection({
 
         return next;
       });
-      setGoogleSyncSelectedIds({});
+      setGoogleSyncSelectedIds((current) => {
+        const next = { ...current };
+
+        results.forEach((result) => {
+          if (result.status === "synced" || result.status === "already_synced") {
+            delete next[result.blockId];
+          }
+
+          if (result.status === "failed") {
+            next[result.blockId] = true;
+          }
+        });
+
+        return next;
+      });
       setIsConfirmingGoogleSync(false);
       setGoogleSyncCalendarName(payload.syncCalendarName ?? googleSyncCalendarName);
 
       if (failed > 0) {
+        const firstFailureMessage = failedResults[0]?.message;
+
         setGoogleSyncError(
-          `${failed} block${failed === 1 ? "" : "s"} could not be synced. Review the block messages below.`,
+          `${failed} block${failed === 1 ? "" : "s"} could not be synced.${
+            firstFailureMessage ? ` ${firstFailureMessage}` : " Review the block messages below."
+          }`,
         );
       }
 
