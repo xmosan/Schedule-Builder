@@ -322,9 +322,18 @@ function ActionCard({
     actionState.status === "dismissing" ||
     actionState.status === "removed";
   const isExiting = actionState.status === "dismissing";
+  const isWeeklyBlockSuggestion = suggestion.type === "suggested_weekly_block";
+  const projectNameLabel =
+    suggestion.type === "update_project"
+      ? "Project to update"
+      : isWeeklyBlockSuggestion
+        ? "Project or title"
+        : "Project";
   const detailItems = [
     suggestion.rationale ? { label: "Why this helps", value: suggestion.rationale } : null,
-    suggestion.plannedTask ? { label: "Task", value: suggestion.plannedTask } : null,
+    suggestion.plannedTask
+      ? { label: isWeeklyBlockSuggestion ? "Details" : "Task", value: suggestion.plannedTask }
+      : null,
     suggestion.newProjectName
       ? { label: "New project name", value: suggestion.newProjectName }
       : null,
@@ -396,7 +405,9 @@ function ActionCard({
           <div className="mt-4 grid gap-2 text-xs text-brand-ink/60 sm:grid-cols-3">
             {suggestion.projectName && (
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
-                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Project</span>
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+                  {isWeeklyBlockSuggestion ? "Project / title" : "Project"}
+                </span>
                 <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.projectName}</span>
               </div>
             )}
@@ -450,7 +461,7 @@ function ActionCard({
             {suggestion.projectName !== undefined && (
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold text-brand-ink/60">
-                  {suggestion.type === "update_project" ? "Project to update" : "Project"}
+                  {projectNameLabel}
                 </span>
                 <input
                   className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
@@ -551,7 +562,9 @@ function ActionCard({
             )}
             {suggestion.plannedTask !== undefined && (
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Task</span>
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">
+                  {isWeeklyBlockSuggestion ? "Details" : "Task"}
+                </span>
                 <textarea
                   className="w-full resize-y rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm leading-5"
                   rows={2}

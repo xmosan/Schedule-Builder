@@ -226,17 +226,12 @@ async function applyWeeklyBlockSuggestion({
 }) {
   const projectName = suggestion.projectName?.trim();
   const plannedTask = suggestion.plannedTask?.trim();
+  const matchingProject = projectName
+    ? findProjectByName(currentProjects, projectName)
+    : null;
 
   if (!projectName) {
-    return createResult(suggestion, "error", "Weekly block project name cannot be empty.");
-  }
-
-  if (!findProjectByName(currentProjects, projectName)) {
-    return createResult(
-      suggestion,
-      "error",
-      "This weekly block refers to an unknown project. Create that project first, then apply the block.",
-    );
+    return createResult(suggestion, "error", "Weekly block title cannot be empty.");
   }
 
   if (!plannedTask) {
@@ -304,8 +299,8 @@ async function applyWeeklyBlockSuggestion({
     suggestion,
     "applied",
     followUpWarnings.length > 0
-      ? `Created a weekly plan block. ${followUpWarnings.join(" ")}`
-      : "Created a weekly plan block.",
+      ? `Created a ${matchingProject ? "project work" : "task / appointment"} block. ${followUpWarnings.join(" ")}`
+      : `Created a ${matchingProject ? "project work" : "task / appointment"} block.`,
   );
 }
 

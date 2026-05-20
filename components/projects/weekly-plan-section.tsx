@@ -53,9 +53,13 @@ type WeeklyPlanSectionProps = {
   workShifts?: WorkShift[];
 };
 
+type WeeklyPlanBlockMode = "project" | "task";
+
 type WeeklyPlanDraftState = {
   day: WeekDay;
+  mode: WeeklyPlanBlockMode;
   projectId: string;
+  title: string;
   plannedTask: string;
   estimatedHours: string;
   startTime: string;
@@ -153,11 +157,35 @@ function getInitialDraft(projects: Project[]): WeeklyPlanDraftState {
 
   return {
     day: "Monday",
+    mode: firstProject ? "project" : "task",
     projectId: firstProject ? String(firstProject.id) : "",
+    title: "",
     plannedTask: firstProject?.nextAction ?? "",
     estimatedHours: "1",
     startTime: "",
   };
+}
+
+function normalizeProjectLookupName(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function findProjectByDisplayName(projects: Project[], title: string) {
+  const normalizedTitle = normalizeProjectLookupName(title);
+
+  return projects.find(
+    (project) => normalizeProjectLookupName(project.name) === normalizedTitle,
+  );
+}
+
+function inferBlockMode(block: WeeklyPlanBlock, projects: Project[]) {
+  return findProjectByDisplayName(projects, block.projectName)
+    ? "project"
+    : "task";
+}
+
+function getModeLabel(mode: WeeklyPlanBlockMode) {
+  return mode === "project" ? "Project work" : "Task / appointment";
 }
 
 function normalizeBlockPart(value: string) {
@@ -471,10 +499,12 @@ export function WeeklyPlanSection({
   ] = useState<GoogleSyncMaintenanceConfirmation | null>(null);
   const [googleSyncMaintenanceActionId, setGoogleSyncMaintenanceActionId] =
     useState<string | null>(null);
-  const [timeEditBlockId, setTimeEditBlockId] = useState<string | null>(null);
-  const [timeEditError, setTimeEditError] = useState<string | null>(null);
-  const [timeEditValue, setTimeEditValue] = useState("");
-  const [isSavingStartTime, setIsSavingStartTime] = useState(false);
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<WeeklyPlanDraftState>(() =>
+    getInitialDraft(projects),
+  );
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [projectFocusMessage, setProjectFocusMessage] = useState<string | null>(
     null,
   );
@@ -485,18 +515,33 @@ export function WeeklyPlanSection({
 
   useEffect(() => {
     setDraft((current) => {
+      if (current.mode === "task") {
+        return current;
+      }
+
       const currentProjectStillExists = projects.some(
         (project) => String(project.id) === current.projectId,
       );
 
-      if (currentProjectStillExists || projects.length === 0) {
+      if (projects.length === 0) {
+        return {
+          ...current,
+          mode: "task",
+          projectId: "",
+        };
+      }
+
+      if (currentProjectStillExists) {
         return current;
       }
 
+      const firstProject = projects[0];
+
       return {
         ...current,
-        projectId: String(projects[0].id),
-        plannedTask: current.plannedTask || projects[0].nextAction,
+        mode: "project",
+        projectId: String(firstProject.id),
+        plannedTask: current.plannedTask || firstProject.nextAction,
       };
     });
   }, [projects]);
@@ -627,6 +672,7 @@ export function WeeklyPlanSection({
 
     setDraft((current) => ({
       ...current,
+      mode: "project",
       projectId: String(selectedProject.id),
       plannedTask: selectedProject.nextAction,
     }));
@@ -663,6 +709,8 @@ export function WeeklyPlanSection({
     () => projects.find((project) => String(project.id) === draft.projectId),
     [draft.projectId, projects],
   );
+  const draftBlockTitle =
+    draft.mode === "project" ? selectedProject?.name.trim() ?? "" : draft.title.trim();
 
   const totalPlannedHours = useMemo(() => {
     return planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0);
@@ -721,11 +769,11 @@ export function WeeklyPlanSection({
   }, [planBlocks]);
 
   const draftDuplicateKey =
-    selectedProject && draft.plannedTask.trim()
+    draftBlockTitle && draft.plannedTask.trim()
       ? getBlockIdentityKey({
           day: draft.day,
           plannedTask: draft.plannedTask,
-          projectName: selectedProject.name,
+          projectName: draftBlockTitle,
         })
       : null;
   const hasDuplicateDraft = Boolean(
@@ -742,7 +790,7 @@ export function WeeklyPlanSection({
   const hasValidDraftStartTime =
     !draft.startTime.trim() || parseStartTimeToMinutes(draft.startTime) !== null;
   const canAddBlock =
-    draft.projectId.length > 0 &&
+    draftBlockTitle.length > 0 &&
     draft.plannedTask.trim().length > 0 &&
     Number(draft.estimatedHours) > 0 &&
     hasValidDraftStartTime;
@@ -1003,87 +1051,195 @@ export function WeeklyPlanSection({
     setGoogleSyncMaintenanceActionId(null);
   }
 
-  function startEditingBlockTime(block: WeeklyPlanBlock) {
-    setTimeEditBlockId(block.id);
-    setTimeEditValue(normalizeStartTime(block.startTime ?? "") ?? "");
-    setTimeEditError(null);
+  function getProjectForDraft(projectId: string) {
+    return projects.find((project) => String(project.id) === projectId);
+  }
+
+  function getDraftTitleForSave(draftState: WeeklyPlanDraftState) {
+    if (draftState.mode === "project") {
+      return getProjectForDraft(draftState.projectId)?.name.trim() ?? "";
+    }
+
+    return draftState.title.trim();
+  }
+
+  function createDraftFromBlock(block: WeeklyPlanBlock): WeeklyPlanDraftState {
+    const matchedProject = findProjectByDisplayName(projects, block.projectName);
+
+    return {
+      day: block.day,
+      estimatedHours: String(block.estimatedHours),
+      mode: matchedProject ? "project" : "task",
+      plannedTask: block.plannedTask,
+      projectId:
+        matchedProject != null
+          ? String(matchedProject.id)
+          : projects[0]
+            ? String(projects[0].id)
+            : "",
+      startTime: normalizeStartTime(block.startTime ?? "") ?? "",
+      title: matchedProject ? "" : block.projectName,
+    };
+  }
+
+  function applyModeToDraft(
+    draftState: WeeklyPlanDraftState,
+    mode: WeeklyPlanBlockMode,
+  ): WeeklyPlanDraftState {
+    if (mode === "project") {
+      const project =
+        getProjectForDraft(draftState.projectId) ?? projects[0] ?? null;
+
+      return {
+        ...draftState,
+        mode,
+        projectId: project ? String(project.id) : "",
+        plannedTask: draftState.plannedTask || project?.nextAction || "",
+      };
+    }
+
+    const currentProject = getProjectForDraft(draftState.projectId);
+
+    return {
+      ...draftState,
+      mode,
+      title: draftState.title || currentProject?.name || "",
+    };
+  }
+
+  function buildBlockFromDraft(
+    draftState: WeeklyPlanDraftState,
+    existingId?: string,
+  ) {
+    const title = getDraftTitleForSave(draftState);
+    const block = createWeeklyPlanBlock({
+      day: draftState.day,
+      estimatedHours: draftState.estimatedHours,
+      plannedTask: draftState.plannedTask,
+      projectName: title,
+      startTime: draftState.startTime,
+    });
+
+    return block && existingId ? { ...block, id: existingId } : block;
+  }
+
+  function didGoogleSyncFieldsChange(
+    previousBlock: WeeklyPlanBlock,
+    nextBlock: WeeklyPlanBlock,
+  ) {
+    return (
+      previousBlock.projectName.trim() !== nextBlock.projectName.trim() ||
+      previousBlock.plannedTask.trim() !== nextBlock.plannedTask.trim() ||
+      previousBlock.day !== nextBlock.day ||
+      (normalizeStartTime(previousBlock.startTime ?? "") ?? "") !==
+        (normalizeStartTime(nextBlock.startTime ?? "") ?? "") ||
+      previousBlock.estimatedHours !== nextBlock.estimatedHours
+    );
+  }
+
+  function markSyncedBlockNeedsAttention(blockId: string) {
+    setGoogleSyncStatuses((current) => ({
+      ...current,
+      ...(current[blockId]
+        ? {
+            [blockId]: {
+              ...current[blockId],
+              syncStatus: "needs_attention" as const,
+            },
+          }
+        : {}),
+    }));
+    setGoogleSyncSelectedIds((current) => {
+      const next = { ...current };
+      delete next[blockId];
+      return next;
+    });
+  }
+
+  function startEditingBlock(block: WeeklyPlanBlock) {
+    setEditingBlockId(block.id);
+    setEditDraft(createDraftFromBlock(block));
+    setEditError(null);
     setGoogleSyncError(null);
     setGoogleSyncMessage(null);
     setIsConfirmingGoogleSync(false);
   }
 
-  function cancelEditingBlockTime() {
-    setTimeEditBlockId(null);
-    setTimeEditValue("");
-    setTimeEditError(null);
+  function cancelEditingBlock() {
+    setEditingBlockId(null);
+    setEditDraft(getInitialDraft(projects));
+    setEditError(null);
   }
 
-  async function saveBlockStartTime(block: WeeklyPlanBlock) {
-    const startTime = normalizeStartTime(timeEditValue);
+  async function saveEditedBlock(block: WeeklyPlanBlock) {
+    if (!onUpdateBlock) {
+      setEditError("Block editing is unavailable right now.");
+      return;
+    }
+
+    const nextBlock = buildBlockFromDraft(editDraft, block.id);
+
+    if (!nextBlock) {
+      setEditError("Add a title, details, and a positive time estimate before saving.");
+      return;
+    }
+
+    const nextBlockKey = getBlockIdentityKey(nextBlock);
+
+    if (
+      planBlocks.some(
+        (candidate) =>
+          candidate.id !== block.id &&
+          getBlockIdentityKey(candidate) === nextBlockKey,
+      )
+    ) {
+      setEditError(
+        "That day already has this title and task. Update the existing block or make this one a little different.",
+      );
+      return;
+    }
+
     const existingSyncStatus = googleSyncStatuses[block.id]?.syncStatus;
     const changedSyncedBlock =
       existingSyncStatus === "synced" &&
-      (normalizeStartTime(block.startTime ?? "") ?? "") !== startTime;
+      didGoogleSyncFieldsChange(block, nextBlock);
 
-    if (!startTime) {
-      setTimeEditError("Choose a valid start time before syncing this block.");
-      return;
-    }
-
-    if (!onUpdateBlock) {
-      setTimeEditError("Start time editing is unavailable right now.");
-      return;
-    }
-
-    setIsSavingStartTime(true);
-    setTimeEditError(null);
+    setIsSavingEdit(true);
+    setEditError(null);
 
     try {
-      await Promise.resolve(onUpdateBlock({ ...block, startTime }));
+      await Promise.resolve(onUpdateBlock(nextBlock));
       setGoogleSyncResults((current) => {
         const next = { ...current };
         delete next[block.id];
         return next;
       });
+
       if (changedSyncedBlock) {
-        setGoogleSyncStatuses((current) => ({
-          ...current,
-          ...(current[block.id]
-            ? {
-                [block.id]: {
-                  ...current[block.id],
-                  syncStatus: "needs_attention" as const,
-                },
-              }
-            : {}),
-        }));
-        setGoogleSyncSelectedIds((current) => {
-          const next = { ...current };
-          delete next[block.id];
-          return next;
-        });
-      } else {
+        markSyncedBlockNeedsAttention(block.id);
+        setGoogleSyncMessage(
+          `${nextBlock.projectName} changed after syncing. Google Calendar still has the older version.`,
+        );
+      } else if (
+        parseStartTimeToMinutes(block.startTime) === null &&
+        parseStartTimeToMinutes(nextBlock.startTime) !== null
+      ) {
         setGoogleSyncSelectedIds((current) => ({
           ...current,
           [block.id]: true,
         }));
+        setGoogleSyncMessage(
+          `${nextBlock.projectName} now has a start time and can be selected for Google Calendar sync.`,
+        );
       }
-      setIsConfirmingGoogleSync(false);
-      setGoogleSyncMessage(
-        changedSyncedBlock
-          ? `${block.projectName} changed after syncing. Google Calendar still has the older version.`
-          : `${block.projectName} now has a start time and can be selected for Google Calendar sync.`,
-      );
-      cancelEditingBlockTime();
-    } catch (updateError) {
-      setTimeEditError(`Start time could not be saved: ${getErrorMessage(updateError)}`);
-    } finally {
-      setIsSavingStartTime(false);
-    }
-  }
 
-  function getProjectForDraft(projectId: string) {
-    return projects.find((project) => String(project.id) === projectId);
+      setIsConfirmingGoogleSync(false);
+      cancelEditingBlock();
+    } catch (updateError) {
+      setEditError(`Block could not be saved: ${getErrorMessage(updateError)}`);
+    } finally {
+      setIsSavingEdit(false);
+    }
   }
 
   function openQuickAddForm() {
@@ -1108,7 +1264,9 @@ export function WeeklyPlanSection({
           day,
           projectId: draftProject ? String(draftProject.id) : "",
           plannedTask:
-            draftState.plannedTask.trim() || draftProject?.nextAction || "",
+            draftState.plannedTask.trim() ||
+            (draftState.mode === "project" ? draftProject?.nextAction : "") ||
+            "",
         };
       });
       clearDraftWarnings();
@@ -1129,13 +1287,37 @@ export function WeeklyPlanSection({
     clearDraftWarnings();
   }
 
+  function handleDraftModeChange(mode: WeeklyPlanBlockMode) {
+    setDraft((current) => applyModeToDraft(current, mode));
+    setProjectFocusMessage(null);
+    clearDraftWarnings();
+  }
+
+  function handleEditModeChange(mode: WeeklyPlanBlockMode) {
+    setEditDraft((current) => applyModeToDraft(current, mode));
+    setEditError(null);
+  }
+
+  function handleEditProjectChange(projectId: string) {
+    const nextProject = projects.find(
+      (project) => String(project.id) === projectId,
+    );
+
+    setEditDraft((current) => ({
+      ...current,
+      projectId,
+      plannedTask: nextProject?.nextAction ?? current.plannedTask,
+    }));
+    setEditError(null);
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>, target: FormTarget) {
     event.preventDefault();
 
-    if (!selectedProject) {
+    if (draft.mode === "project" && !selectedProject) {
       showFormError(
         target,
-        "Add a project first, then schedule a weekly work block.",
+        "Choose a project, or switch this block to Task / appointment.",
       );
       return;
     }
@@ -1150,7 +1332,7 @@ export function WeeklyPlanSection({
 
     const planBlock = createWeeklyPlanBlock({
       day: draft.day,
-      projectName: selectedProject.name,
+      projectName: draftBlockTitle,
       plannedTask: draft.plannedTask,
       estimatedHours: draft.estimatedHours,
       startTime: draft.startTime,
@@ -1173,7 +1355,7 @@ export function WeeklyPlanSection({
       setDuplicateWarningKey(nextBlockKey);
       showFormError(
         target,
-        "That day already has this project and task. Edit the existing block, or click Add anyway if you really want another copy.",
+        "That day already has this title and task. Edit the existing block, or click Add anyway if you really want another copy.",
       );
       return;
     }
@@ -1187,9 +1369,13 @@ export function WeeklyPlanSection({
     onAddBlock(planBlock);
     setDraft((current) => ({
       ...current,
-      plannedTask: selectedProject.nextAction,
+      plannedTask:
+        current.mode === "project"
+          ? selectedProject?.nextAction ?? ""
+          : "",
       estimatedHours: "1",
       startTime: "",
+      title: current.mode === "project" ? current.title : "",
     }));
     if (target === "quick") {
       setIsAddFormOpen(false);
@@ -1218,7 +1404,7 @@ export function WeeklyPlanSection({
       return;
     }
 
-    const result = generateWeeklyPlanIcs(planBlocks, exportWeekStart);
+    const result = generateWeeklyPlanIcs(planBlocks, exportWeekStart, projects);
 
     if (result.exportedCount === 0) {
       setExportError(
@@ -1544,68 +1730,245 @@ export function WeeklyPlanSection({
   }
 
   function renderStartTimeControl(block: WeeklyPlanBlock, helperText: string) {
-    const isEditingThisBlock = timeEditBlockId === block.id;
-
     return (
       <div className="mt-3 rounded-2xl border border-brand-ink/8 bg-white/70 p-3">
-        {isEditingThisBlock ? (
-          <div className="space-y-3">
-            <div>
-              <label className="field-label" htmlFor={`sync-start-time-${block.id}`}>
-                Start time
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs font-semibold leading-5 text-brand-ink/48">
+            {helperText}
+          </p>
+          <Button
+            className="shrink-0"
+            size="sm"
+            type="button"
+            variant="outline"
+            onClick={() => startEditingBlock(block)}
+          >
+            Add time
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderModeToggle({
+    fieldSuffix,
+    mode,
+    onChange,
+  }: {
+    fieldSuffix: string;
+    mode: WeeklyPlanBlockMode;
+    onChange: (mode: WeeklyPlanBlockMode) => void;
+  }) {
+    return (
+      <div>
+        <p className="field-label" id={`plan-mode-${fieldSuffix}`}>
+          Block type
+        </p>
+        <div
+          aria-labelledby={`plan-mode-${fieldSuffix}`}
+          className="grid rounded-2xl bg-brand-ink/[0.045] p-1 sm:grid-cols-2"
+          role="group"
+        >
+          {(["project", "task"] as const).map((option) => (
+            <button
+              key={option}
+              className={cn(
+                "rounded-xl px-3 py-2 text-sm font-semibold transition",
+                mode === option
+                  ? "bg-white text-brand-ink shadow-sm"
+                  : "text-brand-ink/52 hover:text-brand-ink",
+              )}
+              type="button"
+              onClick={() => onChange(option)}
+            >
+              {getModeLabel(option)}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderEditBlockForm(block: WeeklyPlanBlock) {
+    const fieldSuffix = `edit-${block.id}`;
+
+    return (
+      <form
+        className="mt-4 rounded-[22px] border border-brand-teal/14 bg-white/72 p-3 sm:p-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void saveEditedBlock(block);
+        }}
+      >
+        <div className="grid gap-3 lg:grid-cols-[150px_minmax(0,1fr)_150px]">
+          <div className="lg:col-span-3">
+            {renderModeToggle({
+              fieldSuffix,
+              mode: editDraft.mode,
+              onChange: handleEditModeChange,
+            })}
+          </div>
+
+          <div>
+            <label className="field-label" htmlFor={`plan-day-${fieldSuffix}`}>
+              Day
+            </label>
+            <Select
+              id={`plan-day-${fieldSuffix}`}
+              value={editDraft.day}
+              onChange={(event) => {
+                setEditDraft((current) => ({
+                  ...current,
+                  day: event.target.value as WeekDay,
+                }));
+                setEditError(null);
+              }}
+            >
+              {weekDays.map((weekDay) => (
+                <option key={weekDay} value={weekDay}>
+                  {weekDay}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          {editDraft.mode === "project" ? (
+            <div className="lg:col-span-2">
+              <label
+                className="field-label"
+                htmlFor={`plan-project-${fieldSuffix}`}
+              >
+                Project
+              </label>
+              <Select
+                id={`plan-project-${fieldSuffix}`}
+                value={editDraft.projectId}
+                onChange={(event) => handleEditProjectChange(event.target.value)}
+                disabled={projects.length === 0}
+              >
+                {projects.length > 0 ? (
+                  projects.map((project) => (
+                    <option key={project.id} value={String(project.id)}>
+                      {project.name}
+                      {project.completed ? " (done)" : ""}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No projects yet</option>
+                )}
+              </Select>
+            </div>
+          ) : (
+            <div className="lg:col-span-2">
+              <label className="field-label" htmlFor={`plan-title-${fieldSuffix}`}>
+                Title
               </label>
               <Input
-                id={`sync-start-time-${block.id}`}
-                type="time"
-                value={timeEditValue}
+                id={`plan-title-${fieldSuffix}`}
+                placeholder="Mom's appointment"
+                value={editDraft.title}
                 onChange={(event) => {
-                  setTimeEditValue(event.target.value);
-                  setTimeEditError(null);
+                  setEditDraft((current) => ({
+                    ...current,
+                    title: event.target.value,
+                  }));
+                  setEditError(null);
                 }}
               />
             </div>
-            {timeEditError ? (
-              <p className="text-xs font-semibold leading-5 text-brand-coral">
-                {timeEditError}
-              </p>
-            ) : null}
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                disabled={isSavingStartTime}
-                size="sm"
-                type="button"
-                variant="outline"
-                onClick={cancelEditingBlockTime}
-              >
-                Cancel
-              </Button>
-              <Button
-                disabled={isSavingStartTime}
-                size="sm"
-                type="button"
-                onClick={() => void saveBlockStartTime(block)}
-              >
-                {isSavingStartTime ? "Saving..." : "Save time"}
-              </Button>
-            </div>
+          )}
+
+          <div className="lg:col-span-3">
+            <label className="field-label" htmlFor={`plan-task-${fieldSuffix}`}>
+              {editDraft.mode === "project" ? "Planned task" : "Details"}
+            </label>
+            <Input
+              id={`plan-task-${fieldSuffix}`}
+              placeholder={
+                editDraft.mode === "project"
+                  ? "Draft the next deliverable"
+                  : "Take mom to appointment"
+              }
+              value={editDraft.plannedTask}
+              onChange={(event) => {
+                setEditDraft((current) => ({
+                  ...current,
+                  plannedTask: event.target.value,
+                }));
+                setEditError(null);
+              }}
+            />
           </div>
-        ) : (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs font-semibold leading-5 text-brand-ink/48">
-              {helperText}
-            </p>
+
+          <div>
+            <label className="field-label" htmlFor={`plan-start-${fieldSuffix}`}>
+              Start
+              <span className="font-normal text-brand-ink/45"> optional</span>
+            </label>
+            <Input
+              id={`plan-start-${fieldSuffix}`}
+              type="time"
+              value={editDraft.startTime}
+              onChange={(event) => {
+                setEditDraft((current) => ({
+                  ...current,
+                  startTime: event.target.value,
+                }));
+                setEditError(null);
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="field-label" htmlFor={`plan-hours-${fieldSuffix}`}>
+              Duration
+            </label>
+            <Input
+              id={`plan-hours-${fieldSuffix}`}
+              type="number"
+              min="0.5"
+              step="0.5"
+              inputMode="decimal"
+              placeholder="1"
+              value={editDraft.estimatedHours}
+              onChange={(event) => {
+                setEditDraft((current) => ({
+                  ...current,
+                  estimatedHours: event.target.value,
+                }));
+                setEditError(null);
+              }}
+            />
+          </div>
+
+          <div className="flex items-end gap-2">
             <Button
-              className="shrink-0"
+              className="w-full"
+              disabled={isSavingEdit}
               size="sm"
               type="button"
               variant="outline"
-              onClick={() => startEditingBlockTime(block)}
+              onClick={cancelEditingBlock}
             >
-              Add time
+              Cancel
+            </Button>
+            <Button
+              className="w-full"
+              disabled={isSavingEdit}
+              size="sm"
+              type="submit"
+            >
+              {isSavingEdit ? "Saving..." : "Save"}
             </Button>
           </div>
-        )}
-      </div>
+        </div>
+
+        {editError ? (
+          <p className="mt-3 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-3 py-2 text-xs font-semibold leading-5 text-brand-coral">
+            {editError}
+          </p>
+        ) : null}
+      </form>
     );
   }
 
@@ -1623,6 +1986,8 @@ export function WeeklyPlanSection({
       block,
       importedEvents,
     );
+    const blockMode = inferBlockMode(block, projects);
+    const isEditingThisBlock = editingBlockId === block.id;
 
     return (
       <div
@@ -1660,19 +2025,37 @@ export function WeeklyPlanSection({
                     {block.plannedTask}
                   </p>
                 </div>
-                <Button
-                  aria-label={`Remove ${block.projectName} from ${day}`}
-                  className="h-11 w-11 shrink-0 rounded-full border border-brand-ink/10 bg-white/85 p-0 text-brand-ink/58 shadow-[0_8px_18px_rgba(18,32,47,0.06)] hover:border-brand-coral/20 hover:bg-brand-coral/10 hover:text-brand-coral"
-                  disabled={Boolean(exitingBlockIds[block.id])}
-                  size="sm"
-                  title={`Remove ${block.projectName}`}
-                  type="button"
-                  variant="secondary"
-                  onClick={() => removeBlockWithAnimation(block.id)}
-                >
-                  <TrashIcon aria-hidden="true" className="h-5 w-5" />
-                  <span className="sr-only">Remove block</span>
-                </Button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    aria-expanded={isEditingThisBlock}
+                    className="h-10 rounded-full border border-brand-ink/10 bg-white/85 px-4 text-xs font-bold text-brand-ink/58 shadow-[0_8px_18px_rgba(18,32,47,0.05)] hover:border-brand-teal/20 hover:bg-brand-teal/10 hover:text-brand-teal"
+                    disabled={Boolean(exitingBlockIds[block.id])}
+                    size="sm"
+                    title={`Edit ${block.projectName}`}
+                    type="button"
+                    variant="secondary"
+                    onClick={() =>
+                      isEditingThisBlock
+                        ? cancelEditingBlock()
+                        : startEditingBlock(block)
+                    }
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    aria-label={`Remove ${block.projectName} from ${day}`}
+                    className="h-11 w-11 rounded-full border border-brand-ink/10 bg-white/85 p-0 text-brand-ink/58 shadow-[0_8px_18px_rgba(18,32,47,0.06)] hover:border-brand-coral/20 hover:bg-brand-coral/10 hover:text-brand-coral"
+                    disabled={Boolean(exitingBlockIds[block.id])}
+                    size="sm"
+                    title={`Remove ${block.projectName}`}
+                    type="button"
+                    variant="secondary"
+                    onClick={() => removeBlockWithAnimation(block.id)}
+                  >
+                    <TrashIcon aria-hidden="true" className="h-5 w-5" />
+                    <span className="sr-only">Remove block</span>
+                  </Button>
+                </div>
               </div>
 
               {removeErrors[block.id] ? (
@@ -1682,6 +2065,9 @@ export function WeeklyPlanSection({
               ) : null}
 
               <div className="mt-3 flex flex-wrap gap-2">
+                <span className="inline-flex items-center rounded-full border border-brand-ink/8 bg-white/72 px-3 py-1.5 text-xs font-semibold text-brand-ink/50">
+                  {getModeLabel(blockMode)}
+                </span>
                 <span
                   className={cn(
                     "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold",
@@ -1712,7 +2098,9 @@ export function WeeklyPlanSection({
                 ) : null}
               </div>
 
-              {!isTimed
+              {isEditingThisBlock ? renderEditBlockForm(block) : null}
+
+              {!isTimed && !isEditingThisBlock
                 ? renderStartTimeControl(
                     block,
                     "Add a start time when this block needs to become a real calendar event.",
@@ -1778,36 +2166,71 @@ export function WeeklyPlanSection({
           </div>
         ) : null}
 
-        <div>
-          <label className="field-label" htmlFor={`plan-project-${fieldSuffix}`}>
-            Project
-          </label>
-          <Select
-            id={`plan-project-${fieldSuffix}`}
-            value={draft.projectId}
-            onChange={(event) => handleProjectChange(event.target.value)}
-            disabled={projects.length === 0}
-          >
-            {projects.length > 0 ? (
-              projects.map((project) => (
-                <option key={project.id} value={String(project.id)}>
-                  {project.name}
-                  {project.completed ? " (done)" : ""}
-                </option>
-              ))
-            ) : (
-              <option value="">No projects yet</option>
-            )}
-          </Select>
+        <div className={showDayField ? "lg:col-span-3" : ""}>
+          {renderModeToggle({
+            fieldSuffix,
+            mode: draft.mode,
+            onChange: handleDraftModeChange,
+          })}
         </div>
+
+        {draft.mode === "project" ? (
+          <div>
+            <label
+              className="field-label"
+              htmlFor={`plan-project-${fieldSuffix}`}
+            >
+              Project
+            </label>
+            <Select
+              id={`plan-project-${fieldSuffix}`}
+              value={draft.projectId}
+              onChange={(event) => handleProjectChange(event.target.value)}
+              disabled={projects.length === 0}
+            >
+              {projects.length > 0 ? (
+                projects.map((project) => (
+                  <option key={project.id} value={String(project.id)}>
+                    {project.name}
+                    {project.completed ? " (done)" : ""}
+                  </option>
+                ))
+              ) : (
+                <option value="">No projects yet</option>
+              )}
+            </Select>
+          </div>
+        ) : (
+          <div>
+            <label className="field-label" htmlFor={`plan-title-${fieldSuffix}`}>
+              Title
+            </label>
+            <Input
+              id={`plan-title-${fieldSuffix}`}
+              placeholder="Mom's appointment"
+              value={draft.title}
+              onChange={(event) => {
+                setDraft((current) => ({
+                  ...current,
+                  title: event.target.value,
+                }));
+                clearDraftWarnings();
+              }}
+            />
+          </div>
+        )}
 
         <div className={showDayField ? "lg:col-span-2" : ""}>
           <label className="field-label" htmlFor={`plan-task-${fieldSuffix}`}>
-            Planned task
+            {draft.mode === "project" ? "Planned task" : "Details"}
           </label>
           <Input
             id={`plan-task-${fieldSuffix}`}
-            placeholder="Draft the next deliverable"
+            placeholder={
+              draft.mode === "project"
+                ? "Draft the next deliverable"
+                : "Take mom to appointment"
+            }
             value={draft.plannedTask}
             onChange={(event) => {
               setDraft((current) => ({
@@ -2018,8 +2441,8 @@ export function WeeklyPlanSection({
               variant="outline"
               onClick={openQuickAddForm}
             >
-              <PlusIcon className="h-4 w-4" />
-              {isAddFormOpen ? "Close quick add" : "Open quick add"}
+              {!isAddFormOpen ? <PlusIcon className="h-4 w-4" /> : null}
+              {isAddFormOpen ? "Hide quick add" : "Open quick add"}
             </Button>
           </div>
 
@@ -2116,7 +2539,8 @@ export function WeeklyPlanSection({
                           Add to {day}
                         </p>
                         <p className="text-xs leading-5 text-brand-ink/52">
-                          Pick a project, task, time, and duration.
+                          Choose project work or a one-off task, then add the
+                          time and duration.
                         </p>
                       </div>
                       {renderBlockForm(day, false)}

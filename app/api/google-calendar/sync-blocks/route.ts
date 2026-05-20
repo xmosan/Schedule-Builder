@@ -12,6 +12,7 @@ import {
 } from "@/lib/google-calendar";
 import {
   fetchImportedCalendarEventsForUser,
+  fetchProjectsForUser,
   fetchWorkShiftsForUser,
 } from "@/lib/supabase/scheduler";
 import {
@@ -27,6 +28,7 @@ import {
   type WeekDay,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
+import type { Project } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -140,8 +142,27 @@ function createBlockSnapshot(block: WeeklyPlanBlock) {
   };
 }
 
-function getGoogleCalendarEventTitle(block: WeeklyPlanBlock) {
+function normalizeProjectLookupName(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isProjectWorkBlock(block: WeeklyPlanBlock, projects: Project[]) {
+  const blockTitle = normalizeProjectLookupName(block.projectName);
+
+  return projects.some(
+    (project) => normalizeProjectLookupName(project.name) === blockTitle,
+  );
+}
+
+function getGoogleCalendarEventTitle(
+  block: WeeklyPlanBlock,
+  projects: Project[],
+) {
   const projectName = block.projectName.trim();
+
+  if (!isProjectWorkBlock(block, projects)) {
+    return projectName || "Schedule Builder plan block";
+  }
 
   if (!projectName || projectName.toLowerCase() === "schedule builder") {
     return "Schedule Builder plan block";
@@ -272,7 +293,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const [blockRowsResult, existingRowsResult, workResult, importedResult] =
+    const [
+      blockRowsResult,
+      existingRowsResult,
+      workResult,
+      importedResult,
+      projectsResult,
+    ] =
       await Promise.all([
         serviceClient
           .from("weekly_plan_blocks")
@@ -291,6 +318,7 @@ export async function POST(request: NextRequest) {
           .in("weekly_plan_block_id", blockIds),
         fetchWorkShiftsForUser(serviceClient, userId),
         fetchImportedCalendarEventsForUser(serviceClient, userId),
+        fetchProjectsForUser(serviceClient, userId),
       ]);
 
     if (blockRowsResult.error) {
@@ -314,6 +342,10 @@ export async function POST(request: NextRequest) {
 
     if (importedResult.error) {
       throw new Error(importedResult.error.message);
+    }
+
+    if (projectsResult.error) {
+      throw new Error(projectsResult.error.message);
     }
 
     const blocksById = new Map(
@@ -460,7 +492,7 @@ export async function POST(request: NextRequest) {
           workResult.data,
           importedResult.data,
         );
-        const title = getGoogleCalendarEventTitle(block);
+        const title = getGoogleCalendarEventTitle(block, projectsResult.data);
         const description = [
           `Planned task: ${block.plannedTask}`,
           `Duration: ${formatEstimatedHours(block.estimatedHours)}`,

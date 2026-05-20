@@ -194,9 +194,9 @@ const importedEventLookaheadDays = 30;
 const greetingPattern = /^(hey|hello|hi|salam|assalamu alaikum|yo|sup|good morning|good afternoon|good evening)[\s!.?]*$/i;
 const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don't know|not sure|surprise me)[\s!.?]*$/i;
 const planningIntentPattern =
-  /\b(plan|schedule|week|weekly|block|blocks|overlap|conflict|conflicts|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study|sync|synced|google calendar|start time|start times)\b/i;
+  /\b(plan|schedule|week|weekly|block|blocks|overlap|conflict|conflicts|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study|sync|synced|google calendar|calendar|start time|start times|task|tasks|appointment|appointments|errand|errands|reminder|reminders)\b/i;
 const actionCardIntentPattern =
-  /\b(plan my week|plan this week|make a plan|create blocks?|create .*blocks?|add .*blocks?|add a .*block|schedule .*blocks?|schedule my top 3|turn .* into .*blocks?|generate .*blocks?|move|update|change|edit|set|shift|rename|draft|save|create .*project|add .*project|new project|add time|add start time)\b/i;
+  /\b(plan my week|plan this week|make a plan|create blocks?|create .*blocks?|add .*blocks?|add a .*block|add .*calendar|add .*appointment|add .*task|add .*reminder|add .*errand|schedule .*blocks?|schedule .*appointment|schedule .*task|schedule my top 3|turn .* into .*blocks?|generate .*blocks?|move|update|change|edit|set|shift|rename|draft|save|create .*project|add .*project|new project|add time|add start time)\b/i;
 const directQuestionPromptPattern =
   /\?|^(do|does|did|is|are|am|can|could|should|would|what|why|how|which|when|where)\b/i;
 const analysisOnlyPromptPattern =
@@ -209,7 +209,9 @@ const studyPromptPattern = /\b(study|school|class|course|exam|assignment)\b/i;
 const openTimePromptPattern =
   /\b(find open time|open time|open slots|free time|available time|availability)\b/i;
 const projectDraftPromptPattern =
-  /\b(create|add|start|draft|make|save)\b.*\b(project|goal|initiative|class|course|work)\b|\bnew project\b/i;
+  /\b(create|add|start|draft|make|save)\b.*\b(project|goal|initiative|class|course)\b|\bnew project\b/i;
+const standaloneBlockPromptPattern =
+  /\b(add|create|schedule|put|save)\b.*\b(task|appointment|errand|reminder|calendar)\b/i;
 const projectUpdatePromptPattern =
   /\b(change|update|edit|move|set|shift|rename|adjust|confirm)\b.*\b(project|deadline|due date|priority|category|weekly hours|hours|next action|name)\b|\b(due date|deadline)\b.*\b(later|earlier|after|before|to|on|by)\b/i;
 const googleSyncPromptPattern =
@@ -912,6 +914,82 @@ function inferProjectDraftName(prompt: string) {
   }
 
   return "New project";
+}
+
+function inferStandaloneBlockTitle(prompt: string) {
+  const quotedMatch = prompt.match(/["“”']([^"“”']{2,80})["“”']/);
+
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1].trim();
+  }
+
+  const cleanedPrompt = prompt
+    .replace(
+      /^\s*(?:can you\s+)?(?:please\s+)?(?:add|create|schedule|put|save)\s+(?:to\s+my\s+calendar\s+)?/i,
+      "",
+    )
+    .replace(/\s+\b(?:on|for|at|this|next)\b.*$/i, "")
+    .trim();
+
+  if (cleanedPrompt.length >= 3) {
+    return cleanedPrompt
+      .replace(/^(?:my|a|an)\s+/i, "")
+      .trim()
+      .slice(0, 80);
+  }
+
+  return "Task / appointment";
+}
+
+function inferStandaloneBlockDay(prompt: string, context: AssistantPlanningContext) {
+  const requestedDay = weekDays.find((day) =>
+    new RegExp(`\\b${day}\\b`, "i").test(prompt),
+  );
+
+  return (
+    requestedDay ??
+    getLeastLoadedDay(
+      context.weeklyPlanBlocks,
+      context.workShifts,
+      context.importedCalendarEvents,
+    )
+  );
+}
+
+function inferStandaloneBlockHours(prompt: string) {
+  const durationMatch = prompt.match(
+    /\b(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|hr)\b/i,
+  );
+  const duration = durationMatch ? Number(durationMatch[1]) : 1;
+
+  return Number.isFinite(duration) && duration > 0 ? Math.min(duration, 8) : 1;
+}
+
+function createFallbackStandaloneBlockSuggestion(
+  context: AssistantPlanningContext,
+  prompt: string,
+  index: number,
+): AssistantSuggestion {
+  const title = inferStandaloneBlockTitle(prompt);
+  const day = inferStandaloneBlockDay(prompt, context);
+  const estimatedHours = inferStandaloneBlockHours(prompt);
+  const description = `Add ${title} to ${day} as a ${estimatedHours} hr task / appointment block.`;
+
+  return {
+    confidence: 0.72,
+    day,
+    description,
+    estimatedHours,
+    id: createSuggestionId("task-block", index),
+    plannedTask: prompt.trim() || title,
+    projectName: title,
+    rationale:
+      "This sounds like a one-off task or appointment, so it can become a Weekly Plan block without creating a project.",
+    severity: "important",
+    summary: description,
+    title: `Add ${title}`,
+    type: "suggested_weekly_block",
+  };
 }
 
 function formatDeadlineDate(date: Date) {
@@ -1951,7 +2029,23 @@ export function createFallbackAssistantResponse(
     suggestions.push(projectUpdateSuggestion);
   }
 
-  if (projectDraftPromptPattern.test(prompt)) {
+  if (
+    standaloneBlockPromptPattern.test(prompt) &&
+    shouldGenerateAssistantActionCards(prompt)
+  ) {
+    suggestions.push(
+      createFallbackStandaloneBlockSuggestion(
+        context,
+        prompt,
+        suggestions.length,
+      ),
+    );
+  }
+
+  if (
+    projectDraftPromptPattern.test(prompt) &&
+    !standaloneBlockPromptPattern.test(prompt)
+  ) {
     const projectName = inferProjectDraftName(prompt);
     const alreadyExists = activeProjects.some(
       (project) => project.name.toLowerCase() === projectName.toLowerCase(),

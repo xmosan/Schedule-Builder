@@ -163,6 +163,24 @@ function formatHours(hours: number) {
   }`;
 }
 
+function normalizeProjectLookupName(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isProjectWorkBlock(block: WeeklyPlanBlock, projects: Project[]) {
+  const blockTitle = normalizeProjectLookupName(block.projectName);
+
+  return projects.some(
+    (project) => normalizeProjectLookupName(project.name) === blockTitle,
+  );
+}
+
+function getPlanBlockKindLabel(block: WeeklyPlanBlock, projects: Project[]) {
+  return isProjectWorkBlock(block, projects)
+    ? "Project work"
+    : "Task / appointment";
+}
+
 function formatDateInputValue(date: Date) {
   return `${String(date.getFullYear()).padStart(4, "0")}-${String(
     date.getMonth() + 1,
@@ -468,11 +486,13 @@ function WorkShiftEvent({ shift }: { shift: WorkShift }) {
 function PlanBlockEvent({
   block,
   importedConflict,
+  projects,
   syncStatus,
   workConflict,
 }: {
   block: WeeklyPlanBlock;
   importedConflict?: WeeklyPlanImportedEventConflict | null;
+  projects: Project[];
   syncStatus?: PlanBlockGoogleSyncStatus | null;
   workConflict?: WeeklyPlanWorkConflict | null;
 }) {
@@ -484,7 +504,7 @@ function PlanBlockEvent({
       badges={
         <>
           <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
-            {block.startTime ? "Plan block" : "Flexible block"}
+            {getPlanBlockKindLabel(block, projects)}
           </Badge>
           {hasConflict ? (
             <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
@@ -613,11 +633,13 @@ function DayEventGroups({
   day,
   importedConflictByBlockId,
   planBlockSyncStatusById,
+  projects,
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   day: ReturnType<typeof getVisibleDayData>;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
   planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
+  projects: Project[];
 }) {
   const { flexiblePlanBlocks, timedPlanBlocks } = splitPlanBlocks(
     day.planBlocks,
@@ -652,6 +674,7 @@ function DayEventGroups({
             key={block.id}
             block={block}
             importedConflict={importedConflictByBlockId.get(block.id)}
+            projects={projects}
             syncStatus={planBlockSyncStatusById[block.id]}
             workConflict={conflictByBlockId.get(block.id)}
           />
@@ -667,6 +690,7 @@ function DayEventGroups({
             key={block.id}
             block={block}
             importedConflict={importedConflictByBlockId.get(block.id)}
+            projects={projects}
             syncStatus={planBlockSyncStatusById[block.id]}
             workConflict={conflictByBlockId.get(block.id)}
           />
@@ -741,6 +765,7 @@ function MonthDayDetail({
   filters,
   importedConflictByBlockId,
   planBlockSyncStatusById,
+  projects,
   status,
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
@@ -748,6 +773,7 @@ function MonthDayDetail({
   filters: CalendarFilters;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
   planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
+  projects: Project[];
   status: CalendarStatus;
 }) {
   if (!day) {
@@ -828,6 +854,7 @@ function MonthDayDetail({
               day={visibleDay}
               importedConflictByBlockId={importedConflictByBlockId}
               planBlockSyncStatusById={planBlockSyncStatusById}
+              projects={projects}
             />
           ) : null}
         </div>
@@ -842,6 +869,7 @@ function CalendarMonthView({
   importedConflictByBlockId,
   monthCalendar,
   planBlockSyncStatusById,
+  projects,
   selectedMonthDay,
   selectedMonthIso,
   setSelectedMonthIso,
@@ -852,6 +880,7 @@ function CalendarMonthView({
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
   monthCalendar: ReturnType<typeof buildCalendarMonth>;
   planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
+  projects: Project[];
   selectedMonthDay: CalendarMonthDaySchedule | null;
   selectedMonthIso: string | null;
   setSelectedMonthIso: (isoDate: string) => void;
@@ -991,6 +1020,7 @@ function CalendarMonthView({
         filters={filters}
         importedConflictByBlockId={importedConflictByBlockId}
         planBlockSyncStatusById={planBlockSyncStatusById}
+        projects={projects}
         status={status}
       />
     </section>
@@ -1686,6 +1716,7 @@ export function CalendarPage() {
                               day={visibleDay}
                               importedConflictByBlockId={importedConflictByBlockId}
                               planBlockSyncStatusById={planBlockSyncStatusById}
+                              projects={projects}
                             />
                           ) : null}
                         </div>
@@ -1701,6 +1732,7 @@ export function CalendarPage() {
                 importedConflictByBlockId={importedConflictByBlockId}
                 monthCalendar={monthCalendar}
                 planBlockSyncStatusById={planBlockSyncStatusById}
+                projects={projects}
                 selectedMonthDay={selectedMonthDay}
                 selectedMonthIso={selectedMonthIso}
                 setSelectedMonthIso={setSelectedMonthIso}

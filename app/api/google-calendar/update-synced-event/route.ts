@@ -9,6 +9,7 @@ import {
   updateScheduleBuilderGoogleCalendarEvent,
   type GoogleCalendarConnectionRow,
 } from "@/lib/google-calendar";
+import { fetchProjectsForUser } from "@/lib/supabase/scheduler";
 import {
   formatEstimatedHours,
   formatStartTime,
@@ -18,6 +19,7 @@ import {
   type WeekDay,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
+import type { Project } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -133,8 +135,27 @@ function createBlockSnapshot(block: WeeklyPlanBlock) {
   };
 }
 
-function getGoogleCalendarEventTitle(block: WeeklyPlanBlock) {
+function normalizeProjectLookupName(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isProjectWorkBlock(block: WeeklyPlanBlock, projects: Project[]) {
+  const blockTitle = normalizeProjectLookupName(block.projectName);
+
+  return projects.some(
+    (project) => normalizeProjectLookupName(project.name) === blockTitle,
+  );
+}
+
+function getGoogleCalendarEventTitle(
+  block: WeeklyPlanBlock,
+  projects: Project[],
+) {
   const projectName = block.projectName.trim();
+
+  if (!isProjectWorkBlock(block, projects)) {
+    return projectName || "Schedule Builder plan block";
+  }
 
   if (!projectName || projectName.toLowerCase() === "schedule builder") {
     return "Schedule Builder plan block";
@@ -173,30 +194,32 @@ export async function POST(request: NextRequest) {
 
     const { serviceClient, userId } =
       await getAuthenticatedGoogleCalendarUser(request);
-    const [connectionResult, blockResult, syncRowResult] = await Promise.all([
-      serviceClient
-        .from("google_calendar_connections")
-        .select(getConnectionSelect())
-        .eq("user_id", userId)
-        .maybeSingle(),
-      serviceClient
-        .from("weekly_plan_blocks")
-        .select(
-          "block_id, day, project_name, planned_task, estimated_hours, start_time",
-        )
-        .eq("user_id", userId)
-        .eq("block_id", blockId)
-        .maybeSingle(),
-      serviceClient
-        .from("google_calendar_synced_events")
-        .select(
-          "id, weekly_plan_block_id, google_calendar_id, google_event_id, google_event_html_link",
-        )
-        .eq("user_id", userId)
-        .eq("week_start_date", weekStartDate)
-        .eq("weekly_plan_block_id", blockId)
-        .maybeSingle(),
-    ]);
+    const [connectionResult, blockResult, syncRowResult, projectsResult] =
+      await Promise.all([
+        serviceClient
+          .from("google_calendar_connections")
+          .select(getConnectionSelect())
+          .eq("user_id", userId)
+          .maybeSingle(),
+        serviceClient
+          .from("weekly_plan_blocks")
+          .select(
+            "block_id, day, project_name, planned_task, estimated_hours, start_time",
+          )
+          .eq("user_id", userId)
+          .eq("block_id", blockId)
+          .maybeSingle(),
+        serviceClient
+          .from("google_calendar_synced_events")
+          .select(
+            "id, weekly_plan_block_id, google_calendar_id, google_event_id, google_event_html_link",
+          )
+          .eq("user_id", userId)
+          .eq("week_start_date", weekStartDate)
+          .eq("weekly_plan_block_id", blockId)
+          .maybeSingle(),
+        fetchProjectsForUser(serviceClient, userId),
+      ]);
 
     if (connectionResult.error) {
       throw new Error(connectionResult.error.message);
@@ -215,6 +238,10 @@ export async function POST(request: NextRequest) {
 
     if (syncRowResult.error) {
       throw new Error(syncRowResult.error.message);
+    }
+
+    if (projectsResult.error) {
+      throw new Error(projectsResult.error.message);
     }
 
     if (!connectionResult.data) {
@@ -304,7 +331,7 @@ export async function POST(request: NextRequest) {
       startTime,
       durationMinutes,
     );
-    const title = getGoogleCalendarEventTitle(block);
+    const title = getGoogleCalendarEventTitle(block, projectsResult.data);
     const description = [
       `Planned task: ${block.plannedTask}`,
       `Duration: ${formatEstimatedHours(block.estimatedHours)}`,

@@ -5,6 +5,7 @@ import {
   weekDays,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
+import type { Project } from "@/lib/projects";
 
 const defaultDayStartMinutes = 9 * 60;
 
@@ -87,6 +88,32 @@ function createUid(block: WeeklyPlanBlock, index: number) {
   return `${safeId}-${index}@schedule-builder`;
 }
 
+function normalizeProjectLookupName(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isProjectWorkBlock(block: WeeklyPlanBlock, projects: Project[]) {
+  const blockTitle = normalizeProjectLookupName(block.projectName);
+
+  return projects.some(
+    (project) => normalizeProjectLookupName(project.name) === blockTitle,
+  );
+}
+
+function getWeeklyPlanEventTitle(block: WeeklyPlanBlock, projects: Project[]) {
+  const title = block.projectName.trim();
+
+  if (!isProjectWorkBlock(block, projects)) {
+    return title || "Schedule Builder plan block";
+  }
+
+  if (!title || title.toLowerCase() === "schedule builder") {
+    return "Schedule Builder plan block";
+  }
+
+  return `Schedule Builder: ${title}`;
+}
+
 export function getCurrentWeekMondayInputValue() {
   const today = new Date();
   const dayOfWeek = today.getDay();
@@ -102,6 +129,7 @@ export function getCurrentWeekMondayInputValue() {
 export function generateWeeklyPlanIcs(
   blocks: WeeklyPlanBlock[],
   weekStartDateValue: string,
+  projects: Project[] = [],
 ) {
   const weekStartDate = parseDateInput(weekStartDateValue);
 
@@ -187,7 +215,7 @@ export function generateWeeklyPlanIcs(
 
     const startDate = setMinutesFromStartOfDay(eventDate, startMinutes);
     const endDate = setMinutesFromStartOfDay(eventDate, endMinutes);
-    const summary = `Schedule Builder: ${block.projectName}`;
+    const summary = getWeeklyPlanEventTitle(block, projects);
     const description = [
       `Planned task: ${block.plannedTask}`,
       `Start time: ${formatStartTime(block.startTime)}`,
