@@ -1288,7 +1288,26 @@ export function WeeklyPlanSection({
   }
 
   function handleDraftModeChange(mode: WeeklyPlanBlockMode) {
-    setDraft((current) => applyModeToDraft(current, mode));
+    setDraft((current) => {
+      if (mode === "task") {
+        return {
+          ...current,
+          mode,
+          plannedTask: "",
+          title: "",
+        };
+      }
+
+      const project = getProjectForDraft(current.projectId) ?? projects[0] ?? null;
+
+      return {
+        ...current,
+        mode,
+        projectId: project ? String(project.id) : "",
+        plannedTask: project?.nextAction ?? "",
+        title: "",
+      };
+    });
     setProjectFocusMessage(null);
     clearDraftWarnings();
   }
