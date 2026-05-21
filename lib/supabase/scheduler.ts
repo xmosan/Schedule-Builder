@@ -639,6 +639,32 @@ export async function createWorkShiftForUser(
   };
 }
 
+export async function createWorkShiftsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  drafts: WorkShiftDraft[],
+) {
+  if (drafts.length === 0) {
+    return {
+      data: [] as WorkShift[],
+      error: null as SchedulerSyncError | null,
+    };
+  }
+
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("work_shifts")
+      .insert(drafts.map((draft) => mapWorkShiftDraftToRow(userId, draft)))
+      .select("id, user_id, day, start_time, end_time, location, notes, recurring"),
+    "Saving work shifts to Supabase",
+  );
+
+  return {
+    data: result.data?.map((row) => mapWorkShiftRowToWorkShift(row as WorkShiftRow)) ?? [],
+    error: result.error,
+  };
+}
+
 export async function updateWorkShiftForUser(
   supabase: SupabaseClient,
   userId: string,

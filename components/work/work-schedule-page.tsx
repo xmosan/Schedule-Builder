@@ -27,7 +27,7 @@ import {
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
 import {
-  createWorkShiftForUser,
+  createWorkShiftsForUser,
   deleteWorkShiftForUser,
   fetchWorkShiftsForUser,
   updateWorkShiftForUser,
@@ -46,8 +46,20 @@ import {
 type WorkScheduleStatus = "loading" | "ready" | "signed_out" | "error";
 type AddShiftTarget = "quick" | WeekDay;
 type FormTarget = "quick" | WeekDay | `edit:${string}`;
+type AddWorkShiftDraft = Omit<WorkShiftDraft, "day"> & {
+  days: WeekDay[];
+};
 
 const shiftRemovalAnimationMs = 300;
+const dayChipLabels: Record<WeekDay, string> = {
+  Monday: "M",
+  Tuesday: "T",
+  Wednesday: "W",
+  Thursday: "T",
+  Friday: "F",
+  Saturday: "S",
+  Sunday: "S",
+};
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -82,12 +94,61 @@ function formatShiftHours(hours: number) {
   }`;
 }
 
-function getDraftForDay(day: WeekDay): WorkShiftDraft {
+function getAddDraftForDay(day: WeekDay): AddWorkShiftDraft {
   return {
-    ...defaultWorkShiftDraft,
+    startTime: defaultWorkShiftDraft.startTime,
+    endTime: defaultWorkShiftDraft.endTime,
+    location: "",
+    notes: "",
+    recurring: true,
+    days: [day],
+  };
+}
+
+function normalizeShiftLocation(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getDuplicateShiftDays(
+  existingShifts: WorkShift[],
+  draft: AddWorkShiftDraft,
+) {
+  return draft.days.filter((day) =>
+    existingShifts.some(
+      (shift) =>
+        shift.day === day &&
+        shift.startTime === draft.startTime &&
+        shift.endTime === draft.endTime &&
+        normalizeShiftLocation(shift.location) ===
+          normalizeShiftLocation(draft.location),
+    ),
+  );
+}
+
+function pluralizeShift(count: number) {
+  return `${count} ${count === 1 ? "shift" : "shifts"}`;
+}
+
+function createWorkShiftDraftForDay(
+  draft: AddWorkShiftDraft,
+  day: WeekDay,
+): WorkShiftDraft {
+  return {
     day,
+    startTime: draft.startTime,
+    endTime: draft.endTime,
+    location: draft.location,
+    notes: draft.notes,
     recurring: true,
   };
+}
+
+function validateAddWorkShiftDraft(draft: AddWorkShiftDraft) {
+  if (draft.days.length === 0) {
+    return "Choose at least one day for this shift.";
+  }
+
+  return validateWorkShiftDraft(createWorkShiftDraftForDay(draft, draft.days[0]));
 }
 
 function getDraftFromShift(shift: WorkShift): WorkShiftDraft {
@@ -192,7 +253,9 @@ export function WorkSchedulePage() {
   );
   const [userId, setUserId] = useState<string | null>(null);
   const [shifts, setShifts] = useState<WorkShift[]>([]);
-  const [draft, setDraft] = useState<WorkShiftDraft>(defaultWorkShiftDraft);
+  const [draft, setDraft] = useState<AddWorkShiftDraft>(
+    getAddDraftForDay("Monday"),
+  );
   const [editDraft, setEditDraft] =
     useState<WorkShiftDraft>(defaultWorkShiftDraft);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
@@ -319,7 +382,15 @@ export function WorkSchedulePage() {
   }
 
   function openQuickAddForm() {
-    setIsQuickAddOpen((current) => !current);
+    setIsQuickAddOpen((current) => {
+      const shouldOpen = !current;
+
+      if (shouldOpen) {
+        setDraft(getAddDraftForDay("Monday"));
+      }
+
+      return shouldOpen;
+    });
     setActiveDayForm(null);
     setEditingShiftId(null);
     clearFeedback();
@@ -331,7 +402,7 @@ export function WorkSchedulePage() {
     setIsQuickAddOpen(false);
     setEditingShiftId(null);
     setActiveDayForm(shouldClose ? null : day);
-    setDraft(getDraftForDay(day));
+    setDraft(getAddDraftForDay(day));
     clearFeedback();
   }
 
@@ -344,11 +415,11 @@ export function WorkSchedulePage() {
   }
 
   async function saveNewShift(target: AddShiftTarget) {
-    const nextDraft = {
+    const nextDraft: AddWorkShiftDraft = {
       ...draft,
       recurring: true,
     };
-    const validationError = validateWorkShiftDraft(nextDraft);
+    const validationError = validateAddWorkShiftDraft(nextDraft);
 
     if (validationError) {
       showFormError(target, validationError);
@@ -364,20 +435,53 @@ export function WorkSchedulePage() {
     clearFeedback();
 
     try {
-      const supabase = getSupabaseBrowserClient();
-      const result = await createWorkShiftForUser(supabase, userId, nextDraft);
+      const duplicateDays = getDuplicateShiftDays(shifts, nextDraft);
+      const duplicateDaySet = new Set(duplicateDays);
+      const daysToCreate = nextDraft.days.filter(
+        (day) => !duplicateDaySet.has(day),
+      );
 
-      if (result.error || !result.data) {
+      if (daysToCreate.length === 0) {
+        setMessage(
+          `No new shifts added. Skipped ${pluralizeShift(
+            duplicateDays.length,
+          )} that already exist${duplicateDays.length === 1 ? "s" : ""}.`,
+        );
+        return;
+      }
+
+      const supabase = getSupabaseBrowserClient();
+      const draftsToCreate = daysToCreate.map((day) =>
+        createWorkShiftDraftForDay(nextDraft, day),
+      );
+      const result = await createWorkShiftsForUser(
+        supabase,
+        userId,
+        draftsToCreate,
+      );
+
+      if (result.error) {
         showFormError(target, getMissingTableMessage(result.error));
         return;
       }
 
-      const savedShift = result.data;
-      setShifts((current) => sortWorkShifts([...current, savedShift]));
-      setDraft(getDraftForDay(target === "quick" ? "Monday" : target));
+      const savedShifts = result.data;
+      setShifts((current) => sortWorkShifts([...current, ...savedShifts]));
+      setDraft(getAddDraftForDay(target === "quick" ? "Monday" : target));
       setIsQuickAddOpen(false);
       setActiveDayForm(null);
-      setMessage("Work shift saved.");
+      setMessage(
+        [
+          `Added ${pluralizeShift(savedShifts.length)}.`,
+          duplicateDays.length > 0
+            ? `Skipped ${pluralizeShift(duplicateDays.length)} that already exist${
+                duplicateDays.length === 1 ? "s" : ""
+              }.`
+            : null,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .join(" "),
+      );
     } catch (saveError) {
       showFormError(target, getMissingTableMessage(saveError));
     } finally {
@@ -486,6 +590,206 @@ export function WorkSchedulePage() {
     }, shiftRemovalAnimationMs);
   }
 
+  function renderDayChips({
+    formId,
+    selectedDays,
+    setDraftValue,
+  }: {
+    formId: string;
+    selectedDays: WeekDay[];
+    setDraftValue: Dispatch<SetStateAction<AddWorkShiftDraft>>;
+  }) {
+    return (
+      <div>
+        <p className="field-label" id={`${formId}-days-label`}>
+          Days this shift repeats
+        </p>
+        <div
+          aria-labelledby={`${formId}-days-label`}
+          className="grid grid-cols-7 gap-2"
+          role="group"
+        >
+          {weekDays.map((day) => {
+            const isSelected = selectedDays.includes(day);
+
+            return (
+              <button
+                key={day}
+                aria-label={day}
+                aria-pressed={isSelected}
+                className={`min-h-11 rounded-full border text-sm font-bold transition active:scale-[0.97] ${
+                  isSelected
+                    ? "border-brand-teal/25 bg-brand-teal text-white shadow-[0_10px_22px_rgba(20,121,110,0.16)]"
+                    : "border-brand-ink/10 bg-white/72 text-brand-ink/55 hover:border-brand-teal/18 hover:bg-brand-teal/[0.06] hover:text-brand-teal"
+                }`}
+                type="button"
+                onClick={() => {
+                  setDraftValue((current) => {
+                    const nextDays = current.days.includes(day)
+                      ? current.days.filter((selectedDay) => selectedDay !== day)
+                      : [...current.days, day].sort(
+                          (first, second) =>
+                            weekDays.indexOf(first) - weekDays.indexOf(second),
+                        );
+
+                    return {
+                      ...current,
+                      days: nextDays,
+                    };
+                  });
+                  clearFeedback();
+                }}
+              >
+                {dayChipLabels[day]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  function renderAddShiftForm({
+    draftValue,
+    formId,
+    onCancel,
+    onSubmit,
+    setDraftValue,
+    target,
+  }: {
+    draftValue: AddWorkShiftDraft;
+    formId: string;
+    onCancel?: () => void;
+    onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+    setDraftValue: Dispatch<SetStateAction<AddWorkShiftDraft>>;
+    target: AddShiftTarget;
+  }) {
+    const shouldShowError = error && errorTarget === target;
+    const submitLabel =
+      draftValue.days.length === 1 ? "Add shift" : "Add shifts";
+
+    return (
+      <form
+        className="mt-5 grid gap-4 lg:grid-cols-2"
+        onSubmit={onSubmit}
+      >
+        <div>
+          <label className="field-label" htmlFor={`${formId}-start`}>
+            Start time
+          </label>
+          <Input
+            id={`${formId}-start`}
+            required
+            type="time"
+            value={draftValue.startTime}
+            onChange={(event) => {
+              setDraftValue((current) => ({
+                ...current,
+                startTime: event.target.value,
+              }));
+              clearFeedback();
+            }}
+          />
+        </div>
+
+        <div>
+          <label className="field-label" htmlFor={`${formId}-end`}>
+            End time
+          </label>
+          <Input
+            id={`${formId}-end`}
+            required
+            type="time"
+            value={draftValue.endTime}
+            onChange={(event) => {
+              setDraftValue((current) => ({
+                ...current,
+                endTime: event.target.value,
+              }));
+              clearFeedback();
+            }}
+          />
+        </div>
+
+        <div className="lg:col-span-2">
+          {renderDayChips({
+            formId,
+            selectedDays: draftValue.days,
+            setDraftValue,
+          })}
+        </div>
+
+        <div>
+          <label className="field-label" htmlFor={`${formId}-location`}>
+            Location optional
+          </label>
+          <Input
+            id={`${formId}-location`}
+            placeholder="Office, campus, remote..."
+            value={draftValue.location}
+            onChange={(event) => {
+              setDraftValue((current) => ({
+                ...current,
+                location: event.target.value,
+              }));
+              clearFeedback();
+            }}
+          />
+        </div>
+
+        <div>
+          <label className="field-label" htmlFor={`${formId}-notes`}>
+            Notes optional
+          </label>
+          <Input
+            id={`${formId}-notes`}
+            placeholder="Commute, break, manager..."
+            value={draftValue.notes}
+            onChange={(event) => {
+              setDraftValue((current) => ({
+                ...current,
+                notes: event.target.value,
+              }));
+              clearFeedback();
+            }}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 lg:col-span-2">
+          {onCancel ? (
+            <Button
+              className="w-full"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+          ) : null}
+          <Button
+            className={onCancel ? "w-full" : "w-full col-span-2"}
+            disabled={savingTarget === target || status === "loading"}
+            size="sm"
+            type="submit"
+          >
+            {savingTarget === target ? "Saving..." : submitLabel}
+          </Button>
+        </div>
+
+        <p className="rounded-[18px] border border-brand-ink/8 bg-white/66 px-4 py-3 text-xs font-medium leading-5 text-brand-ink/52 lg:col-span-2">
+          Shifts repeat weekly. Date-specific work shifts are not enabled yet.
+        </p>
+
+        {shouldShowError ? (
+          <p className="rounded-[20px] border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral lg:col-span-2">
+            {error}
+          </p>
+        ) : null}
+      </form>
+    );
+  }
+
   function renderShiftForm({
     draftValue,
     formId,
@@ -506,6 +810,7 @@ export function WorkSchedulePage() {
     target: FormTarget;
   }) {
     const shouldShowError = error && errorTarget === target;
+    const isEditing = target.startsWith("edit:");
 
     return (
       <form
@@ -516,6 +821,12 @@ export function WorkSchedulePage() {
         }
         onSubmit={onSubmit}
       >
+        {isEditing ? (
+          <p className="rounded-[18px] border border-brand-teal/12 bg-white/66 px-4 py-3 text-xs font-semibold leading-5 text-brand-teal lg:col-span-3">
+            Editing updates this shift only.
+          </p>
+        ) : null}
+
         {showDayField ? (
           <div>
             <label className="field-label" htmlFor={`${formId}-day`}>
@@ -761,13 +1072,13 @@ export function WorkSchedulePage() {
                     variant="outline"
                     onClick={openQuickAddForm}
                   >
-                    <PlusIcon className="h-4 w-4" />
-                    {isQuickAddOpen ? "Close quick add" : "Open quick add"}
+                    {!isQuickAddOpen ? <PlusIcon className="h-4 w-4" /> : null}
+                    {isQuickAddOpen ? "Hide quick add" : "Open quick add"}
                   </Button>
                 </div>
 
                 {isQuickAddOpen
-                  ? renderShiftForm({
+                  ? renderAddShiftForm({
                       draftValue: draft,
                       formId: "quick-work-shift",
                       onSubmit: (event) => {
@@ -775,8 +1086,6 @@ export function WorkSchedulePage() {
                         void saveNewShift("quick");
                       },
                       setDraftValue: setDraft,
-                      showDayField: true,
-                      submitLabel: "Add shift",
                       target: "quick",
                     })
                   : null}
@@ -862,7 +1171,7 @@ export function WorkSchedulePage() {
                                 Add your work hours for this day.
                               </p>
                             </div>
-                            {renderShiftForm({
+                            {renderAddShiftForm({
                               draftValue: draft,
                               formId: `day-work-shift-${day.toLowerCase()}`,
                               onCancel: () => setActiveDayForm(null),
@@ -871,8 +1180,6 @@ export function WorkSchedulePage() {
                                 void saveNewShift(day);
                               },
                               setDraftValue: setDraft,
-                              showDayField: false,
-                              submitLabel: "Add shift",
                               target: day,
                             })}
                           </div>
