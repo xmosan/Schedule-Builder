@@ -19,8 +19,14 @@ import {
 import { createImportedCalendarEventsForUser } from "@/lib/supabase/scheduler";
 
 type IcsImportPanelProps = {
+  buttonLabel?: string;
   compact?: boolean;
+  description?: string;
+  emptyHelpText?: string;
   onImported?: (events: ImportedCalendarEvent[]) => void;
+  source?: string;
+  sourceLabel?: string;
+  title?: string;
 };
 
 type ImportStatus = "idle" | "parsing" | "ready" | "importing" | "done";
@@ -42,9 +48,12 @@ function getErrorMessage(error: unknown) {
   return "ICS import is unavailable right now.";
 }
 
-function eventToDraft(event: ParsedIcsEvent): ImportedCalendarEventDraft {
+function eventToDraft(
+  event: ParsedIcsEvent,
+  source: string,
+): ImportedCalendarEventDraft {
   return {
-    source: event.source,
+    source,
     externalUid: event.externalUid,
     title: event.title,
     description: event.description,
@@ -56,8 +65,14 @@ function eventToDraft(event: ParsedIcsEvent): ImportedCalendarEventDraft {
 }
 
 export function IcsImportPanel({
+  buttonLabel = "Choose ICS file",
   compact = false,
+  description = "Upload a calendar file from school, work, Apple Calendar, Google Calendar, Outlook, or another app. You will review events before anything is saved.",
+  emptyHelpText,
   onImported,
+  source = "ics",
+  sourceLabel = "ICS",
+  title = "Import ICS file",
 }: IcsImportPanelProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [events, setEvents] = useState<ParsedIcsEvent[]>([]);
@@ -94,10 +109,10 @@ export function IcsImportPanel({
       setStatus(result.events.length > 0 ? "ready" : "idle");
       setMessage(
         result.events.length > 0
-          ? `Found ${result.events.length} event${
+          ? `Found ${result.events.length} ${sourceLabel} event${
               result.events.length === 1 ? "" : "s"
             }. Choose what to import.`
-          : "No events found in this file.",
+          : emptyHelpText ?? "No events found in this file.",
       );
     } catch (parseError) {
       setEvents([]);
@@ -143,7 +158,7 @@ export function IcsImportPanel({
       const result = await createImportedCalendarEventsForUser(
         supabase,
         userId,
-        selectedEvents.map(eventToDraft),
+        selectedEvents.map((event) => eventToDraft(event, source)),
       );
 
       if (result.error) {
@@ -205,15 +220,13 @@ export function IcsImportPanel({
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-brand-teal/14 bg-brand-teal/8 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-brand-teal">
               <CalendarIcon className="h-4 w-4" />
-              ICS import
+              {sourceLabel} import
             </div>
             <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-              Import ICS file
+              {title}
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-ink/62">
-              Upload a calendar file from school, work, Apple Calendar, Google
-              Calendar, Outlook, or another app. You will review events before
-              anything is saved.
+              {description}
             </p>
           </div>
 
@@ -229,7 +242,7 @@ export function IcsImportPanel({
               disabled={status === "parsing" || status === "importing"}
               onClick={() => fileInputRef.current?.click()}
             >
-              {status === "parsing" ? "Reading file..." : "Choose ICS file"}
+              {status === "parsing" ? "Reading file..." : buttonLabel}
             </Button>
           </div>
         </div>
@@ -311,7 +324,7 @@ export function IcsImportPanel({
                       </span>
                     ) : null}
                     <span className="mt-2 inline-flex rounded-full border border-brand-ink/8 bg-brand-ink/[0.025] px-2.5 py-1 text-xs font-semibold text-brand-ink/46">
-                      Source: ICS
+                      Source: {sourceLabel}
                     </span>
                   </span>
                 </label>

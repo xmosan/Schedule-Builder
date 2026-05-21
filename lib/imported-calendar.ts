@@ -24,6 +24,7 @@ type ImportedCalendarEventSourceShape = Pick<
 const scheduleBuilderExportTitlePattern = /^schedule builder:/i;
 const scheduleBuilderExportDescriptionPattern = /exported from schedule builder/i;
 const scheduleBuilderExportUidPattern = /@schedule-builder$/i;
+const schoolCalendarSources = new Set(["d2l_ics", "brightspace_ics"]);
 
 function getEventDate(value: string) {
   const date = new Date(value);
@@ -65,11 +66,21 @@ export function formatImportedEventSource(
     return "Google Calendar";
   }
 
+  if (schoolCalendarSources.has(source)) {
+    return "D2L / Brightspace";
+  }
+
   return source
     .split(/[_\s-]+/)
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+export function isSchoolCalendarEvent(
+  event: Pick<ImportedCalendarEvent, "source">,
+) {
+  return schoolCalendarSources.has(event.source);
 }
 
 export function getImportedEventDurationHours(

@@ -1,6 +1,7 @@
 "use client";
 
 import { IcsImportPanel } from "@/components/calendar/ics-import-panel";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CalendarIcon } from "@/components/projects/icons";
 import { IntegrationCard } from "@/components/integrations/integration-card";
@@ -660,6 +661,33 @@ export function IntegrationsPage() {
     );
   }
 
+  function renderD2lActions() {
+    return (
+      <div className="w-full space-y-3">
+        <div className="rounded-[18px] border border-[#a44824]/12 bg-[#fff2ea]/70 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="bg-[#a44824]/10 text-[#a44824]" variant="subtle">
+              Guided setup
+            </Badge>
+            <Badge className="bg-brand-ink/[0.045] text-brand-ink/55" variant="subtle">
+              Uses ICS import
+            </Badge>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-brand-ink/62">
+            Bring in course calendar files without sharing school credentials.
+            You will review every event before saving it.
+          </p>
+        </div>
+        <Link
+          className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
+          href="#d2l-brightspace-import"
+        >
+          Open guided setup
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="px-3 pb-28 pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
       <div className="app-shell flex flex-col gap-5 sm:gap-6">
@@ -722,6 +750,8 @@ export function IntegrationsPage() {
                   actionSlot={
                     integration.id === "google-calendar"
                       ? renderGoogleCalendarActions()
+                      : integration.id === "d2l-brightspace-calendar"
+                        ? renderD2lActions()
                       : undefined
                   }
                   key={integration.id}
@@ -738,6 +768,60 @@ export function IntegrationsPage() {
             })}
           </section>
         </div>
+
+        <section
+          id="d2l-brightspace-import"
+          className="grid scroll-mt-6 gap-4 lg:grid-cols-[0.9fr_1.1fr]"
+        >
+          <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
+            <CardContent className="p-4 sm:p-6">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[#a44824]/14 bg-[#fff2ea] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#a44824]">
+                D2L / Brightspace
+              </div>
+              <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+                Import your course calendar
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+                Schools customize Brightspace, but most calendar exports follow
+                the same pattern. Download the calendar file first, then upload
+                it here for review.
+              </p>
+
+              <ol className="mt-5 grid gap-3">
+                {[
+                  "Open D2L / Brightspace and go to Calendar.",
+                  "Look for Export, Subscribe, iCal, or ICS options.",
+                  "Download the .ics calendar file if your school offers one.",
+                  "Upload it into Schedule Builder and review events before saving.",
+                ].map((step, index) => (
+                  <li
+                    className="flex gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-3 text-sm leading-6 text-brand-ink/68"
+                    key={step}
+                  >
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#a44824]/10 text-xs font-bold text-[#a44824]">
+                      {index + 1}
+                    </span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+
+              <p className="mt-4 rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+                Schedule Builder never asks for your school login or password.
+              </p>
+            </CardContent>
+          </Card>
+
+          <IcsImportPanel
+            buttonLabel="Choose Brightspace ICS file"
+            compact
+            description="Upload the .ics file you downloaded from D2L / Brightspace. You will choose which course events to import before anything is saved."
+            emptyHelpText="No events found in this file. Download your Brightspace calendar file first, then upload it here."
+            source="d2l_ics"
+            sourceLabel="D2L / Brightspace"
+            title="Upload Brightspace calendar file"
+          />
+        </section>
 
         <section id="import-ics" className="scroll-mt-6">
           <IcsImportPanel />

@@ -45,7 +45,8 @@ export function IntegrationCard({
               </Badge>
             ) : null}
             <Badge variant={integration.status === "available" ? undefined : "subtle"}>
-              {integration.status === "available" ? "Available now" : "Coming soon"}
+              {integration.statusLabel ??
+                (integration.status === "available" ? "Available now" : "Coming soon")}
             </Badge>
           </div>
         </div>

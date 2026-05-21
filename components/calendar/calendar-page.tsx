@@ -16,6 +16,7 @@ import {
   formatImportedEventSource,
   formatImportedEventTimeRange,
   getImportedEventDurationHours,
+  isSchoolCalendarEvent,
   isScheduleBuilderExportedEvent,
   type ImportedCalendarEvent,
 } from "@/lib/imported-calendar";
@@ -117,6 +118,7 @@ type MonthIndicatorTone =
   | "ics"
   | "plan"
   | "scheduleBuilder"
+  | "school"
   | "work";
 
 type CalendarEventGroup = {
@@ -231,9 +233,16 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
 
 function getImportedEventSourceTone(
   event: ImportedCalendarEvent,
-): Extract<MonthIndicatorTone, "external" | "google" | "ics" | "scheduleBuilder"> {
+): Extract<
+  MonthIndicatorTone,
+  "external" | "google" | "ics" | "scheduleBuilder" | "school"
+> {
   if (isScheduleBuilderExportedEvent(event)) {
     return "scheduleBuilder";
+  }
+
+  if (isSchoolCalendarEvent(event)) {
+    return "school";
   }
 
   if (event.source === "google_calendar") {
@@ -328,7 +337,10 @@ function getMonthEventSummary(
       return groups;
     },
     new Map<
-      Extract<MonthIndicatorTone, "external" | "google" | "ics" | "scheduleBuilder">,
+      Extract<
+        MonthIndicatorTone,
+        "external" | "google" | "ics" | "scheduleBuilder" | "school"
+      >,
       number
     >(),
   );
@@ -344,7 +356,9 @@ function getMonthEventSummary(
             ? "ICS"
             : tone === "scheduleBuilder"
               ? "SB export"
-              : "External",
+              : tone === "school"
+                ? "School"
+                : "External",
       tone,
     });
   });
@@ -383,6 +397,10 @@ function getMonthEventToneClass(tone: MonthIndicatorTone) {
 
   if (tone === "scheduleBuilder") {
     return "border-brand-teal/12 bg-brand-teal/[0.045] text-brand-teal/72";
+  }
+
+  if (tone === "school") {
+    return "border-[#a44824]/14 bg-[#fff2ea] text-[#a44824]";
   }
 
   if (tone === "external") {
@@ -575,7 +593,10 @@ function ImportedCalendarEventCard({
 }) {
   const sourceTone = getImportedEventSourceTone(event);
   const sourceLabel = formatImportedEventSource(event);
-  const cardAccent = sourceTone === "scheduleBuilder" ? "ics" : sourceTone;
+  const cardAccent =
+    sourceTone === "scheduleBuilder" || sourceTone === "school"
+      ? "ics"
+      : sourceTone;
 
   return (
     <EventCardShell
@@ -743,6 +764,8 @@ function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
         ? "bg-brand-ocean"
       : tone === "scheduleBuilder"
         ? "bg-brand-teal/55"
+      : tone === "school"
+        ? "bg-[#a44824]"
       : tone === "external"
         ? "bg-brand-ink/55"
       : tone === "deadline"
@@ -1381,6 +1404,9 @@ export function CalendarPage() {
   const googleCalendarEventCount = importedEvents.filter(
     (event) => event.source === "google_calendar",
   ).length;
+  const schoolCalendarEventCount = importedEvents.filter(
+    isSchoolCalendarEvent,
+  ).length;
   const icsEventCount = importedEvents.filter(
     (event) => event.source === "ics" && !isScheduleBuilderExportedEvent(event),
   ).length;
@@ -1390,7 +1416,9 @@ export function CalendarPage() {
   const externalStatusLabel =
     googleCalendarEventCount > 0
       ? "Google Calendar connected"
-      : icsEventCount > 0
+      : schoolCalendarEventCount > 0
+        ? "School calendar events included"
+        : icsEventCount > 0
         ? "ICS events included"
         : scheduleBuilderExportCount > 0
           ? "Schedule Builder exports included"

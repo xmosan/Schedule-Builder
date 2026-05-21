@@ -10,6 +10,7 @@ export type IntegrationCardData = {
   whyItHelps: string;
   accentClassName: string;
   status: "available" | "coming_soon";
+  statusLabel?: string;
   priority?: "planned_next";
 };
 
@@ -49,12 +50,13 @@ export const integrations: IntegrationCardData[] = [
     monogram: "D2L",
     category: "Course deadline import",
     description:
-      "Bring assignment due dates, quizzes, and course events into the scheduler from Brightspace.",
+      "Import assignment due dates, quizzes, and course events by exporting or subscribing to your Brightspace calendar file.",
     whyItHelps:
-      "Reduces deadline drift and makes busy academic weeks easier to schedule around.",
+      "Turns course calendar files into reviewable Schedule Builder events without asking for your school login.",
     accentClassName:
       "bg-[#fff2ea] text-[#a44824] ring-1 ring-inset ring-[#f3d4c4]",
-    status: "coming_soon",
+    status: "available",
+    statusLabel: "Guided setup",
   },
   {
     id: "google-calendar",
