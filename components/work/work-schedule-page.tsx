@@ -20,6 +20,7 @@ import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
@@ -267,6 +268,9 @@ export function WorkSchedulePage() {
     Record<string, boolean>
   >({});
   const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
+  const [pendingRemoveShiftId, setPendingRemoveShiftId] = useState<string | null>(
+    null,
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const removeTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
@@ -539,18 +543,25 @@ export function WorkSchedulePage() {
     }
   }
 
-  function removeShiftWithAnimation(shiftId: string) {
+  function requestRemoveShift(shiftId: string) {
     if (!userId) {
       setError("Sign in before removing work shifts.");
       return;
     }
 
-    const confirmed = window.confirm("Remove this work shift?");
-
-    if (!confirmed || exitingShiftIds[shiftId]) {
+    if (exitingShiftIds[shiftId]) {
       return;
     }
 
+    setPendingRemoveShiftId(shiftId);
+  }
+
+  function removeShiftWithAnimation(shiftId: string) {
+    if (!userId || exitingShiftIds[shiftId]) {
+      return;
+    }
+
+    setPendingRemoveShiftId(null);
     clearFeedback();
     setRemoveErrors((current) => {
       const next = { ...current };
@@ -968,6 +979,10 @@ export function WorkSchedulePage() {
     );
   }
 
+  const pendingRemoveShift = pendingRemoveShiftId
+    ? shifts.find((shift) => shift.id === pendingRemoveShiftId)
+    : undefined;
+
   return (
     <div className="px-3 pb-[calc(10rem+env(safe-area-inset-bottom))] pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
       <div className="app-shell flex flex-col gap-5 sm:gap-6">
@@ -1230,7 +1245,7 @@ export function WorkSchedulePage() {
                                 removeError={removeErrors[shift.id]}
                                 shift={shift}
                                 onEdit={() => startEditingShift(shift)}
-                                onRemove={() => removeShiftWithAnimation(shift.id)}
+                                onRemove={() => requestRemoveShift(shift.id)}
                               />
                             ),
                           )}
@@ -1243,6 +1258,20 @@ export function WorkSchedulePage() {
             </section>
           </>
         ) : null}
+
+        <ConfirmDialog
+          confirmLabel="Remove shift"
+          description="This shift will be removed from your work schedule. Schedule Builder will stop treating this time as unavailable."
+          destructive
+          open={Boolean(pendingRemoveShift)}
+          title="Remove work shift?"
+          onCancel={() => setPendingRemoveShiftId(null)}
+          onConfirm={() => {
+            if (pendingRemoveShift) {
+              removeShiftWithAnimation(pendingRemoveShift.id);
+            }
+          }}
+        />
       </div>
     </div>
   );

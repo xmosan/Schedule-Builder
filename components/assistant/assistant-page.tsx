@@ -9,6 +9,7 @@ import {
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   type AssistantApplyResponse,
   type AssistantContextSummary,
@@ -881,6 +882,7 @@ export function AssistantPage() {
   const [openReviewMessages, setOpenReviewMessages] = useState<Record<string, boolean>>({});
   const [assistantNotices, setAssistantNotices] = useState<AssistantNotice[]>([]);
   const [isIntroHidden, setIsIntroHidden] = useState(false);
+  const [isClearChatDialogOpen, setIsClearChatDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -898,6 +900,16 @@ export function AssistantPage() {
   const hasMessages = messages.length > 0;
   const isBusy = isSubmitting || status === "loading";
   const showIntroCard = !hasMessages && !isIntroHidden;
+
+  function clearConversationHistory() {
+    setMessages([]);
+    setActionStates({});
+    setOpenReviewMessages({});
+    setAssistantNotices([]);
+    setError(null);
+    setIsIntroHidden(false);
+    setIsClearChatDialogOpen(false);
+  }
 
 
   async function requestPlanReview(
@@ -1644,16 +1656,7 @@ export function AssistantPage() {
                 variant="outline"
                 size="sm"
                 className="h-8 shrink-0 rounded-full px-3 text-[11px] font-bold uppercase tracking-wider text-brand-ink/40 hover:text-brand-ink"
-                onClick={() => {
-                  if (confirm("Clear your conversation history?")) {
-                    setMessages([]);
-                    setActionStates({});
-                    setOpenReviewMessages({});
-                    setAssistantNotices([]);
-                    setError(null);
-                    setIsIntroHidden(false);
-                  }
-                }}
+                onClick={() => setIsClearChatDialogOpen(true)}
               >
                 Clear
               </Button>
@@ -1808,6 +1811,16 @@ export function AssistantPage() {
           </div>
         </section>
       </main>
+
+      <ConfirmDialog
+        confirmLabel="Clear chat"
+        description="This clears the conversation from this screen. Your projects, plan blocks, work shifts, and calendar connections will stay as they are."
+        destructive
+        open={isClearChatDialogOpen}
+        title="Clear chat history?"
+        onCancel={() => setIsClearChatDialogOpen(false)}
+        onConfirm={clearConversationHistory}
+      />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { IntegrationCard } from "@/components/integrations/integration-card";
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { integrations } from "@/lib/integrations";
 import {
   type DesiredIntegration,
@@ -165,6 +166,7 @@ export function IntegrationsPage() {
     setGoogleCalendarAuthorizationUrl,
   ] = useState<string | null>(null);
   const [isGoogleCalendarBusy, setIsGoogleCalendarBusy] = useState(false);
+  const [isDisconnectDialogOpen, setIsDisconnectDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -440,14 +442,7 @@ export function IntegrationsPage() {
   }
 
   async function disconnectGoogleCalendar() {
-    if (
-      !window.confirm(
-        "Disconnect Google Calendar from Schedule Builder? This only removes the cached Google events from this app.",
-      )
-    ) {
-      return;
-    }
-
+    setIsDisconnectDialogOpen(false);
     setIsGoogleCalendarBusy(true);
     setGoogleCalendarError(null);
     setGoogleCalendarMessage(null);
@@ -641,7 +636,7 @@ export function IntegrationsPage() {
                 className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-ink/10 bg-white/75 px-6 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white disabled:cursor-not-allowed disabled:opacity-55 sm:w-auto"
                 disabled={isGoogleCalendarBusy}
                 type="button"
-                onClick={disconnectGoogleCalendar}
+                onClick={() => setIsDisconnectDialogOpen(true)}
               >
                 Disconnect
               </button>
@@ -776,6 +771,17 @@ export function IntegrationsPage() {
             })}
           </section>
         </div>
+
+        <ConfirmDialog
+          confirmLabel="Disconnect"
+          description="Schedule Builder will stop reading your Google Calendar events. Existing local plans will not be deleted."
+          destructive
+          loading={isGoogleCalendarBusy}
+          open={isDisconnectDialogOpen}
+          title="Disconnect Google Calendar?"
+          onCancel={() => setIsDisconnectDialogOpen(false)}
+          onConfirm={() => void disconnectGoogleCalendar()}
+        />
       </div>
     </div>
   );

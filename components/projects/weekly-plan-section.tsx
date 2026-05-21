@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
@@ -509,6 +510,9 @@ export function WeeklyPlanSection({
     null,
   );
   const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
+  const [pendingRemoveBlockId, setPendingRemoveBlockId] = useState<string | null>(
+    null,
+  );
   const removeTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
     {},
   );
@@ -1710,11 +1714,20 @@ export function WeeklyPlanSection({
     }
   }
 
+  function requestRemoveBlock(blockId: string) {
+    if (exitingBlockIds[blockId]) {
+      return;
+    }
+
+    setPendingRemoveBlockId(blockId);
+  }
+
   function removeBlockWithAnimation(blockId: string) {
     if (exitingBlockIds[blockId]) {
       return;
     }
 
+    setPendingRemoveBlockId(null);
     setRemoveErrors((current) => {
       const next = { ...current };
       delete next[blockId];
@@ -2069,7 +2082,7 @@ export function WeeklyPlanSection({
                     title={`Remove ${block.projectName}`}
                     type="button"
                     variant="secondary"
-                    onClick={() => removeBlockWithAnimation(block.id)}
+                    onClick={() => requestRemoveBlock(block.id)}
                   >
                     <TrashIcon aria-hidden="true" className="h-5 w-5" />
                     <span className="sr-only">Remove block</span>
@@ -3431,6 +3444,19 @@ export function WeeklyPlanSection({
         </CardContent>
       </Card>
 
+      <ConfirmDialog
+        confirmLabel="Remove block"
+        description="This removes the block from your weekly plan. If it was synced to Google Calendar, the Google event may still remain unless removed separately."
+        destructive
+        open={Boolean(pendingRemoveBlockId)}
+        title="Remove this block?"
+        onCancel={() => setPendingRemoveBlockId(null)}
+        onConfirm={() => {
+          if (pendingRemoveBlockId) {
+            removeBlockWithAnimation(pendingRemoveBlockId);
+          }
+        }}
+      />
     </section>
   );
 }
