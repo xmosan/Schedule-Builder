@@ -22,9 +22,9 @@ export const integrations: IntegrationCardData[] = [
     monogram: "A",
     category: "Native calendar sync",
     description:
-      "Keep project blocks and deadlines aligned with Calendar across Apple devices.",
+      "Use calendar files today; native Apple Calendar support is planned later.",
     whyItHelps:
-      "Makes planned work easier to see beside classes, meetings, and outside commitments.",
+      "ICS export keeps plans portable now while a deeper Apple Calendar connection stays on the roadmap.",
     accentClassName:
       "bg-[#f7f3ec] text-[#7a5a36] ring-1 ring-inset ring-[#e7dcc9]",
     status: "coming_soon",

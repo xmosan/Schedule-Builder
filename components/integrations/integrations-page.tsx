@@ -168,6 +168,8 @@ export function IntegrationsPage() {
   ] = useState<string | null>(null);
   const [isGoogleCalendarBusy, setIsGoogleCalendarBusy] = useState(false);
   const [isDisconnectDialogOpen, setIsDisconnectDialogOpen] = useState(false);
+  const [isD2lSetupOpen, setIsD2lSetupOpen] = useState(false);
+  const [isIcsImportOpen, setIsIcsImportOpen] = useState(false);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -244,7 +246,7 @@ export function IntegrationsPage() {
     if (syncEnabled === "enabled") {
       setGoogleCalendarAuthorizationUrl(null);
       setGoogleCalendarMessage(
-        "Calendar sync enabled. Schedule Builder created or reused a dedicated Google Calendar. Weekly Plan blocks will not sync until you choose them in a later step.",
+        "Calendar sync enabled. Schedule Builder created or reused a dedicated Google Calendar. Weekly Plan blocks sync only when you select them on the Weekly Plan page.",
       );
       setGoogleCalendarSyncEnabled(true);
     }
@@ -531,62 +533,108 @@ export function IntegrationsPage() {
         timeStyle: "short",
       }).format(new Date(googleCalendarWriteGrantedAt))
     : null;
+  const googleCalendarStatusRows = [
+    {
+      label: "Read-only",
+      value: googleCalendarStatusLabel,
+      tone:
+        googleCalendarStatus === "connected"
+          ? "success"
+          : googleCalendarStatus === "needs_reconnect"
+            ? "warning"
+            : "muted",
+    },
+    {
+      label: "Sync",
+      value: googleCalendarSyncEnabled ? "Enabled" : "Not enabled",
+      tone: googleCalendarSyncEnabled ? "success" : "muted",
+    },
+    {
+      label: "Last read-only sync",
+      value: googleCalendarLastSyncLabel ?? "Not refreshed yet",
+      tone: googleCalendarLastSyncLabel ? "muted" : "soft",
+    },
+    {
+      label: "Sync calendar",
+      value: googleCalendarSyncEnabled
+        ? googleCalendarSyncCalendarName ?? "Schedule Builder"
+        : "Enable sync to create one",
+      tone: googleCalendarSyncEnabled ? "muted" : "soft",
+    },
+  ];
+
+  function toggleD2lSetup() {
+    setIsD2lSetupOpen((current) => {
+      const next = !current;
+
+      if (next) {
+        setIsIcsImportOpen(false);
+        window.setTimeout(() => {
+          document
+            .getElementById("d2l-brightspace-import")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 0);
+      }
+
+      return next;
+    });
+  }
+
+  function toggleIcsImport() {
+    setIsIcsImportOpen((current) => {
+      const next = !current;
+
+      if (next) {
+        setIsD2lSetupOpen(false);
+        window.setTimeout(() => {
+          document
+            .getElementById("import-ics")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 0);
+      }
+
+      return next;
+    });
+  }
 
   function renderGoogleCalendarActions() {
     return (
       <div className="w-full space-y-3">
         <div className="rounded-[18px] border border-brand-ink/8 bg-white/70 p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge
-              className={
-                googleCalendarStatus === "connected"
-                  ? "bg-brand-teal/10 text-brand-teal"
-                  : googleCalendarStatus === "needs_reconnect"
-                    ? "bg-brand-coral/10 text-brand-coral"
-                    : "bg-brand-ink/[0.05] text-brand-ink/55"
-              }
-              variant="subtle"
-            >
-              Read-only {googleCalendarStatusLabel.toLowerCase()}
-            </Badge>
-            <Badge className="bg-brand-ink/[0.04] text-brand-ink/54" variant="subtle">
-              Read-only
-            </Badge>
-            <Badge
-              className={
-                googleCalendarSyncEnabled
-                  ? "bg-brand-teal/10 text-brand-teal"
-                  : "bg-brand-ink/[0.05] text-brand-ink/55"
-              }
-              variant="subtle"
-            >
-              Calendar sync{" "}
-              {googleCalendarSyncEnabled ? "enabled" : "not enabled"}
-            </Badge>
+          <div className="grid gap-2">
+            {googleCalendarStatusRows.map((row) => (
+              <div
+                className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-brand-ink/6 bg-white/70 px-3 py-2"
+                key={row.label}
+              >
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/42">
+                  {row.label}
+                </span>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                    row.tone === "success"
+                      ? "bg-brand-teal/10 text-brand-teal"
+                      : row.tone === "warning"
+                        ? "bg-brand-coral/10 text-brand-coral"
+                        : row.tone === "soft"
+                          ? "bg-brand-ink/[0.035] text-brand-ink/45"
+                          : "bg-brand-ink/[0.045] text-brand-ink/58"
+                  }`}
+                >
+                  {row.value}
+                </span>
+              </div>
+            ))}
           </div>
+          {googleCalendarWriteGrantedLabel ? (
+            <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/38">
+              Sync permission enabled {googleCalendarWriteGrantedLabel}
+            </p>
+          ) : null}
           <p className="mt-3 text-sm leading-6 text-brand-ink/62">
-            Schedule Builder can read upcoming Google Calendar events for
-            planning context. It cannot create, edit, or delete Google Calendar
-            events unless you separately enable calendar sync.
+            Read-only events help Schedule Builder avoid conflicts. Calendar
+            sync only sends blocks you manually choose from Weekly Plan.
           </p>
-          <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-            Calendar sync creates a dedicated Schedule Builder Google Calendar.
-            No Weekly Plan blocks are synced yet.
-          </p>
-          {googleCalendarLastSyncLabel ? (
-            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/38">
-              Last read-only sync: {googleCalendarLastSyncLabel}
-            </p>
-          ) : null}
-          {googleCalendarSyncEnabled ? (
-            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/38">
-              Sync calendar:{" "}
-              {googleCalendarSyncCalendarName ?? "Schedule Builder"}
-              {googleCalendarWriteGrantedLabel
-                ? ` • Enabled ${googleCalendarWriteGrantedLabel}`
-                : ""}
-            </p>
-          ) : null}
         </div>
 
         {googleCalendarMessage ? (
@@ -678,13 +726,34 @@ export function IntegrationsPage() {
             You will review every event before saving it.
           </p>
         </div>
-        <Link
+        <button
           className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
-          href="#d2l-brightspace-import"
+          type="button"
+          onClick={toggleD2lSetup}
         >
-          Open guided setup
-        </Link>
+          {isD2lSetupOpen ? "Close guided setup" : "Open guided setup"}
+        </button>
       </div>
+    );
+  }
+
+  function renderIcsActions() {
+    return (
+      <>
+        <Link
+          href="/plan"
+          className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
+        >
+          Export from Weekly Plan
+        </Link>
+        <button
+          className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-ink/10 bg-white/75 px-6 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white sm:w-auto"
+          type="button"
+          onClick={toggleIcsImport}
+        >
+          {isIcsImportOpen ? "Close ICS import" : "Import ICS File"}
+        </button>
+      </>
     );
   }
 
@@ -706,12 +775,16 @@ export function IntegrationsPage() {
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Bring calendar events, deadlines, and planning workflows into
-                Schedule Builder.
+                Connect calendars, import school events, and send approved
+                plans to your dedicated Schedule Builder Google Calendar.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2.5">
-                <Badge>{visibleIntegrations.length} integrations</Badge>
+                <Badge>{availableIntegrations.length} available now</Badge>
+                <Badge variant="subtle">Guided setup</Badge>
+                <Badge variant="subtle">
+                  {comingSoonIntegrations.length} coming soon
+                </Badge>
                 <Badge variant="subtle">{recommendationSource}</Badge>
               </div>
             </div>
@@ -724,7 +797,12 @@ export function IntegrationsPage() {
                 <div className="mt-4 space-y-3">
                   <div className="rounded-[22px] border border-brand-ink/8 bg-white/75 p-4">
                     <p className="text-sm leading-6 text-brand-ink/70">
-                      <span className="font-semibold text-brand-ink">Start with read-only calendar context today.</span> Google Calendar and ICS import/export can bring commitments into Schedule Builder without writing back to your calendars.
+                      <span className="font-semibold text-brand-ink">
+                        Review first, then send when ready.
+                      </span>{" "}
+                      Google Calendar can read commitments now, and manual sync
+                      only writes approved Weekly Plan blocks to your dedicated
+                      Schedule Builder calendar.
                     </p>
                   </div>
                 </div>
@@ -752,7 +830,9 @@ export function IntegrationsPage() {
                       ? renderGoogleCalendarActions()
                       : integration.id === "d2l-brightspace-calendar"
                         ? renderD2lActions()
-                      : undefined
+                        : integration.id === "ics-upload-import"
+                          ? renderIcsActions()
+                          : undefined
                   }
                   key={integration.id}
                   integration={integration}
@@ -769,63 +849,71 @@ export function IntegrationsPage() {
           </section>
         </div>
 
-        <section
-          id="d2l-brightspace-import"
-          className="grid scroll-mt-6 gap-4 lg:grid-cols-[0.9fr_1.1fr]"
-        >
-          <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
-            <CardContent className="p-4 sm:p-6">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#a44824]/14 bg-[#fff2ea] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#a44824]">
-                D2L / Brightspace
-              </div>
-              <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-                Import your course calendar
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                Schools customize Brightspace, but most calendar exports follow
-                the same pattern. Download the calendar file first, then upload
-                it here for review.
-              </p>
+        {isD2lSetupOpen ? (
+          <section
+            id="d2l-brightspace-import"
+            className="grid scroll-mt-6 gap-4 lg:grid-cols-[0.9fr_1.1fr]"
+          >
+            <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
+              <CardContent className="p-4 sm:p-6">
+                <div className="inline-flex items-center gap-2 rounded-full border border-[#a44824]/14 bg-[#fff2ea] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#a44824]">
+                  D2L / Brightspace
+                </div>
+                <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+                  Import your course calendar
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+                  Download your Brightspace calendar file, then upload it here
+                  to review assignments, quizzes, and course events before
+                  saving.
+                </p>
 
-              <ol className="mt-5 grid gap-3">
-                {[
-                  "Open D2L / Brightspace and go to Calendar.",
-                  "Look for Export, Subscribe, iCal, or ICS options.",
-                  "Download the .ics calendar file if your school offers one.",
-                  "Upload it into Schedule Builder and review events before saving.",
-                ].map((step, index) => (
-                  <li
-                    className="flex gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-3 text-sm leading-6 text-brand-ink/68"
-                    key={step}
-                  >
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#a44824]/10 text-xs font-bold text-[#a44824]">
-                      {index + 1}
-                    </span>
-                    <span>{step}</span>
-                  </li>
-                ))}
-              </ol>
+                <ol className="mt-5 grid gap-3">
+                  {[
+                    "Open D2L / Brightspace and go to Calendar.",
+                    "Look for Export, Subscribe, iCal, or ICS options.",
+                    "Download the .ics calendar file if your school offers one.",
+                    "Upload it here and choose which events to import.",
+                  ].map((step, index) => (
+                    <li
+                      className="flex gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-3 text-sm leading-6 text-brand-ink/68"
+                      key={step}
+                    >
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#a44824]/10 text-xs font-bold text-[#a44824]">
+                        {index + 1}
+                      </span>
+                      <span>{step}</span>
+                    </li>
+                  ))}
+                </ol>
 
-              <p className="mt-4 rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
-                Schedule Builder never asks for your school login or password.
-              </p>
-            </CardContent>
-          </Card>
+                <p className="mt-4 rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+                  No school login or password is needed. Imported events are
+                  always reviewed before saving.
+                </p>
+              </CardContent>
+            </Card>
 
-          <IcsImportPanel
-            buttonLabel="Choose Brightspace ICS file"
-            compact
-            description="Upload the .ics file you downloaded from D2L / Brightspace. You will choose which course events to import before anything is saved."
-            emptyHelpText="No events found in this file. Download your Brightspace calendar file first, then upload it here."
-            source="d2l_ics"
-            sourceLabel="D2L / Brightspace"
-            title="Upload Brightspace calendar file"
-          />
-        </section>
+            <IcsImportPanel
+              buttonLabel="Choose Brightspace ICS file"
+              compact
+              description="Upload the .ics file from D2L / Brightspace. You will choose which course events to import before anything is saved."
+              emptyHelpText="No events found in this file. Download your Brightspace calendar file first, then upload it here."
+              source="d2l_ics"
+              sourceLabel="D2L / Brightspace"
+              title="Upload Brightspace calendar file"
+            />
+          </section>
+        ) : null}
 
-        <section id="import-ics" className="scroll-mt-6">
-          <IcsImportPanel />
-        </section>
+        {isIcsImportOpen ? (
+          <section id="import-ics" className="scroll-mt-6">
+            <IcsImportPanel
+              description="Upload a calendar file from school, work, Apple Calendar, Google Calendar, Outlook, or another app. You will review events before anything is saved."
+              title="Import a calendar file"
+            />
+          </section>
+        ) : null}
 
         <div className="mt-8 lg:mt-12">
           <h2 className="mb-5 text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
