@@ -730,6 +730,8 @@ export function IntegrationsPage() {
           className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
           type="button"
           onClick={toggleD2lSetup}
+          aria-expanded={isD2lSetupOpen}
+          aria-controls="d2l-brightspace-import"
         >
           {isD2lSetupOpen ? "Close guided setup" : "Open guided setup"}
         </button>
@@ -750,6 +752,8 @@ export function IntegrationsPage() {
           className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-brand-ink/10 bg-white/75 px-6 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white sm:w-auto"
           type="button"
           onClick={toggleIcsImport}
+          aria-expanded={isIcsImportOpen}
+          aria-controls="import-ics"
         >
           {isIcsImportOpen ? "Close ICS import" : "Import ICS File"}
         </button>
@@ -849,71 +853,98 @@ export function IntegrationsPage() {
           </section>
         </div>
 
-        {isD2lSetupOpen ? (
-          <section
-            id="d2l-brightspace-import"
-            className="grid scroll-mt-6 gap-4 lg:grid-cols-[0.9fr_1.1fr]"
-          >
-            <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
-              <CardContent className="p-4 sm:p-6">
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#a44824]/14 bg-[#fff2ea] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#a44824]">
-                  D2L / Brightspace
-                </div>
-                <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-                  Import your course calendar
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                  Download your Brightspace calendar file, then upload it here
-                  to review assignments, quizzes, and course events before
-                  saving.
-                </p>
+        <div
+          className={`grid transition-all duration-300 ease-in-out ${
+            isD2lSetupOpen
+              ? "mt-0 grid-rows-[1fr] opacity-100"
+              : "-mt-5 grid-rows-[0fr] opacity-0 sm:-mt-6"
+          }`}
+          aria-hidden={!isD2lSetupOpen}
+          {...(!isD2lSetupOpen ? { inert: true } : {})}
+        >
+          <div className="overflow-hidden">
+            <section
+              id="d2l-brightspace-import"
+              className={`grid scroll-mt-6 gap-4 pb-2 pt-1 lg:grid-cols-[0.9fr_1.1fr] transition-transform duration-300 ease-in-out ${
+                isD2lSetupOpen ? "translate-y-0" : "-translate-y-2"
+              }`}
+            >
+              <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
+                <CardContent className="p-4 sm:p-6">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-[#a44824]/14 bg-[#fff2ea] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#a44824]">
+                    D2L / Brightspace
+                  </div>
+                  <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+                    Import your course calendar
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+                    Download your Brightspace calendar file, then upload it here
+                    to review assignments, quizzes, and course events before
+                    saving.
+                  </p>
 
-                <ol className="mt-5 grid gap-3">
-                  {[
-                    "Open D2L / Brightspace and go to Calendar.",
-                    "Look for Export, Subscribe, iCal, or ICS options.",
-                    "Download the .ics calendar file if your school offers one.",
-                    "Upload it here and choose which events to import.",
-                  ].map((step, index) => (
-                    <li
-                      className="flex gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-3 text-sm leading-6 text-brand-ink/68"
-                      key={step}
-                    >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#a44824]/10 text-xs font-bold text-[#a44824]">
-                        {index + 1}
-                      </span>
-                      <span>{step}</span>
-                    </li>
-                  ))}
-                </ol>
+                  <ol className="mt-5 grid gap-3">
+                    {[
+                      "Open D2L / Brightspace and go to Calendar.",
+                      "Look for Export, Subscribe, iCal, or ICS options.",
+                      "Download the .ics calendar file if your school offers one.",
+                      "Upload it here and choose which events to import.",
+                    ].map((step, index) => (
+                      <li
+                        className="flex gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-3 text-sm leading-6 text-brand-ink/68"
+                        key={step}
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#a44824]/10 text-xs font-bold text-[#a44824]">
+                          {index + 1}
+                        </span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ol>
 
-                <p className="mt-4 rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
-                  No school login or password is needed. Imported events are
-                  always reviewed before saving.
-                </p>
-              </CardContent>
-            </Card>
+                  <p className="mt-4 rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+                    No school login or password is needed. Imported events are
+                    always reviewed before saving.
+                  </p>
+                </CardContent>
+              </Card>
 
-            <IcsImportPanel
-              buttonLabel="Choose Brightspace ICS file"
-              compact
-              description="Upload the .ics file from D2L / Brightspace. You will choose which course events to import before anything is saved."
-              emptyHelpText="No events found in this file. Download your Brightspace calendar file first, then upload it here."
-              source="d2l_ics"
-              sourceLabel="D2L / Brightspace"
-              title="Upload Brightspace calendar file"
-            />
-          </section>
-        ) : null}
+              <IcsImportPanel
+                buttonLabel="Choose Brightspace ICS file"
+                compact
+                description="Upload the .ics file from D2L / Brightspace. You will choose which course events to import before anything is saved."
+                emptyHelpText="No events found in this file. Download your Brightspace calendar file first, then upload it here."
+                source="d2l_ics"
+                sourceLabel="D2L / Brightspace"
+                title="Upload Brightspace calendar file"
+              />
+            </section>
+          </div>
+        </div>
 
-        {isIcsImportOpen ? (
-          <section id="import-ics" className="scroll-mt-6">
-            <IcsImportPanel
-              description="Upload a calendar file from school, work, Apple Calendar, Google Calendar, Outlook, or another app. You will review events before anything is saved."
-              title="Import a calendar file"
-            />
-          </section>
-        ) : null}
+        <div
+          className={`grid transition-all duration-300 ease-in-out ${
+            isIcsImportOpen
+              ? "mt-0 grid-rows-[1fr] opacity-100"
+              : "-mt-5 grid-rows-[0fr] opacity-0 sm:-mt-6"
+          }`}
+          aria-hidden={!isIcsImportOpen}
+          {...(!isIcsImportOpen ? { inert: true } : {})}
+        >
+          <div className="overflow-hidden">
+            <section
+              id="import-ics"
+              className={`scroll-mt-6 pb-2 pt-1 transition-transform duration-300 ease-in-out ${
+                isIcsImportOpen ? "translate-y-0" : "-translate-y-2"
+              }`}
+            >
+              <IcsImportPanel
+                description="Upload a calendar file from school, work, Apple Calendar, Google Calendar, Outlook, or another app. You will review events before anything is saved."
+                title="Import a calendar file"
+              />
+            </section>
+          </div>
+        </div>
 
         <div className="mt-8 lg:mt-12">
           <h2 className="mb-5 text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
