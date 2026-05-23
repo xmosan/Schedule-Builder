@@ -22,7 +22,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   createStarterProjectsForPlannerType,
+  getOnboardingSetupRecommendations,
   type OnboardingAnswers,
+  type PlannerProfile,
 } from "@/lib/onboarding";
 import {
   getPlannedHours,
@@ -236,7 +238,13 @@ function AccountCard({ dataMessage, email, onSignOut }: AccountCardProps) {
   );
 }
 
-function SettingsQuickLinksCard() {
+type SettingsQuickLinksCardProps = {
+  onEditPreferences: () => void;
+};
+
+function SettingsQuickLinksCard({
+  onEditPreferences,
+}: SettingsQuickLinksCardProps) {
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
       <CardContent className="p-4 sm:p-6">
@@ -277,6 +285,77 @@ function SettingsQuickLinksCard() {
               </div>
             </div>
           </Link>
+
+          <button
+            className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-left text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+            type="button"
+            onClick={onEditPreferences}
+          >
+            <div className="flex items-center gap-3">
+              <div className="rounded-2xl bg-brand-coral/10 p-2 text-brand-coral">
+                <TargetIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Update preferences</p>
+                <p className="text-sm leading-5 text-brand-ink/58">
+                  Revisit your setup path and recommendations.
+                </p>
+              </div>
+            </div>
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+type SetupNextStepsCardProps = {
+  profile: PlannerProfile | null;
+};
+
+function SetupNextStepsCard({ profile }: SetupNextStepsCardProps) {
+  const plannerType = profile?.plannerType ?? "General planning";
+  const planningGoals = profile?.planningGoals ?? [];
+  const recommendations = getOnboardingSetupRecommendations(
+    plannerType,
+    planningGoals,
+  );
+
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+              Suggested setup
+            </p>
+            <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+              Recommended next steps
+            </h2>
+          </div>
+          <Badge variant="subtle">{plannerType}</Badge>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {recommendations.slice(0, 3).map((item) => (
+            <Link
+              className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+              href={item.href}
+              key={item.id}
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">{item.title}</p>
+                  <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                    {item.reason}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full bg-brand-teal/10 px-3 py-1 text-xs font-semibold text-brand-teal">
+                  {item.actionLabel}
+                </span>
+              </div>
+            </Link>
+          ))}
         </div>
       </CardContent>
     </Card>
@@ -297,8 +376,13 @@ export function ProjectDashboard() {
   const [importedEvents, setImportedEvents] = useState<ImportedCalendarEvent[]>(
     [],
   );
+  const [plannerProfile, setPlannerProfile] = useState<PlannerProfile | null>(
+    null,
+  );
   const [onboardingStatus, setOnboardingStatus] =
     useState<OnboardingStatus>("loading");
+  const [isEditingOnboardingPreferences, setIsEditingOnboardingPreferences] =
+    useState(false);
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
   const [canSyncProjects, setCanSyncProjects] = useState(false);
   const [canSyncWeeklyPlan, setCanSyncWeeklyPlan] = useState(false);
@@ -379,7 +463,9 @@ export function ProjectDashboard() {
         setPlanBlocks([]);
         setWorkShifts([]);
         setImportedEvents([]);
+        setPlannerProfile(null);
         setOnboardingStatus("loading");
+        setIsEditingOnboardingPreferences(false);
         setHasLoadedRemoteData(false);
         setCanSyncProjects(false);
         setCanSyncWeeklyPlan(false);
@@ -472,6 +558,8 @@ export function ProjectDashboard() {
             : migratedPlanBlocks;
 
         setOnboardingStatus(shouldShowOnboarding ? "required" : "completed");
+        setPlannerProfile(nextProfile);
+        setIsEditingOnboardingPreferences(false);
         setOnboardingError(
           profileLoadFailed && shouldShowOnboarding
             ? `We could not check your onboarding profile: ${getOnboardingProfileErrorMessage(profileResult.error)}`
@@ -519,7 +607,9 @@ export function ProjectDashboard() {
         setPlanBlocks(migratedPlanBlocks);
         setWorkShifts([]);
         setImportedEvents([]);
+        setPlannerProfile(null);
         setOnboardingStatus("completed");
+        setIsEditingOnboardingPreferences(false);
         setHasLoadedRemoteData(true);
         setCanSyncProjects(false);
         setCanSyncWeeklyPlan(false);
@@ -953,6 +1043,14 @@ export function ProjectDashboard() {
       }
 
       setOnboardingStatus("completed");
+      setIsEditingOnboardingPreferences(false);
+      setPlannerProfile(
+        result.data ?? {
+          userId: user.id,
+          ...answers,
+          onboardingCompleted: true,
+        },
+      );
       setDataMessage(null);
 
       if (projects.length === 0) {
@@ -1034,11 +1132,17 @@ export function ProjectDashboard() {
     );
   }
 
-  if (onboardingStatus === "required") {
+  if (onboardingStatus === "required" || isEditingOnboardingPreferences) {
     return (
       <OnboardingPanel
         error={onboardingError}
+        initialAnswers={plannerProfile}
         isSubmitting={isOnboardingSubmitting}
+        mode={isEditingOnboardingPreferences ? "edit" : "setup"}
+        onCancel={() => {
+          setIsEditingOnboardingPreferences(false);
+          setOnboardingError(null);
+        }}
         onComplete={completeOnboarding}
         onSkip={skipOnboarding}
       />
@@ -1116,6 +1220,7 @@ export function ProjectDashboard() {
 
             <section className="grid items-start gap-5 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
               <div className="flex min-w-0 flex-col gap-5 sm:gap-6">
+                <SetupNextStepsCard profile={plannerProfile} />
                 <TopTasksCard projects={topThree} />
               </div>
 
@@ -1256,7 +1361,12 @@ export function ProjectDashboard() {
                   completedProjects={completedProjects}
                 />
                 <FocusRuleCard />
-                <SettingsQuickLinksCard />
+                <SettingsQuickLinksCard
+                  onEditPreferences={() => {
+                    setOnboardingError(null);
+                    setIsEditingOnboardingPreferences(true);
+                  }}
+                />
               </div>
             </section>
           </>

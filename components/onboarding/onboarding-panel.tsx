@@ -1,16 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
-  desiredIntegrationOptions,
-  plannerTypes,
-  planningGoalOptions,
+  getDefaultGoalsForPlannerType,
+  getOnboardingSetupRecommendations,
+  getRecommendedDesiredIntegrations,
+  getUseCaseForPlannerType,
+  onboardingHelpGoalOptions,
+  onboardingUseCases,
   scheduleIntensityOptions,
-  type DesiredIntegration,
   type OnboardingAnswers,
+  type OnboardingUseCase,
   type PlannerType,
   type PlanningGoal,
   type ScheduleIntensity,
@@ -19,7 +22,10 @@ import { cn } from "@/lib/utils";
 
 type OnboardingPanelProps = {
   error: string | null;
+  initialAnswers?: OnboardingAnswers | null;
   isSubmitting: boolean;
+  mode?: "setup" | "edit";
+  onCancel?: () => void;
   onComplete: (answers: OnboardingAnswers) => Promise<void>;
   onSkip: () => Promise<void>;
 };
@@ -33,227 +39,368 @@ function toggleSelection<Option extends string>(
     : [...current, option];
 }
 
+function getInitialPlannerType(initialAnswers?: OnboardingAnswers | null) {
+  return initialAnswers?.plannerType === "Creator / entrepreneur"
+    ? "General planning"
+    : initialAnswers?.plannerType ?? "General planning";
+}
+
+function getInitialPlanningGoals(
+  plannerType: PlannerType,
+  initialAnswers?: OnboardingAnswers | null,
+) {
+  return initialAnswers?.planningGoals.length
+    ? initialAnswers.planningGoals
+    : getDefaultGoalsForPlannerType(plannerType);
+}
+
+function getInitialScheduleIntensity(initialAnswers?: OnboardingAnswers | null) {
+  return initialAnswers?.scheduleIntensity ?? "Moderate";
+}
+
+function UseCaseCard({
+  disabled,
+  isSelected,
+  useCase,
+  onSelect,
+}: {
+  disabled: boolean;
+  isSelected: boolean;
+  onSelect: () => void;
+  useCase: OnboardingUseCase;
+}) {
+  return (
+    <button
+      aria-pressed={isSelected}
+      className={cn(
+        "group rounded-[24px] border p-4 text-left transition-all sm:p-5",
+        isSelected
+          ? "border-brand-teal/30 bg-brand-teal/10 text-brand-teal shadow-[0_18px_44px_rgba(15,118,110,0.12)]"
+          : "border-brand-ink/10 bg-white/78 text-brand-ink hover:-translate-y-0.5 hover:border-brand-ink/20 hover:bg-white",
+      )}
+      disabled={disabled}
+      type="button"
+      onClick={onSelect}
+    >
+      <span className="text-base font-semibold">{useCase.label}</span>
+      <span
+        className={cn(
+          "mt-2 block text-sm leading-6",
+          isSelected ? "text-brand-teal/78" : "text-brand-ink/58",
+        )}
+      >
+        {useCase.description}
+      </span>
+    </button>
+  );
+}
+
 export function OnboardingPanel({
   error,
+  initialAnswers,
   isSubmitting,
+  mode = "setup",
+  onCancel,
   onComplete,
   onSkip,
 }: OnboardingPanelProps) {
-  const [plannerType, setPlannerType] = useState<PlannerType>("General planning");
-  const [planningGoals, setPlanningGoals] = useState<PlanningGoal[]>([]);
-  const [desiredIntegrations, setDesiredIntegrations] = useState<
-    DesiredIntegration[]
-  >([]);
+  const initialPlannerType = getInitialPlannerType(initialAnswers);
+  const [step, setStep] = useState(0);
+  const [plannerType, setPlannerType] =
+    useState<PlannerType>(initialPlannerType);
+  const [planningGoals, setPlanningGoals] = useState<PlanningGoal[]>(
+    getInitialPlanningGoals(initialPlannerType, initialAnswers),
+  );
   const [scheduleIntensity, setScheduleIntensity] =
-    useState<ScheduleIntensity>("Moderate");
+    useState<ScheduleIntensity>(getInitialScheduleIntensity(initialAnswers));
 
+  const selectedUseCase = getUseCaseForPlannerType(plannerType);
+  const desiredIntegrations = useMemo(
+    () => getRecommendedDesiredIntegrations(plannerType, planningGoals),
+    [plannerType, planningGoals],
+  );
+  const setupRecommendations = useMemo(
+    () => getOnboardingSetupRecommendations(plannerType, planningGoals),
+    [plannerType, planningGoals],
+  );
   const answers: OnboardingAnswers = {
     plannerType,
     planningGoals,
     desiredIntegrations,
     scheduleIntensity,
   };
+  const progress = `${step + 1} of 3`;
+
+  function selectUseCase(useCase: OnboardingUseCase) {
+    const nextPlannerType = useCase.plannerType as PlannerType;
+
+    setPlannerType(nextPlannerType);
+    setPlanningGoals(getDefaultGoalsForPlannerType(nextPlannerType));
+  }
 
   return (
     <div className="px-3 py-6 sm:px-6 sm:py-10 lg:px-8 lg:py-14">
       <div className="app-shell">
-        <div className="mx-auto max-w-3xl">
-          <Card className="overflow-hidden rounded-[30px] border-white/75 bg-white/90">
-            <CardContent className="p-5 sm:p-7 lg:p-8">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge>Quick setup</Badge>
-                <Badge variant="subtle">2 minutes</Badge>
+        <div className="mx-auto max-w-5xl">
+          <Card className="overflow-hidden rounded-[32px] border-white/75 bg-white/90 shadow-[0_28px_70px_rgba(18,32,47,0.08)]">
+            <CardContent className="p-5 sm:p-7 lg:p-9">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge>{mode === "edit" ? "Update setup" : "Guided setup"}</Badge>
+                  <Badge variant="subtle">{progress}</Badge>
+                  <Badge variant="subtle">No passwords required</Badge>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-brand-ink/[0.06] sm:w-52">
+                  <div
+                    className="h-full rounded-full bg-brand-teal transition-all"
+                    style={{ width: `${((step + 1) / 3) * 100}%` }}
+                  />
+                </div>
               </div>
 
-              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-4xl">
-                Personalize Schedule Builder.
-              </h1>
+              <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-teal">
+                    Onboarding v2
+                  </p>
+                  <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+                    Set up the planner around your real week.
+                  </h1>
+                  <p className="mt-3 text-sm leading-6 text-brand-ink/65 sm:text-base">
+                    Choose your main use case and Schedule Builder will suggest
+                    the cleanest first steps. You can skip this or change it
+                    later from Settings.
+                  </p>
 
-              <p className="mt-3 text-sm leading-6 text-brand-ink/65 sm:text-base">
-                We&apos;ll use this to shape your starter projects and
-                recommend useful integrations later.
-              </p>
-
-              <div className="mt-6 space-y-4 sm:mt-7 sm:space-y-5">
-                <section className="rounded-[26px] border border-brand-ink/8 bg-white/70 p-4 sm:p-5">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                      Question 1
+                  <div className="mt-5 rounded-[26px] border border-brand-ink/8 bg-brand-ink/[0.025] p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+                      Recommended path
                     </p>
-                    <h2 className="mt-2 text-lg font-semibold text-brand-ink sm:text-xl">
-                      What are you using Schedule Builder for?
-                    </h2>
+                    <p className="mt-2 text-lg font-semibold text-brand-ink">
+                      {selectedUseCase.label}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                      {selectedUseCase.description}
+                    </p>
                   </div>
+                </div>
 
-                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    {plannerTypes.map((option) => {
-                      const isSelected = plannerType === option;
+                <div className="min-w-0 rounded-[30px] border border-brand-ink/8 bg-white/76 p-4 sm:p-5">
+                  {step === 0 ? (
+                    <section>
+                      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
+                        Step 1
+                      </p>
+                      <h2 className="mt-2 text-xl font-semibold text-brand-ink sm:text-2xl">
+                        What are you planning around?
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        Pick the closest fit. This only shapes recommendations;
+                        nothing gets locked.
+                      </p>
 
-                      return (
-                        <button
-                          key={option}
-                          aria-pressed={isSelected}
-                          className={cn(
-                            "rounded-[20px] border px-4 py-3 text-left text-sm font-semibold",
-                            isSelected
-                              ? "border-brand-teal/30 bg-brand-teal/10 text-brand-teal shadow-[0_14px_34px_rgba(15,118,110,0.12)]"
-                              : "border-brand-ink/10 bg-white/78 text-brand-ink/72 hover:border-brand-ink/20 hover:bg-white",
-                          )}
+                      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                        {onboardingUseCases.map((useCase) => (
+                          <UseCaseCard
+                            disabled={isSubmitting}
+                            isSelected={plannerType === useCase.plannerType}
+                            key={useCase.id}
+                            useCase={useCase}
+                            onSelect={() => selectUseCase(useCase)}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {step === 1 ? (
+                    <section>
+                      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
+                        Step 2
+                      </p>
+                      <h2 className="mt-2 text-xl font-semibold text-brand-ink sm:text-2xl">
+                        What should Schedule Builder help with first?
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        Choose what feels useful right away. You can update
+                        this later.
+                      </p>
+
+                      <div className="mt-5 flex flex-wrap gap-2">
+                        {onboardingHelpGoalOptions.map((option) => {
+                          const isSelected = planningGoals.includes(option);
+
+                          return (
+                            <button
+                              aria-pressed={isSelected}
+                              className={cn(
+                                "min-h-11 rounded-full border px-4 py-2 text-sm font-semibold transition-all",
+                                isSelected
+                                  ? "border-brand-ocean/30 bg-brand-ocean/10 text-brand-ocean shadow-[0_12px_28px_rgba(21,94,117,0.1)]"
+                                  : "border-brand-ink/10 bg-white/78 text-brand-ink/68 hover:border-brand-ink/20 hover:bg-white",
+                              )}
+                              disabled={isSubmitting}
+                              key={option}
+                              type="button"
+                              onClick={() =>
+                                setPlanningGoals((current) =>
+                                  toggleSelection(current, option),
+                                )
+                              }
+                            >
+                              {option}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {step === 2 ? (
+                    <section>
+                      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
+                        Step 3
+                      </p>
+                      <h2 className="mt-2 text-xl font-semibold text-brand-ink sm:text-2xl">
+                        Your recommended setup checklist
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        Finish setup, then use these shortcuts from Dashboard
+                        to start with the highest-value steps.
+                      </p>
+
+                      <div className="mt-5 grid gap-3">
+                        {setupRecommendations.map((item, index) => (
+                          <div
+                            className="rounded-[22px] border border-brand-ink/8 bg-white/78 p-4"
+                            key={item.id}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-brand-ink">
+                                  {index + 1}. {item.title}
+                                </p>
+                                <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                                  {item.reason}
+                                </p>
+                              </div>
+                              <span className="rounded-full bg-brand-ink/[0.045] px-3 py-1 text-xs font-semibold text-brand-ink/58">
+                                {item.actionLabel}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-5 rounded-[22px] border border-brand-ink/8 bg-brand-ink/[0.025] p-4">
+                        <p className="text-sm font-semibold text-brand-ink">
+                          How full does your schedule feel?
+                        </p>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                          {scheduleIntensityOptions.map((option) => {
+                            const isSelected = scheduleIntensity === option;
+
+                            return (
+                              <button
+                                aria-pressed={isSelected}
+                                className={cn(
+                                  "rounded-[18px] border px-4 py-3 text-center text-sm font-semibold transition-all",
+                                  isSelected
+                                    ? "border-brand-teal/30 bg-brand-teal/10 text-brand-teal shadow-[0_14px_34px_rgba(15,118,110,0.12)]"
+                                    : "border-brand-ink/10 bg-white/78 text-brand-ink/72 hover:border-brand-ink/20 hover:bg-white",
+                                )}
+                                disabled={isSubmitting}
+                                key={option}
+                                type="button"
+                                onClick={() => setScheduleIntensity(option)}
+                              >
+                                {option}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="mt-5 rounded-[22px] border border-brand-teal/12 bg-brand-teal/[0.06] p-4">
+                        <p className="text-sm font-semibold text-brand-teal">
+                          Recommended tools
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {desiredIntegrations.map((integration) => (
+                            <span
+                              className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-brand-teal"
+                              key={integration}
+                            >
+                              {integration}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {error ? (
+                    <p className="mt-5 rounded-[22px] border border-brand-coral/15 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
+                      {error}
+                    </p>
+                  ) : null}
+
+                  <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex gap-2">
+                      {step > 0 ? (
+                        <Button
                           disabled={isSubmitting}
                           type="button"
-                          onClick={() => setPlannerType(option)}
+                          variant="outline"
+                          onClick={() => setStep((current) => current - 1)}
                         >
-                          {option}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section className="rounded-[26px] border border-brand-ink/8 bg-white/70 p-4 sm:p-5">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                      Question 2
-                    </p>
-                    <h2 className="mt-2 text-lg font-semibold text-brand-ink sm:text-xl">
-                      What do you want help planning?
-                    </h2>
-                    <p className="mt-1 text-sm text-brand-ink/55">
-                      Choose as many as apply.
-                    </p>
-                  </div>
-
-                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    {planningGoalOptions.map((option) => {
-                      const isSelected = planningGoals.includes(option);
-
-                      return (
-                        <button
-                          key={option}
-                          aria-pressed={isSelected}
-                          className={cn(
-                            "rounded-[20px] border px-4 py-3 text-left text-sm font-semibold",
-                            isSelected
-                              ? "border-brand-ocean/30 bg-brand-ocean/10 text-brand-ocean shadow-[0_14px_34px_rgba(21,94,117,0.1)]"
-                              : "border-brand-ink/10 bg-white/78 text-brand-ink/72 hover:border-brand-ink/20 hover:bg-white",
-                          )}
+                          Back
+                        </Button>
+                      ) : null}
+                      {mode === "edit" ? (
+                        <Button
                           disabled={isSubmitting}
                           type="button"
-                          onClick={() =>
-                            setPlanningGoals((current) =>
-                              toggleSelection(current, option),
-                            )
-                          }
+                          variant="outline"
+                          onClick={onCancel}
                         >
-                          {option}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section className="rounded-[26px] border border-brand-ink/8 bg-white/70 p-4 sm:p-5">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                      Question 3
-                    </p>
-                    <h2 className="mt-2 text-lg font-semibold text-brand-ink sm:text-xl">
-                      Which integrations might you want later?
-                    </h2>
-                    <p className="mt-1 text-sm text-brand-ink/55">
-                      We will not connect calendars or platforms yet.
-                    </p>
-                  </div>
-
-                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    {desiredIntegrationOptions.map((option) => {
-                      const isSelected = desiredIntegrations.includes(option);
-
-                      return (
-                        <button
-                          key={option}
-                          aria-pressed={isSelected}
-                          className={cn(
-                            "rounded-[20px] border px-4 py-3 text-left text-sm font-semibold",
-                            isSelected
-                              ? "border-brand-coral/30 bg-brand-coral/10 text-brand-coral shadow-[0_14px_34px_rgba(199,91,57,0.1)]"
-                              : "border-brand-ink/10 bg-white/78 text-brand-ink/72 hover:border-brand-ink/20 hover:bg-white",
-                          )}
+                          Cancel
+                        </Button>
+                      ) : (
+                        <Button
                           disabled={isSubmitting}
                           type="button"
-                          onClick={() =>
-                            setDesiredIntegrations((current) =>
-                              toggleSelection(current, option),
-                            )
-                          }
+                          variant="outline"
+                          onClick={() => void onSkip()}
                         >
-                          {option}
-                        </button>
-                      );
-                    })}
+                          Skip for now
+                        </Button>
+                      )}
+                    </div>
+
+                    {step < 2 ? (
+                      <Button
+                        disabled={isSubmitting}
+                        type="button"
+                        onClick={() => setStep((current) => current + 1)}
+                      >
+                        Continue
+                      </Button>
+                    ) : (
+                      <Button
+                        disabled={isSubmitting}
+                        type="button"
+                        onClick={() => void onComplete(answers)}
+                      >
+                        {isSubmitting
+                          ? "Saving setup..."
+                          : mode === "edit"
+                            ? "Save preferences"
+                            : "Finish setup"}
+                      </Button>
+                    )}
                   </div>
-                </section>
-
-                <section className="rounded-[26px] border border-brand-ink/8 bg-white/70 p-4 sm:p-5">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                      Question 4
-                    </p>
-                    <h2 className="mt-2 text-lg font-semibold text-brand-ink sm:text-xl">
-                      How intense is your schedule right now?
-                    </h2>
-                  </div>
-
-                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                    {scheduleIntensityOptions.map((option) => {
-                      const isSelected = scheduleIntensity === option;
-
-                      return (
-                        <button
-                          key={option}
-                          aria-pressed={isSelected}
-                          className={cn(
-                            "rounded-[20px] border px-4 py-3 text-center text-sm font-semibold",
-                            isSelected
-                              ? "border-brand-teal/30 bg-brand-teal/10 text-brand-teal shadow-[0_14px_34px_rgba(15,118,110,0.12)]"
-                              : "border-brand-ink/10 bg-white/78 text-brand-ink/72 hover:border-brand-ink/20 hover:bg-white",
-                          )}
-                          disabled={isSubmitting}
-                          type="button"
-                          onClick={() => setScheduleIntensity(option)}
-                        >
-                          {option}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              </div>
-
-              {error ? (
-                <p className="mt-5 rounded-[22px] border border-brand-coral/15 bg-brand-coral/8 p-4 text-sm leading-6 text-brand-coral">
-                  {error}
-                </p>
-              ) : null}
-
-              <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
-                <Button
-                  className="w-full sm:w-auto"
-                  disabled={isSubmitting}
-                  type="button"
-                  onClick={() => void onComplete(answers)}
-                >
-                  {isSubmitting ? "Saving setup..." : "Finish setup"}
-                </Button>
-                <Button
-                  className="w-full sm:w-auto"
-                  disabled={isSubmitting}
-                  type="button"
-                  variant="outline"
-                  onClick={() => void onSkip()}
-                >
-                  Skip for now
-                </Button>
+                </div>
               </div>
             </CardContent>
           </Card>

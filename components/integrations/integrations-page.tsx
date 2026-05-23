@@ -48,18 +48,10 @@ const defaultRecommendationsByPlannerType: Record<
   DesiredIntegration[]
 > = {
   Student: ["D2L / Brightspace", "Google Calendar", "ICS import/export"],
-  Professional: ["Google Calendar", "Outlook Calendar", "ICS import/export"],
-  "Organization leader": [
-    "Google Calendar",
-    "Outlook Calendar",
-    "Apple Calendar",
-  ],
-  "Creator / entrepreneur": [
-    "Google Calendar",
-    "Apple Calendar",
-    "ICS import/export",
-  ],
-  "General planning": ["Google Calendar", "Apple Calendar", "ICS import/export"],
+  Professional: ["Google Calendar", "ICS import/export"],
+  "Organization leader": ["Google Calendar", "ICS import/export"],
+  "Creator / entrepreneur": ["Google Calendar", "ICS import/export"],
+  "General planning": ["Google Calendar", "ICS import/export"],
 };
 
 const recommendationReasons: Record<
