@@ -1,8 +1,10 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import {
   normalizeDesiredIntegrations,
+  normalizeDesiredIntegrationsForStorage,
   normalizePlannerType,
   normalizePlanningGoals,
+  normalizePlanningGoalsForStorage,
   normalizeScheduleIntensity,
   type OnboardingAnswers,
   type PlannerProfile,
@@ -306,8 +308,10 @@ function mapOnboardingAnswersToRow(
   return {
     user_id: userId,
     planner_type: answers.plannerType,
-    planning_goals: answers.planningGoals,
-    desired_integrations: answers.desiredIntegrations,
+    planning_goals: normalizePlanningGoalsForStorage(answers.planningGoals),
+    desired_integrations: normalizeDesiredIntegrationsForStorage(
+      answers.desiredIntegrations,
+    ),
     schedule_intensity: answers.scheduleIntensity,
     onboarding_completed: true,
   };

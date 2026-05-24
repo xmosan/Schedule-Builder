@@ -87,6 +87,36 @@ export type DesiredIntegration = (typeof desiredIntegrationOptions)[number];
 export type ScheduleIntensity = (typeof scheduleIntensityOptions)[number];
 export type OnboardingUseCase = (typeof onboardingUseCases)[number];
 
+type StoredPlanningGoal = (typeof legacyPlanningGoalOptions)[number];
+
+const storageGoalByUiGoal: Record<
+  (typeof onboardingHelpGoalOptions)[number],
+  StoredPlanningGoal
+> = {
+  "Find open time": "Meetings and events",
+  "Avoid conflicts": "Meetings and events",
+  "Build weekly plans": "Projects and deadlines",
+  "Import calendars": "Meetings and events",
+  "Sync plans to Google Calendar": "Projects and deadlines",
+};
+
+const uiGoalByStoredGoal: Record<StoredPlanningGoal, PlanningGoal> = {
+  "Classes and assignments": "Import calendars",
+  "Projects and deadlines": "Build weekly plans",
+  "Meetings and events": "Avoid conflicts",
+  "Organization tasks": "Build weekly plans",
+  "Content or business work": "Build weekly plans",
+  "Personal goals": "Find open time",
+};
+
+const storedDesiredIntegrationOptions = [
+  "Google Calendar",
+  "Apple Calendar",
+  "Outlook Calendar",
+  "D2L / Brightspace",
+  "ICS import/export",
+] as const satisfies readonly DesiredIntegration[];
+
 export type OnboardingSetupRecommendation = {
   id: string;
   title: string;
@@ -524,14 +554,26 @@ function isOneOf<const Values extends readonly string[]>(
   return typeof value === "string" && (options as readonly string[]).includes(value);
 }
 
+function uniqueOptions<Option extends string>(options: Option[]) {
+  return [...new Set(options)];
+}
+
 export function normalizePlannerType(value: unknown): PlannerType {
   return isOneOf(value, plannerTypes) ? value : "General planning";
 }
 
 export function normalizePlanningGoals(value: unknown): PlanningGoal[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is PlanningGoal => isOneOf(item, planningGoalOptions))
-    : [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return uniqueOptions(
+    value
+      .filter((item): item is PlanningGoal => isOneOf(item, planningGoalOptions))
+      .map((item) =>
+        isOneOf(item, legacyPlanningGoalOptions) ? uiGoalByStoredGoal[item] : item,
+      ),
+  );
 }
 
 export function normalizeDesiredIntegrations(value: unknown): DesiredIntegration[] {
@@ -540,6 +582,24 @@ export function normalizeDesiredIntegrations(value: unknown): DesiredIntegration
         isOneOf(item, desiredIntegrationOptions),
       )
     : [];
+}
+
+export function normalizePlanningGoalsForStorage(
+  goals: PlanningGoal[],
+): StoredPlanningGoal[] {
+  return uniqueOptions(
+    goals.map((goal) =>
+      isOneOf(goal, legacyPlanningGoalOptions) ? goal : storageGoalByUiGoal[goal],
+    ),
+  );
+}
+
+export function normalizeDesiredIntegrationsForStorage(
+  integrations: DesiredIntegration[],
+) {
+  return integrations.filter((integration) =>
+    isOneOf(integration, storedDesiredIntegrationOptions),
+  );
 }
 
 export function normalizeScheduleIntensity(value: unknown): ScheduleIntensity {
@@ -557,6 +617,19 @@ export function getDefaultGoalsForPlannerType(
   plannerType: PlannerType,
 ): PlanningGoal[] {
   return [...getUseCaseForPlannerType(plannerType).defaultGoals] as PlanningGoal[];
+}
+
+export function isPlannerProfileOnboarded(
+  profile: PlannerProfile | null | undefined,
+) {
+  if (!profile?.onboardingCompleted) {
+    return false;
+  }
+
+  return (
+    profile.planningGoals.length > 0 ||
+    profile.desiredIntegrations.length > 0
+  );
 }
 
 export function getRecommendedDesiredIntegrations(

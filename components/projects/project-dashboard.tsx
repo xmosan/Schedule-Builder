@@ -22,7 +22,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   createStarterProjectsForPlannerType,
+  getDefaultGoalsForPlannerType,
   getOnboardingSetupRecommendations,
+  getRecommendedDesiredIntegrations,
+  isPlannerProfileOnboarded,
   type OnboardingAnswers,
   type PlannerProfile,
 } from "@/lib/onboarding";
@@ -496,17 +499,15 @@ export function ProjectDashboard() {
     const legacyStoredProjects = parseStoredProjects(
       window.localStorage.getItem(getProjectsStorageKey()),
     );
-    const storedProjects = userStoredProjects ?? legacyStoredProjects;
     const userStoredPlanBlocks = parseStoredWeeklyPlan(
       window.localStorage.getItem(weeklyPlanStorageKey),
     );
     const legacyStoredPlanBlocks = parseStoredWeeklyPlan(
       window.localStorage.getItem(getWeeklyPlanStorageKey()),
     );
-    const migratedPlanBlocks = userStoredPlanBlocks ?? legacyStoredPlanBlocks ?? [];
 
-    setProjects(storedProjects ?? []);
-    setPlanBlocks(migratedPlanBlocks);
+    setProjects(userStoredProjects ?? []);
+    setPlanBlocks(userStoredPlanBlocks ?? []);
     setOnboardingStatus("loading");
     setHasLoadedRemoteData(false);
     setCanSyncProjects(false);
@@ -536,14 +537,15 @@ export function ProjectDashboard() {
 
         const profileLoadFailed = Boolean(profileResult.error);
         const nextProfile = profileResult.error == null ? profileResult.data : null;
-        const hasCompletedOnboarding = Boolean(nextProfile?.onboardingCompleted);
-        const hasExistingSchedulerData =
-          (projectsResult.error == null && projectsResult.data.length > 0) ||
-          (weeklyPlanResult.error == null && weeklyPlanResult.data.length > 0) ||
-          Boolean(userStoredProjects?.length) ||
-          Boolean(userStoredPlanBlocks?.length);
-        const shouldShowOnboarding =
-          !hasCompletedOnboarding && !hasExistingSchedulerData;
+        const hasCompletedOnboarding = isPlannerProfileOnboarded(nextProfile);
+        const shouldShowOnboarding = !hasCompletedOnboarding;
+        const storedProjects =
+          userStoredProjects ??
+          (hasCompletedOnboarding ? legacyStoredProjects : null);
+        const migratedPlanBlocks =
+          userStoredPlanBlocks ??
+          (hasCompletedOnboarding ? legacyStoredPlanBlocks : null) ??
+          [];
         const nextProjects =
           projectsResult.error == null
             ? projectsResult.data.length > 0
@@ -603,8 +605,8 @@ export function ProjectDashboard() {
           return;
         }
 
-        setProjects(storedProjects ?? []);
-        setPlanBlocks(migratedPlanBlocks);
+        setProjects(userStoredProjects ?? []);
+        setPlanBlocks(userStoredPlanBlocks ?? []);
         setWorkShifts([]);
         setImportedEvents([]);
         setPlannerProfile(null);
@@ -1066,10 +1068,16 @@ export function ProjectDashboard() {
   }
 
   async function skipOnboarding() {
+    const plannerType = "General planning";
+    const planningGoals = getDefaultGoalsForPlannerType(plannerType);
+
     await completeOnboarding({
-      plannerType: "General planning",
-      planningGoals: [],
-      desiredIntegrations: [],
+      plannerType,
+      planningGoals,
+      desiredIntegrations: getRecommendedDesiredIntegrations(
+        plannerType,
+        planningGoals,
+      ),
       scheduleIntensity: "Moderate",
     });
   }
