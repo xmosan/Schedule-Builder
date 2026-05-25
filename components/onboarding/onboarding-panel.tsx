@@ -58,6 +58,30 @@ function getInitialScheduleIntensity(initialAnswers?: OnboardingAnswers | null) 
   return initialAnswers?.scheduleIntensity ?? "Moderate";
 }
 
+const goalDisplayLabels: Partial<Record<PlanningGoal, string>> = {
+  "Sync plans to Google Calendar": "Send plans to Google Calendar",
+};
+
+const toolDescriptions: Partial<Record<string, string>> = {
+  "Google Calendar": "bring in existing events",
+  "ICS import/export": "move plans between calendar apps",
+  "D2L / Brightspace": "import course events",
+  "Apple Calendar": "use calendar files today",
+  "Outlook Calendar": "support planned later",
+};
+
+function getGoalDisplayLabel(goal: PlanningGoal) {
+  return goalDisplayLabels[goal] ?? goal;
+}
+
+function SelectedPathPill({ label }: { label: string }) {
+  return (
+    <span className="inline-flex w-fit items-center rounded-full border border-brand-teal/15 bg-brand-teal/[0.08] px-3 py-1 text-xs font-semibold text-brand-teal">
+      Selected path: {label}
+    </span>
+  );
+}
+
 function UseCaseCard({
   disabled,
   isSelected,
@@ -130,6 +154,7 @@ export function OnboardingPanel({
     scheduleIntensity,
   };
   const progress = `${step + 1} of 3`;
+  const isIntroStep = step === 0;
 
   function selectUseCase(useCase: OnboardingUseCase) {
     const nextPlannerType = useCase.plannerType as PlannerType;
@@ -158,45 +183,51 @@ export function OnboardingPanel({
                 </div>
               </div>
 
-              <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
-                <div>
-                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-teal">
-                    Onboarding v2
-                  </p>
-                  <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
-                    Set up the planner around your real week.
-                  </h1>
-                  <p className="mt-3 text-sm leading-6 text-brand-ink/65 sm:text-base">
-                    Choose your main use case and Schedule Builder will suggest
-                    the cleanest first steps. You can skip this or change it
-                    later from Settings.
-                  </p>
+              <div
+                className={cn(
+                  "mt-6 grid gap-6 lg:items-start",
+                  isIntroStep
+                    ? "lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]"
+                    : "mx-auto max-w-3xl",
+                )}
+              >
+                {isIntroStep ? (
+                  <div>
+                    <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-teal">
+                      Onboarding v2
+                    </p>
+                    <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+                      Set up the planner around your real week.
+                    </h1>
+                    <p className="mt-3 text-sm leading-6 text-brand-ink/65 sm:text-base">
+                      Pick your main use case. You can change this later.
+                    </p>
 
-                  <div className="mt-5 rounded-[26px] border border-brand-ink/8 bg-brand-ink/[0.025] p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
-                      Recommended path
-                    </p>
-                    <p className="mt-2 text-lg font-semibold text-brand-ink">
-                      {selectedUseCase.label}
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                      {selectedUseCase.description}
-                    </p>
+                    <div className="mt-5 rounded-[26px] border border-brand-teal/12 bg-brand-teal/[0.06] p-4">
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-teal">
+                        Selected path
+                      </p>
+                      <p className="mt-2 text-lg font-semibold text-brand-ink">
+                        {selectedUseCase.label}
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        {selectedUseCase.description}
+                      </p>
+                    </div>
                   </div>
-                </div>
+                ) : null}
 
                 <div className="min-w-0 rounded-[30px] border border-brand-ink/8 bg-white/76 p-4 sm:p-5">
                   {step === 0 ? (
                     <section>
                       <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                        Step 1
+                        Step 1 of 3
                       </p>
                       <h2 className="mt-2 text-xl font-semibold text-brand-ink sm:text-2xl">
                         What are you planning around?
                       </h2>
                       <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                        Pick the closest fit. This only shapes recommendations;
-                        nothing gets locked.
+                        Pick the closest fit. Nothing gets locked.
                       </p>
 
                       <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -216,14 +247,16 @@ export function OnboardingPanel({
                   {step === 1 ? (
                     <section>
                       <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                        Step 2
+                        Step 2 of 3
                       </p>
+                      <div className="mt-2">
+                        <SelectedPathPill label={selectedUseCase.label} />
+                      </div>
                       <h2 className="mt-2 text-xl font-semibold text-brand-ink sm:text-2xl">
                         What should Schedule Builder help with first?
                       </h2>
                       <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                        Choose what feels useful right away. You can update
-                        this later.
+                        Choose one or more.
                       </p>
 
                       <div className="mt-5 flex flex-wrap gap-2">
@@ -248,52 +281,17 @@ export function OnboardingPanel({
                                 )
                               }
                             >
-                              {option}
+                              {getGoalDisplayLabel(option)}
                             </button>
                           );
                         })}
                       </div>
-                    </section>
-                  ) : null}
 
-                  {step === 2 ? (
-                    <section>
-                      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
-                        Step 3
-                      </p>
-                      <h2 className="mt-2 text-xl font-semibold text-brand-ink sm:text-2xl">
-                        Your recommended setup checklist
-                      </h2>
-                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                        Finish setup, then use these shortcuts from Dashboard
-                        to start with the highest-value steps.
-                      </p>
-
-                      <div className="mt-5 grid gap-3">
-                        {setupRecommendations.map((item, index) => (
-                          <div
-                            className="rounded-[22px] border border-brand-ink/8 bg-white/78 p-4"
-                            key={item.id}
-                          >
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="text-sm font-semibold text-brand-ink">
-                                  {index + 1}. {item.title}
-                                </p>
-                                <p className="mt-1 text-sm leading-6 text-brand-ink/58">
-                                  {item.reason}
-                                </p>
-                              </div>
-                              <span className="rounded-full bg-brand-ink/[0.045] px-3 py-1 text-xs font-semibold text-brand-ink/58">
-                                {item.actionLabel}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="mt-5 rounded-[22px] border border-brand-ink/8 bg-brand-ink/[0.025] p-4">
-                        <p className="text-sm font-semibold text-brand-ink">
+                      <div className="mt-6 rounded-[22px] border border-brand-ink/8 bg-brand-ink/[0.025] p-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+                          One more detail
+                        </p>
+                        <p className="mt-2 text-sm font-semibold text-brand-ink">
                           How full does your schedule feel?
                         </p>
                         <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -320,22 +318,86 @@ export function OnboardingPanel({
                           })}
                         </div>
                       </div>
+                    </section>
+                  ) : null}
+
+                  {step === 2 ? (
+                    <section>
+                      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brand-ink/45">
+                        Step 3 of 3
+                      </p>
+                      <div className="mt-2">
+                        <SelectedPathPill label={selectedUseCase.label} />
+                      </div>
+                      <h2 className="mt-2 text-xl font-semibold text-brand-ink sm:text-2xl">
+                        Your setup path is ready
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                        Start with these steps, then adjust anytime from
+                        Dashboard or Settings.
+                      </p>
+
+                      {planningGoals.length > 0 ? (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {planningGoals.map((goal) => (
+                            <span
+                              className="rounded-full bg-brand-ink/[0.045] px-3 py-1 text-xs font-semibold text-brand-ink/58"
+                              key={goal}
+                            >
+                              {getGoalDisplayLabel(goal)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <div className="mt-5 grid gap-3">
+                        {setupRecommendations.map((item, index) => (
+                          <div
+                            className="rounded-[22px] border border-brand-ink/8 bg-white/78 p-4"
+                            key={item.id}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-brand-ink">
+                                  {index + 1}. {item.title}
+                                </p>
+                                <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+                                  {item.reason}
+                                </p>
+                              </div>
+                              <span className="rounded-full bg-brand-ink/[0.045] px-3 py-1 text-xs font-semibold text-brand-ink/58">
+                                {item.actionLabel}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
 
                       <div className="mt-5 rounded-[22px] border border-brand-teal/12 bg-brand-teal/[0.06] p-4">
                         <p className="text-sm font-semibold text-brand-teal">
                           Recommended tools
                         </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
                           {desiredIntegrations.map((integration) => (
                             <span
-                              className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-brand-teal"
+                              className="rounded-[16px] bg-white/80 px-3 py-2 text-xs font-semibold text-brand-ink/72"
                               key={integration}
                             >
-                              {integration}
+                              <span className="text-brand-teal">{integration}</span>
+                              {toolDescriptions[integration] ? (
+                                <span className="text-brand-ink/45">
+                                  {" "}
+                                  - {toolDescriptions[integration]}
+                                </span>
+                              ) : null}
                             </span>
                           ))}
                         </div>
                       </div>
+
+                      <p className="mt-5 rounded-[20px] bg-brand-ink/[0.035] px-4 py-3 text-sm font-semibold text-brand-ink">
+                        You&apos;re ready to start planning.
+                      </p>
                     </section>
                   ) : null}
 
@@ -396,7 +458,7 @@ export function OnboardingPanel({
                           ? "Saving setup..."
                           : mode === "edit"
                             ? "Save preferences"
-                            : "Finish setup"}
+                            : "Finish and open Dashboard"}
                       </Button>
                     )}
                   </div>

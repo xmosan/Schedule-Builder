@@ -13,7 +13,6 @@ import {
 } from "@/components/projects/icons";
 import { AddProjectForm } from "@/components/projects/add-project-form";
 import { ProjectList } from "@/components/projects/project-list";
-import { TopTasksCard } from "@/components/projects/top-tasks-card";
 import { WeeklyPlanSection } from "@/components/projects/weekly-plan-section";
 import { WeeklySummaryCard } from "@/components/projects/weekly-summary-card";
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
@@ -21,13 +20,23 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  buildCalendarDays,
+  getCurrentWeekStart,
+  getProjectDeadlineBuckets,
+  type CalendarDaySchedule,
+} from "@/lib/calendar";
+import {
+  findWeeklyPlanImportedEventConflicts,
+  findWeeklyPlanWorkConflicts,
+} from "@/lib/schedule-conflicts";
+import {
   createStarterProjectsForPlannerType,
   getDefaultGoalsForPlannerType,
-  getOnboardingSetupRecommendations,
   getRecommendedDesiredIntegrations,
   isPlannerProfileOnboarded,
   type OnboardingAnswers,
   type PlannerProfile,
+  type PlannerType,
 } from "@/lib/onboarding";
 import {
   getPlannedHours,
@@ -51,9 +60,21 @@ import {
   replaceProjectsForUser,
   replaceWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
-import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
-import type { WorkShift } from "@/lib/work-schedule";
 import {
+  formatImportedEventSource,
+  formatImportedEventTimeRange,
+  isScheduleBuilderExportedEvent,
+  isSchoolCalendarEvent,
+  type ImportedCalendarEvent,
+} from "@/lib/imported-calendar";
+import {
+  formatWorkShiftRange,
+  getWorkShiftDurationHours,
+  type WorkShift,
+} from "@/lib/work-schedule";
+import {
+  formatEstimatedHours,
+  formatStartTime,
   getWeeklyPlanStorageKey,
   parseStoredWeeklyPlan,
   type WeeklyPlanBlock,
@@ -62,6 +83,51 @@ import {
 type AuthStatus = "loading" | "signed_in" | "signed_out";
 type OnboardingStatus = "loading" | "required" | "completed";
 type SchedulerSection = "dashboard" | "projects" | "plan" | "settings";
+
+type GoogleDashboardStatus = {
+  connected?: boolean;
+  lastSyncedAt?: string | null;
+  status?: string;
+  syncCalendarName?: string | null;
+  syncEnabled?: boolean;
+};
+
+type GoogleSyncDashboardStatus = {
+  removedSyncedEvents?: Array<{
+    id: string;
+    syncedStartsAt: string;
+    syncedTitle: string;
+  }>;
+  statuses?: Array<{
+    syncStatus: "synced" | "needs_attention";
+    weeklyPlanBlockId: string;
+  }>;
+  syncEnabled?: boolean;
+};
+
+type DashboardAction = {
+  description: string;
+  href: string;
+  id: string;
+  label: string;
+  title: string;
+};
+
+type DashboardTopThreeItem = {
+  description: string;
+  href: string;
+  id: string;
+  label: string;
+  title: string;
+};
+
+type DashboardAttentionItem = {
+  description: string;
+  href: string;
+  id: string;
+  label: string;
+  title: string;
+};
 
 function getSchedulerSection(pathname: string): SchedulerSection {
   if (pathname.startsWith("/projects")) {
@@ -178,6 +244,668 @@ function clearAuthUrlError() {
   url.search = searchParams.toString();
   url.hash = hashParams.toString();
   window.history.replaceState(null, "", url.toString());
+}
+
+function formatDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatDashboardDate(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    weekday: "short",
+  }).format(date);
+}
+
+function getDashboardPersona(plannerType: PlannerType) {
+  if (plannerType === "Student") {
+    return {
+      eyebrow: "Student command center",
+      title: "Keep classes, deadlines, and study time in one calm view.",
+      subtitle:
+        "Start with school events and study blocks, then use the Assistant to find open time around the rest of your week.",
+    };
+  }
+
+  if (plannerType === "Professional") {
+    return {
+      eyebrow: "Work-aware command center",
+      title: "Plan around work shifts without losing the rest of your week.",
+      subtitle:
+        "See unavailable hours, personal projects, calendar commitments, and the next open window before adding more.",
+    };
+  }
+
+  if (plannerType === "Organization leader") {
+    return {
+      eyebrow: "Organization command center",
+      title: "Keep events, prep blocks, and team work from colliding.",
+      subtitle:
+        "Use projects and imported calendars to spot conflicts, protect prep time, and keep upcoming commitments visible.",
+    };
+  }
+
+  return {
+    eyebrow: "Planning command center",
+    title: "Know what matters next without hunting through every page.",
+    subtitle:
+      "Bring projects, tasks, unavailable time, calendars, and weekly blocks into one useful starting point.",
+  };
+}
+
+function getPlanBlockTimeSummary(block: WeeklyPlanBlock) {
+  const timeLabel = block.startTime ? formatStartTime(block.startTime) : "Anytime";
+  return `${timeLabel} - ${formatEstimatedHours(block.estimatedHours)}`;
+}
+
+function getTodayScheduleItems(today: CalendarDaySchedule | undefined) {
+  if (!today) {
+    return [];
+  }
+
+  const workItems = today.workShifts.map((shift) => ({
+    detail: shift.location || shift.notes || "Unavailable time",
+    id: `work-${shift.id}`,
+    label: "Work",
+    title: formatWorkShiftRange(shift),
+  }));
+  const planItems = today.planBlocks.map((block) => ({
+    detail: block.plannedTask,
+    id: `plan-${block.id}`,
+    label: block.startTime ? "Plan" : "Flexible",
+    title: `${block.projectName} - ${getPlanBlockTimeSummary(block)}`,
+  }));
+  const importedItems = today.importedEvents
+    .filter((event) => !isScheduleBuilderExportedEvent(event))
+    .map((event) => ({
+      detail: formatImportedEventSource(event),
+      id: `event-${event.id}`,
+      label: isSchoolCalendarEvent(event)
+        ? "School"
+        : event.source === "google_calendar"
+          ? "Google"
+          : "External",
+      title: `${event.title} - ${formatImportedEventTimeRange(event)}`,
+    }));
+  const deadlineItems = today.deadlines.map((deadline) => ({
+    detail: deadline.deadlineText,
+    id: `deadline-${deadline.projectId}`,
+    label: "Due",
+    title: deadline.projectName,
+  }));
+
+  return [...workItems, ...importedItems, ...planItems, ...deadlineItems].slice(0, 5);
+}
+
+function buildSuggestedDashboardActions({
+  flexibleBlocksCount,
+  hasGoogleCalendar,
+  hasImportedCalendarEvents,
+  hasPlanBlocks,
+  hasProjects,
+  hasSchoolEvents,
+  hasWorkShifts,
+  plannerType,
+}: {
+  flexibleBlocksCount: number;
+  hasGoogleCalendar: boolean;
+  hasImportedCalendarEvents: boolean;
+  hasPlanBlocks: boolean;
+  hasProjects: boolean;
+  hasSchoolEvents: boolean;
+  hasWorkShifts: boolean;
+  plannerType: PlannerType;
+}) {
+  const actions: DashboardAction[] = [];
+  const addAction = (action: DashboardAction) => {
+    if (!actions.some((item) => item.id === action.id)) {
+      actions.push(action);
+    }
+  };
+
+  if (plannerType === "Student") {
+    if (!hasSchoolEvents) {
+      addAction({
+        description:
+          "Bring course due dates, quizzes, and school events into the Calendar hub.",
+        href: "/integrations",
+        id: "import-d2l",
+        label: "Import school calendar",
+        title: "Import D2L / Brightspace",
+      });
+    }
+    if (!hasGoogleCalendar) {
+      addAction({
+        description:
+          "Use existing classes, meetings, and commitments as planning context.",
+        href: "/integrations",
+        id: "connect-google",
+        label: "Connect calendar",
+        title: "Connect Google Calendar",
+      });
+    }
+    if (!hasProjects) {
+      addAction({
+        description: "Add courses, exams, assignments, or school projects.",
+        href: "/projects",
+        id: "add-school-projects",
+        label: "Open Projects",
+        title: "Add school projects",
+      });
+    }
+    if (!hasPlanBlocks) {
+      addAction({
+        description: "Turn one upcoming class task into a realistic study block.",
+        href: "/plan",
+        id: "create-study-blocks",
+        label: "Open Weekly Plan",
+        title: "Create study blocks",
+      });
+    }
+  } else if (plannerType === "Professional") {
+    if (!hasWorkShifts) {
+      addAction({
+        description: "Add recurring unavailable hours so plans avoid work time.",
+        href: "/work",
+        id: "add-work-shifts",
+        label: "Add shifts",
+        title: "Add your work schedule",
+      });
+    }
+    if (!hasGoogleCalendar) {
+      addAction({
+        description: "Bring meetings and existing events into planning context.",
+        href: "/integrations",
+        id: "connect-google",
+        label: "Connect calendar",
+        title: "Connect Google Calendar",
+      });
+    }
+    if (!hasProjects) {
+      addAction({
+        description: "Capture personal projects, errands, or recurring tasks.",
+        href: "/projects",
+        id: "add-personal-work",
+        label: "Open Projects",
+        title: "Add tasks or projects",
+      });
+    }
+    if (!hasPlanBlocks) {
+      addAction({
+        description: "Place one priority into a real window around your shifts.",
+        href: "/plan",
+        id: "create-weekly-block",
+        label: "Open Weekly Plan",
+        title: "Create weekly blocks",
+      });
+    }
+  } else if (plannerType === "Organization leader") {
+    if (!hasProjects) {
+      addAction({
+        description: "Track event prep, outreach, admin work, and team tasks.",
+        href: "/projects",
+        id: "add-org-projects",
+        label: "Open Projects",
+        title: "Add organization projects",
+      });
+    }
+    if (!hasImportedCalendarEvents) {
+      addAction({
+        description:
+          "Import events that already live in another calendar or platform.",
+        href: "/integrations",
+        id: "import-ics",
+        label: "Import ICS",
+        title: "Import organization events",
+      });
+    }
+    if (!hasGoogleCalendar) {
+      addAction({
+        description: "Bring existing meetings into the weekly planning view.",
+        href: "/integrations",
+        id: "connect-google",
+        label: "Connect calendar",
+        title: "Connect Google Calendar",
+      });
+    }
+    if (!hasPlanBlocks) {
+      addAction({
+        description: "Reserve time for agendas, logistics, and follow-ups.",
+        href: "/plan",
+        id: "prep-blocks",
+        label: "Open Weekly Plan",
+        title: "Plan prep blocks",
+      });
+    }
+  } else {
+    if (!hasProjects) {
+      addAction({
+        description: "Start with one project, task, appointment, or routine.",
+        href: "/projects",
+        id: "add-projects",
+        label: "Open Projects",
+        title: "Add projects or tasks",
+      });
+    }
+    if (!hasWorkShifts) {
+      addAction({
+        description: "Protect fixed commitments so plans fit your real week.",
+        href: "/work",
+        id: "add-unavailable",
+        label: "Add unavailable time",
+        title: "Add recurring unavailable time",
+      });
+    }
+    if (!hasGoogleCalendar) {
+      addAction({
+        description: "Use your existing calendar events as planning context.",
+        href: "/integrations",
+        id: "connect-google",
+        label: "Connect calendar",
+        title: "Connect Google Calendar",
+      });
+    }
+    if (!hasPlanBlocks) {
+      addAction({
+        description: "Put one priority on the weekly board and build from there.",
+        href: "/plan",
+        id: "weekly-plan",
+        label: "Open Weekly Plan",
+        title: "Create a weekly plan block",
+      });
+    }
+  }
+
+  if (flexibleBlocksCount > 0) {
+    addAction({
+      description:
+        "Timed blocks can be sent to Google Calendar; flexible blocks stay in Schedule Builder.",
+      href: "/plan",
+      id: "add-start-times",
+      label: "Review blocks",
+      title: "Add start times when ready",
+    });
+  }
+
+  addAction({
+    description: "Ask for open windows, conflict checks, or what to prioritize next.",
+    href: "/assistant",
+    id: "assistant",
+    label: "Open Assistant",
+    title:
+      plannerType === "Student"
+        ? "Find open study time"
+        : plannerType === "Organization leader"
+          ? "Check conflicts and prep time"
+          : "Ask for open time",
+  });
+
+  return actions.slice(0, 4);
+}
+
+function SetupProgressCard({
+  completeCount,
+  items,
+}: {
+  completeCount: number;
+  items: Array<{
+    done: boolean;
+    href: string;
+    label: string;
+    nextLabel: string;
+  }>;
+}) {
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+              Setup progress
+            </p>
+            <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+              {completeCount} of {items.length} essentials set up
+            </h2>
+          </div>
+          <Badge variant="subtle">
+            {completeCount === items.length ? "Ready" : "Keep going"}
+          </Badge>
+        </div>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {items.map((item) => (
+            <Link
+              className="flex items-center justify-between gap-3 rounded-[20px] border border-brand-ink/8 bg-white/70 px-4 py-3 text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+              href={item.href}
+              key={item.label}
+            >
+              <span className="text-sm font-semibold">{item.label}</span>
+              <span
+                className={
+                  item.done
+                    ? "rounded-full bg-brand-teal/10 px-2.5 py-1 text-xs font-semibold text-brand-teal"
+                    : "rounded-full bg-brand-ink/5 px-2.5 py-1 text-xs font-semibold text-brand-ink/55"
+                }
+              >
+                {item.done ? "Set" : item.nextLabel}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SuggestedSetupCard({
+  actions,
+  plannerType,
+}: {
+  actions: DashboardAction[];
+  plannerType: PlannerType;
+}) {
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+              Suggested setup
+            </p>
+            <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+              Best next steps
+            </h2>
+          </div>
+          <Badge variant="subtle">{plannerType}</Badge>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {actions.map((action) => (
+            <Link
+              className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+              href={action.href}
+              key={action.id}
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">{action.title}</p>
+                  <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                    {action.description}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full bg-brand-teal/10 px-3 py-1 text-xs font-semibold text-brand-teal">
+                  {action.label}
+                </span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TodayWeekCard({
+  openDayCount,
+  today,
+  weekRangeLabel,
+  weeklyExternalEvents,
+  weeklyPlanHours,
+  weeklyWorkHours,
+}: {
+  openDayCount: number;
+  today: CalendarDaySchedule | undefined;
+  weekRangeLabel: string;
+  weeklyExternalEvents: number;
+  weeklyPlanHours: number;
+  weeklyWorkHours: number;
+}) {
+  const todayItems = getTodayScheduleItems(today);
+
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+              Today / this week
+            </p>
+            <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+              {today ? formatDashboardDate(today.date) : "This week"}
+            </h2>
+          </div>
+          <Badge variant="subtle">{weekRangeLabel}</Badge>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-4">
+          <div className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+              Work
+            </p>
+            <p className="mt-2 text-lg font-semibold text-brand-ink">
+              {formatEstimatedHours(weeklyWorkHours)}
+            </p>
+          </div>
+          <div className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+              Plan
+            </p>
+            <p className="mt-2 text-lg font-semibold text-brand-ink">
+              {formatEstimatedHours(weeklyPlanHours)}
+            </p>
+          </div>
+          <div className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+              External
+            </p>
+            <p className="mt-2 text-lg font-semibold text-brand-ink">
+              {weeklyExternalEvents}
+            </p>
+          </div>
+          <div className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+              Open days
+            </p>
+            <p className="mt-2 text-lg font-semibold text-brand-ink">
+              {openDayCount}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {todayItems.length > 0 ? (
+            todayItems.map((item) => (
+              <div
+                className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-4"
+                key={item.id}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-brand-ink/5 px-2.5 py-1 text-xs font-semibold text-brand-ink/60">
+                    {item.label}
+                  </span>
+                  <p className="min-w-0 text-sm font-semibold text-brand-ink">
+                    {item.title}
+                  </p>
+                </div>
+                <p className="mt-2 text-sm leading-5 text-brand-ink/58">
+                  {item.detail}
+                </p>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/50 p-4">
+              <p className="text-sm font-semibold text-brand-ink">
+                Nothing scheduled today yet.
+              </p>
+              <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                Add a plan block, work shift, or imported calendar event when
+                this day needs structure.
+              </p>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DashboardTopThreeCard({ items }: { items: DashboardTopThreeItem[] }) {
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+          Today&apos;s Top 3
+        </p>
+        <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+          What to focus on next
+        </h2>
+
+        <div className="mt-4 grid gap-3">
+          {items.length > 0 ? (
+            items.map((item, index) => (
+              <Link
+                className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+                href={item.href}
+                key={item.id}
+              >
+                <div className="flex gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-teal/10 text-sm font-semibold text-brand-teal">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-brand-ink/5 px-2.5 py-1 text-xs font-semibold text-brand-ink/55">
+                        {item.label}
+                      </span>
+                      <p className="text-sm font-semibold text-brand-ink">
+                        {item.title}
+                      </p>
+                    </div>
+                    <p className="mt-2 text-sm leading-5 text-brand-ink/58">
+                      {item.description}
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            ))
+          ) : (
+            <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/50 p-4">
+              <p className="text-sm font-semibold text-brand-ink">
+                Add projects or plan blocks to generate your Top 3.
+              </p>
+              <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                Once Schedule Builder has a few priorities, this card becomes
+                your daily launch pad.
+              </p>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function NeedsAttentionCard({ items }: { items: DashboardAttentionItem[] }) {
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+              Needs attention
+            </p>
+            <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+              {items.length > 0 ? `${items.length} item${items.length === 1 ? "" : "s"}` : "All clear"}
+            </h2>
+          </div>
+          <Badge variant="subtle">{items.length > 0 ? "Review" : "Calm"}</Badge>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {items.length > 0 ? (
+            items.map((item) => (
+              <Link
+                className="rounded-[22px] border border-brand-coral/15 bg-brand-coral/5 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-brand-coral/10"
+                href={item.href}
+                key={item.id}
+              >
+                <p className="text-sm font-semibold">{item.title}</p>
+                <p className="mt-1 text-sm leading-5 text-brand-ink/60">
+                  {item.description}
+                </p>
+                <span className="mt-3 inline-flex rounded-full bg-white/75 px-3 py-1 text-xs font-semibold text-brand-coral">
+                  {item.label}
+                </span>
+              </Link>
+            ))
+          ) : (
+            <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/50 p-4">
+              <p className="text-sm font-semibold text-brand-ink">
+                No conflicts or sync cleanup surfaced right now.
+              </p>
+              <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                The Calendar and Weekly Plan will flag issues here when they
+                need a quick review.
+              </p>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function QuickActionsCard({ plannerType }: { plannerType: PlannerType }) {
+  const actions =
+    plannerType === "Student"
+      ? [
+          { href: "/integrations", label: "Import D2L" },
+          { href: "/plan", label: "Plan study time" },
+          { href: "/assistant", label: "Find study time" },
+        ]
+      : plannerType === "Professional"
+        ? [
+            { href: "/work", label: "Add work shift" },
+            { href: "/calendar", label: "Open Calendar" },
+            { href: "/assistant", label: "Find open time" },
+          ]
+        : plannerType === "Organization leader"
+          ? [
+              { href: "/projects", label: "Add org project" },
+              { href: "/integrations", label: "Import events" },
+              { href: "/assistant", label: "Check conflicts" },
+            ]
+          : [
+              { href: "/projects", label: "Add project/task" },
+              { href: "/plan", label: "Plan this week" },
+              { href: "/assistant", label: "Ask Assistant" },
+            ];
+
+  return (
+    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
+      <CardContent className="p-4 sm:p-6">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+          Quick actions
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {actions.map((action) => (
+            <Link
+              className="inline-flex h-10 items-center justify-center rounded-2xl border border-brand-ink/10 bg-white/75 px-3 text-sm font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+              href={action.href}
+              key={action.label}
+            >
+              {action.label}
+            </Link>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function FocusRuleCard() {
@@ -312,59 +1040,6 @@ function SettingsQuickLinksCard({
   );
 }
 
-type SetupNextStepsCardProps = {
-  profile: PlannerProfile | null;
-};
-
-function SetupNextStepsCard({ profile }: SetupNextStepsCardProps) {
-  const plannerType = profile?.plannerType ?? "General planning";
-  const planningGoals = profile?.planningGoals ?? [];
-  const recommendations = getOnboardingSetupRecommendations(
-    plannerType,
-    planningGoals,
-  );
-
-  return (
-    <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
-      <CardContent className="p-4 sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-              Suggested setup
-            </p>
-            <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-              Recommended next steps
-            </h2>
-          </div>
-          <Badge variant="subtle">{plannerType}</Badge>
-        </div>
-
-        <div className="mt-4 grid gap-3">
-          {recommendations.slice(0, 3).map((item) => (
-            <Link
-              className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
-              href={item.href}
-              key={item.id}
-            >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">{item.title}</p>
-                  <p className="mt-1 text-sm leading-5 text-brand-ink/58">
-                    {item.reason}
-                  </p>
-                </div>
-                <span className="shrink-0 rounded-full bg-brand-teal/10 px-3 py-1 text-xs font-semibold text-brand-teal">
-                  {item.actionLabel}
-                </span>
-              </div>
-            </Link>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 export function ProjectDashboard() {
   const pathname = usePathname();
   const currentSection = getSchedulerSection(pathname);
@@ -395,6 +1070,10 @@ export function ProjectDashboard() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [dataMessage, setDataMessage] = useState<string | null>(null);
+  const [googleCalendarStatus, setGoogleCalendarStatus] =
+    useState<GoogleDashboardStatus | null>(null);
+  const [googleSyncStatus, setGoogleSyncStatus] =
+    useState<GoogleSyncDashboardStatus | null>(null);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -474,6 +1153,8 @@ export function ProjectDashboard() {
         setCanSyncWeeklyPlan(false);
         setOnboardingError(null);
         setDataMessage(null);
+        setGoogleCalendarStatus(null);
+        setGoogleSyncStatus(null);
       }
     });
 
@@ -629,6 +1310,65 @@ export function ProjectDashboard() {
   }, [supabase, user]);
 
   useEffect(() => {
+    if (!supabase || !user || !hasLoadedRemoteData) {
+      return;
+    }
+
+    const activeSupabase = supabase;
+    let isActive = true;
+
+    async function loadGoogleCalendarDashboardStatus() {
+      try {
+        const { data } = await activeSupabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+
+        if (!accessToken) {
+          return;
+        }
+
+        const headers = { Authorization: `Bearer ${accessToken}` };
+        const weekStartDate = formatDateInputValue(getCurrentWeekStart());
+        const [statusResponse, syncStatusResponse] = await Promise.all([
+          fetch("/api/google-calendar/status", { headers }),
+          fetch(
+            `/api/google-calendar/sync-status?week_start_date=${weekStartDate}`,
+            { headers },
+          ),
+        ]);
+
+        if (!isActive) {
+          return;
+        }
+
+        if (statusResponse.ok) {
+          setGoogleCalendarStatus(await statusResponse.json());
+        } else {
+          setGoogleCalendarStatus(null);
+        }
+
+        if (syncStatusResponse.ok) {
+          setGoogleSyncStatus(await syncStatusResponse.json());
+        } else {
+          setGoogleSyncStatus(null);
+        }
+      } catch {
+        if (!isActive) {
+          return;
+        }
+
+        setGoogleCalendarStatus(null);
+        setGoogleSyncStatus(null);
+      }
+    }
+
+    void loadGoogleCalendarDashboardStatus();
+
+    return () => {
+      isActive = false;
+    };
+  }, [hasLoadedRemoteData, planBlocks, supabase, user]);
+
+  useEffect(() => {
     if (!user) {
       return;
     }
@@ -762,10 +1502,331 @@ export function ProjectDashboard() {
 
   const totalHours = useMemo(() => getPlannedHours(projects), [projects]);
 
-  const topThree = useMemo(
-    () => sortProjectsForFocus(projects).slice(0, 3),
-    [projects],
+  const plannerType = plannerProfile?.plannerType ?? "General planning";
+
+  const dashboardPersona = useMemo(
+    () => getDashboardPersona(plannerType),
+    [plannerType],
   );
+
+  const weekStartDate = useMemo(() => getCurrentWeekStart(), []);
+
+  const calendarWeek = useMemo(
+    () =>
+      buildCalendarDays({
+        importedEvents,
+        planBlocks,
+        projects,
+        weekStart: weekStartDate,
+        workShifts,
+      }),
+    [importedEvents, planBlocks, projects, weekStartDate, workShifts],
+  );
+
+  const deadlineBuckets = useMemo(
+    () => getProjectDeadlineBuckets(projects, weekStartDate),
+    [projects, weekStartDate],
+  );
+
+  const todayIsoDate = useMemo(() => formatDateInputValue(new Date()), []);
+
+  const todaySchedule = useMemo(
+    () =>
+      calendarWeek.days.find((day) => day.isoDate === todayIsoDate) ??
+      calendarWeek.days[0],
+    [calendarWeek.days, todayIsoDate],
+  );
+
+  const weeklyPlanHours = useMemo(
+    () =>
+      planBlocks.reduce((sum, block) => sum + Number(block.estimatedHours || 0), 0),
+    [planBlocks],
+  );
+
+  const weeklyWorkHours = useMemo(
+    () =>
+      workShifts.reduce(
+        (sum, shift) => sum + getWorkShiftDurationHours(shift),
+        0,
+      ),
+    [workShifts],
+  );
+
+  const externalImportedEvents = useMemo(
+    () =>
+      importedEvents.filter(
+        (event) =>
+          event.source !== "google_calendar" &&
+          !isScheduleBuilderExportedEvent(event),
+      ),
+    [importedEvents],
+  );
+
+  const schoolEventCount = useMemo(
+    () => importedEvents.filter(isSchoolCalendarEvent).length,
+    [importedEvents],
+  );
+
+  const hasGoogleCalendar = useMemo(
+    () =>
+      Boolean(googleCalendarStatus?.connected) ||
+      importedEvents.some((event) => event.source === "google_calendar"),
+    [googleCalendarStatus?.connected, importedEvents],
+  );
+
+  const weeklyExternalEvents = useMemo(
+    () =>
+      calendarWeek.days.reduce(
+        (count, day) =>
+          count +
+          day.importedEvents.filter((event) => !isScheduleBuilderExportedEvent(event))
+            .length,
+        0,
+      ),
+    [calendarWeek.days],
+  );
+
+  const openDayCount = useMemo(
+    () =>
+      calendarWeek.days.filter((day) => {
+        const hasExternalEvent = day.importedEvents.some(
+          (event) => !isScheduleBuilderExportedEvent(event),
+        );
+
+        return (
+          day.workShifts.length === 0 &&
+          day.planBlocks.length === 0 &&
+          day.deadlines.length === 0 &&
+          !hasExternalEvent
+        );
+      }).length,
+    [calendarWeek.days],
+  );
+
+  const flexibleBlocksCount = useMemo(
+    () => planBlocks.filter((block) => !block.startTime).length,
+    [planBlocks],
+  );
+
+  const syncNeedsAttentionCount = useMemo(
+    () =>
+      googleSyncStatus?.statuses?.filter(
+        (status) => status.syncStatus === "needs_attention",
+      ).length ?? 0,
+    [googleSyncStatus?.statuses],
+  );
+
+  const removedSyncedEventsCount =
+    googleSyncStatus?.removedSyncedEvents?.length ?? 0;
+
+  const setupProgressItems = useMemo(
+    () => [
+      {
+        done: projects.length > 0,
+        href: "/projects",
+        label: "Projects or tasks",
+        nextLabel: "Add",
+      },
+      {
+        done: workShifts.length > 0,
+        href: "/work",
+        label: "Unavailable time",
+        nextLabel: "Add",
+      },
+      {
+        done: hasGoogleCalendar,
+        href: "/integrations",
+        label: "Google Calendar",
+        nextLabel: "Connect",
+      },
+      {
+        done: externalImportedEvents.length > 0,
+        href: "/integrations",
+        label: plannerType === "Student" ? "School calendar" : "ICS imports",
+        nextLabel: "Import",
+      },
+      {
+        done: planBlocks.length > 0,
+        href: "/plan",
+        label: "Weekly plan",
+        nextLabel: "Plan",
+      },
+    ],
+    [
+      externalImportedEvents.length,
+      hasGoogleCalendar,
+      planBlocks.length,
+      plannerType,
+      projects.length,
+      workShifts.length,
+    ],
+  );
+
+  const setupCompleteCount = setupProgressItems.filter((item) => item.done).length;
+
+  const suggestedDashboardActions = useMemo(
+    () =>
+      buildSuggestedDashboardActions({
+        flexibleBlocksCount,
+        hasGoogleCalendar,
+        hasImportedCalendarEvents: externalImportedEvents.length > 0,
+        hasPlanBlocks: planBlocks.length > 0,
+        hasProjects: projects.length > 0,
+        hasSchoolEvents: schoolEventCount > 0,
+        hasWorkShifts: workShifts.length > 0,
+        plannerType,
+      }),
+    [
+      externalImportedEvents.length,
+      flexibleBlocksCount,
+      hasGoogleCalendar,
+      planBlocks.length,
+      plannerType,
+      projects.length,
+      schoolEventCount,
+      workShifts.length,
+    ],
+  );
+
+  const dashboardTopThree = useMemo(() => {
+    const items: DashboardTopThreeItem[] = [];
+
+    todaySchedule?.planBlocks.slice(0, 2).forEach((block) => {
+      items.push({
+        description: block.plannedTask || getPlanBlockTimeSummary(block),
+        href: "/plan",
+        id: `today-plan-${block.id}`,
+        label: block.startTime ? "Today" : "Flexible",
+        title: block.projectName,
+      });
+    });
+
+    deadlineBuckets.exactDeadlines
+      .filter((deadline) => deadline.isoDate && deadline.isoDate >= todayIsoDate)
+      .sort((first, second) =>
+        (first.isoDate ?? "").localeCompare(second.isoDate ?? ""),
+      )
+      .slice(0, 2)
+      .forEach((deadline) => {
+        items.push({
+          description: `Due ${deadline.deadlineText}`,
+          href: "/calendar",
+          id: `deadline-${deadline.projectId}`,
+          label: "Deadline",
+          title: deadline.projectName,
+        });
+      });
+
+    sortProjectsForFocus(projects)
+      .filter((project) => !project.completed)
+      .slice(0, 4)
+      .forEach((project) => {
+        items.push({
+          description: project.nextAction,
+          href: "/projects",
+          id: `project-${project.id}`,
+          label: project.priority,
+          title: project.name,
+        });
+      });
+
+    const seenIds = new Set<string>();
+    return items
+      .filter((item) => {
+        if (seenIds.has(item.id)) {
+          return false;
+        }
+
+        seenIds.add(item.id);
+        return true;
+      })
+      .slice(0, 3);
+  }, [deadlineBuckets.exactDeadlines, projects, todayIsoDate, todaySchedule]);
+
+  const attentionItems = useMemo(() => {
+    const workConflicts = findWeeklyPlanWorkConflicts(planBlocks, workShifts);
+    const importedConflicts = findWeeklyPlanImportedEventConflicts(
+      planBlocks,
+      importedEvents,
+      weekStartDate,
+    );
+    const items: DashboardAttentionItem[] = [];
+
+    if (syncNeedsAttentionCount > 0) {
+      items.push({
+        description:
+          "Some synced blocks changed after they were sent to Google Calendar.",
+        href: "/plan",
+        id: "sync-needs-attention",
+        label: "Review sync",
+        title: `${syncNeedsAttentionCount} synced block${
+          syncNeedsAttentionCount === 1 ? "" : "s"
+        } need attention`,
+      });
+    }
+
+    if (removedSyncedEventsCount > 0) {
+      items.push({
+        description:
+          "Some Google Calendar events still exist after their Schedule Builder blocks were removed.",
+        href: "/plan",
+        id: "removed-synced-events",
+        label: "Open Weekly Plan",
+        title: "Calendar events still in Google",
+      });
+    }
+
+    if (workConflicts.length + importedConflicts.length > 0) {
+      items.push({
+        description:
+          "A planned block may overlap work time or an external calendar event.",
+        href: "/calendar",
+        id: "schedule-conflicts",
+        label: "Check Calendar",
+        title: `${workConflicts.length + importedConflicts.length} possible conflict${
+          workConflicts.length + importedConflicts.length === 1 ? "" : "s"
+        }`,
+      });
+    }
+
+    if (deadlineBuckets.deadlinesNeedingDates.length > 0) {
+      items.push({
+        description:
+          "Add exact dates so these deadlines can land correctly on the Calendar.",
+        href: "/projects",
+        id: "deadlines-needing-dates",
+        label: "Edit projects",
+        title: `${deadlineBuckets.deadlinesNeedingDates.length} deadline${
+          deadlineBuckets.deadlinesNeedingDates.length === 1 ? "" : "s"
+        } need dates`,
+      });
+    }
+
+    if (flexibleBlocksCount > 0 && googleSyncStatus?.syncEnabled) {
+      items.push({
+        description:
+          "Flexible blocks stay in Schedule Builder until you add start times.",
+        href: "/plan",
+        id: "flexible-blocks",
+        label: "Add time",
+        title: `${flexibleBlocksCount} block${
+          flexibleBlocksCount === 1 ? "" : "s"
+        } need time before Google sync`,
+      });
+    }
+
+    return items.slice(0, 4);
+  }, [
+    deadlineBuckets.deadlinesNeedingDates.length,
+    flexibleBlocksCount,
+    googleSyncStatus?.syncEnabled,
+    importedEvents,
+    planBlocks,
+    removedSyncedEventsCount,
+    syncNeedsAttentionCount,
+    weekStartDate,
+    workShifts,
+  ]);
 
   function addProject(project: Project) {
     setProjects((current) => [project, ...current]);
@@ -1165,49 +2226,42 @@ export function ProjectDashboard() {
         {currentSection === "dashboard" ? (
           <>
             <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
-              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-end">
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-end">
                 <div className="max-w-4xl">
                   <div className="eyebrow-chip">
                     <FolderStackIcon className="h-4 w-4" />
-                    Dashboard
+                    {dashboardPersona.eyebrow}
                   </div>
 
                   <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl lg:text-6xl">
-                    Choose the next right block of work.
+                    {dashboardPersona.title}
                   </h1>
 
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                    A focused home base for today&apos;s priorities, weekly
-                    capacity, and the shortcuts you use most.
+                    {dashboardPersona.subtitle}
                   </p>
 
                   <div className="mt-5 flex flex-wrap gap-2.5">
                     <Badge>{activeProjects} active projects</Badge>
-                    <Badge variant="subtle">{completedProjects} completed</Badge>
-                    <Badge variant="subtle">{totalHours} hrs planned</Badge>
+                    <Badge variant="subtle">
+                      {planBlocks.length} weekly blocks
+                    </Badge>
+                    <Badge variant="subtle">
+                      {workShifts.length} unavailable blocks
+                    </Badge>
+                    <Badge variant="subtle">
+                      {hasGoogleCalendar
+                        ? googleCalendarStatus?.syncEnabled
+                          ? "Google sync enabled"
+                          : "Google connected"
+                        : "Calendar optional"}
+                    </Badge>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                <div className="grid grid-cols-1 gap-3">
                   <Link
-                    href="/projects"
-                    className="rounded-[24px] border border-brand-ink/8 bg-white/78 p-4 text-brand-ink hover:-translate-y-0.5 hover:bg-white"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-2xl bg-brand-ink/6 p-2 text-brand-ink">
-                        <FolderStackIcon className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold">Open Projects</p>
-                        <p className="text-sm text-brand-ink/58">
-                          Manage lists and next actions.
-                        </p>
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href="/plan"
+                    href="/calendar"
                     className="rounded-[24px] border border-brand-ink/8 bg-white/78 p-4 text-brand-ink hover:-translate-y-0.5 hover:bg-white"
                   >
                     <div className="flex items-center gap-3">
@@ -1215,9 +2269,26 @@ export function ProjectDashboard() {
                         <CalendarIcon className="h-5 w-5" />
                       </div>
                       <div>
-                        <p className="text-sm font-semibold">Open Weekly Plan</p>
+                        <p className="text-sm font-semibold">Open Calendar</p>
                         <p className="text-sm text-brand-ink/58">
-                          Schedule blocks and export ICS.
+                          See the week in one place.
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+
+                  <Link
+                    href="/assistant"
+                    className="rounded-[24px] border border-brand-ink/8 bg-white/78 p-4 text-brand-ink hover:-translate-y-0.5 hover:bg-white"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
+                        <TargetIcon className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold">Ask Assistant</p>
+                        <p className="text-sm text-brand-ink/58">
+                          Find open time or review conflicts.
                         </p>
                       </div>
                     </div>
@@ -1228,16 +2299,28 @@ export function ProjectDashboard() {
 
             <section className="grid items-start gap-5 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
               <div className="flex min-w-0 flex-col gap-5 sm:gap-6">
-                <SetupNextStepsCard profile={plannerProfile} />
-                <TopTasksCard projects={topThree} />
+                <SetupProgressCard
+                  completeCount={setupCompleteCount}
+                  items={setupProgressItems}
+                />
+                <TodayWeekCard
+                  openDayCount={openDayCount}
+                  today={todaySchedule}
+                  weekRangeLabel={calendarWeek.weekRangeLabel}
+                  weeklyExternalEvents={weeklyExternalEvents}
+                  weeklyPlanHours={weeklyPlanHours}
+                  weeklyWorkHours={weeklyWorkHours}
+                />
+                <DashboardTopThreeCard items={dashboardTopThree} />
               </div>
 
               <aside className="flex min-w-0 flex-col gap-5 sm:gap-6 lg:sticky lg:top-6">
-                <WeeklySummaryCard
-                  totalHours={totalHours}
-                  activeProjects={activeProjects}
-                  completedProjects={completedProjects}
+                <SuggestedSetupCard
+                  actions={suggestedDashboardActions}
+                  plannerType={plannerType}
                 />
+                <NeedsAttentionCard items={attentionItems} />
+                <QuickActionsCard plannerType={plannerType} />
                 <FocusRuleCard />
               </aside>
             </section>

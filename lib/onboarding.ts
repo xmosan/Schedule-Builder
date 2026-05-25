@@ -53,8 +53,10 @@ export const onboardingHelpGoalOptions = [
   "Avoid conflicts",
   "Build weekly plans",
   "Import calendars",
-  "Sync plans to Google Calendar",
+  "Send plans to Google Calendar",
 ] as const;
+
+const legacyUiPlanningGoalOptions = ["Sync plans to Google Calendar"] as const;
 
 const legacyPlanningGoalOptions = [
   "Classes and assignments",
@@ -67,6 +69,7 @@ const legacyPlanningGoalOptions = [
 
 export const planningGoalOptions = [
   ...onboardingHelpGoalOptions,
+  ...legacyUiPlanningGoalOptions,
   ...legacyPlanningGoalOptions,
 ] as const;
 
@@ -88,16 +91,22 @@ export type ScheduleIntensity = (typeof scheduleIntensityOptions)[number];
 export type OnboardingUseCase = (typeof onboardingUseCases)[number];
 
 type StoredPlanningGoal = (typeof legacyPlanningGoalOptions)[number];
+type LegacyUiPlanningGoal = (typeof legacyUiPlanningGoalOptions)[number];
 
 const storageGoalByUiGoal: Record<
-  (typeof onboardingHelpGoalOptions)[number],
+  (typeof onboardingHelpGoalOptions)[number] | LegacyUiPlanningGoal,
   StoredPlanningGoal
 > = {
   "Find open time": "Meetings and events",
   "Avoid conflicts": "Meetings and events",
   "Build weekly plans": "Projects and deadlines",
   "Import calendars": "Meetings and events",
+  "Send plans to Google Calendar": "Projects and deadlines",
   "Sync plans to Google Calendar": "Projects and deadlines",
+};
+
+const uiGoalByLegacyUiGoal: Record<LegacyUiPlanningGoal, PlanningGoal> = {
+  "Sync plans to Google Calendar": "Send plans to Google Calendar",
 };
 
 const uiGoalByStoredGoal: Record<StoredPlanningGoal, PlanningGoal> = {
@@ -172,14 +181,6 @@ const setupRecommendationsByPlannerType: Record<
       actionLabel: "Open guided import",
     },
     {
-      id: "add-school-project",
-      title: "Add courses or school projects",
-      reason:
-        "Projects give the Assistant concrete next actions and weekly priorities.",
-      href: "/projects",
-      actionLabel: "Add project",
-    },
-    {
       id: "connect-google",
       title: "Connect Google Calendar read-only",
       reason:
@@ -188,8 +189,16 @@ const setupRecommendationsByPlannerType: Record<
       actionLabel: "Connect calendar",
     },
     {
+      id: "add-school-project",
+      title: "Add courses or school projects",
+      reason:
+        "Projects give the Assistant concrete next actions and weekly priorities.",
+      href: "/projects",
+      actionLabel: "Add project",
+    },
+    {
       id: "study-block",
-      title: "Add a study block",
+      title: "Create study blocks",
       reason:
         "Turn your top class or assignment into a realistic weekly work block.",
       href: "/plan",
@@ -223,27 +232,27 @@ const setupRecommendationsByPlannerType: Record<
     },
     {
       id: "add-personal-project",
-      title: "Add a project or task",
+      title: "Add personal tasks or projects",
       reason:
         "Capture the work you want to move forward outside fixed commitments.",
       href: "/projects",
       actionLabel: "Open Projects",
     },
     {
-      id: "calendar-open-time",
-      title: "Check the Calendar hub",
+      id: "find-open-time",
+      title: "Find open time",
       reason:
-        "See work, plans, external events, deadlines, and open days together.",
+        "Use the Calendar hub to spot usable windows before adding more work.",
       href: "/calendar",
       actionLabel: "Open Calendar",
     },
     {
-      id: "assistant-balance",
-      title: "Ask the Assistant to balance the week",
+      id: "create-weekly-blocks",
+      title: "Create weekly blocks",
       reason:
-        "Get a quick read on open time, overload risks, and better planning windows.",
-      href: "/assistant",
-      actionLabel: "Open Assistant",
+        "Turn one priority into a scheduled block that fits around work.",
+      href: "/plan",
+      actionLabel: "Open Weekly Plan",
     },
   ],
   "Organization leader": [
@@ -254,14 +263,6 @@ const setupRecommendationsByPlannerType: Record<
         "Track event prep, outreach, meetings, and admin work in one place.",
       href: "/projects",
       actionLabel: "Open Projects",
-    },
-    {
-      id: "prep-blocks",
-      title: "Create preparation blocks",
-      reason:
-        "Reserve time for agendas, follow-ups, logistics, or member tasks.",
-      href: "/plan",
-      actionLabel: "Open Weekly Plan",
     },
     {
       id: "import-events",
@@ -278,6 +279,14 @@ const setupRecommendationsByPlannerType: Record<
         "Bring meetings and shared calendar commitments into planning context.",
       href: "/integrations",
       actionLabel: "Connect calendar",
+    },
+    {
+      id: "prep-blocks",
+      title: "Plan prep blocks",
+      reason:
+        "Reserve time for agendas, follow-ups, logistics, or member tasks.",
+      href: "/plan",
+      actionLabel: "Open Weekly Plan",
     },
     {
       id: "assistant-conflicts",
@@ -571,7 +580,11 @@ export function normalizePlanningGoals(value: unknown): PlanningGoal[] {
     value
       .filter((item): item is PlanningGoal => isOneOf(item, planningGoalOptions))
       .map((item) =>
-        isOneOf(item, legacyPlanningGoalOptions) ? uiGoalByStoredGoal[item] : item,
+        isOneOf(item, legacyPlanningGoalOptions)
+          ? uiGoalByStoredGoal[item]
+          : isOneOf(item, legacyUiPlanningGoalOptions)
+            ? uiGoalByLegacyUiGoal[item]
+            : item,
       ),
   );
 }
@@ -644,7 +657,7 @@ export function getRecommendedDesiredIntegrations(
     recommended.add("ICS import/export");
   }
 
-  if (planningGoals.includes("Sync plans to Google Calendar")) {
+  if (planningGoals.includes("Send plans to Google Calendar")) {
     recommended.add("Google Calendar");
   }
 
@@ -662,7 +675,7 @@ export function getOnboardingSetupRecommendations(
   const recommendations = [...setupRecommendationsByPlannerType[plannerType]];
 
   if (
-    planningGoals.includes("Sync plans to Google Calendar") &&
+    planningGoals.includes("Send plans to Google Calendar") &&
     !recommendations.some((item) => item.id === "connect-google")
   ) {
     recommendations.unshift({
