@@ -1,5 +1,6 @@
 import type { Project } from "@/lib/projects";
 import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
+import { sortScheduledItems, type ScheduledItem } from "@/lib/scheduled-items";
 import {
   formatStartTime,
   parseStartTimeToMinutes,
@@ -24,6 +25,7 @@ export type CalendarDaySchedule = {
   importedEvents: ImportedCalendarEvent[];
   isoDate: string;
   planBlocks: WeeklyPlanBlock[];
+  scheduledItems: ScheduledItem[];
   workShifts: WorkShift[];
 };
 
@@ -37,6 +39,7 @@ type BuildCalendarDaysOptions = {
   importedEvents: ImportedCalendarEvent[];
   planBlocks: WeeklyPlanBlock[];
   projects: Project[];
+  scheduledItems?: ScheduledItem[];
   weekStart?: Date;
   workShifts: WorkShift[];
 };
@@ -315,6 +318,7 @@ export function getWeekDates(
       importedEvents: [],
       isoDate: toIsoDate(date),
       planBlocks: [],
+      scheduledItems: [],
       workShifts: [],
     } satisfies CalendarDaySchedule;
   });
@@ -348,6 +352,7 @@ export function getMonthDates(
       isToday: toIsoDate(date) === todayIsoDate,
       isoDate: toIsoDate(date),
       planBlocks: [],
+      scheduledItems: [],
       workShifts: [],
     } satisfies CalendarMonthDaySchedule;
   });
@@ -368,6 +373,7 @@ export function buildCalendarDays({
   importedEvents,
   planBlocks,
   projects,
+  scheduledItems = [],
   weekStart = getCurrentWeekStart(),
   workShifts,
 }: BuildCalendarDaysOptions) {
@@ -405,11 +411,15 @@ export function buildCalendarDays({
         (first, second) =>
           new Date(first.startsAt).getTime() - new Date(second.startsAt).getTime(),
       );
+    const dayScheduledItems = sortScheduledItems(
+      scheduledItems.filter((item) => item.itemDate === weekDate.isoDate),
+    );
 
     return {
       ...weekDate,
       importedEvents: dayImportedEvents,
       planBlocks: dayPlanBlocks,
+      scheduledItems: dayScheduledItems,
       workShifts: dayWorkShifts,
     };
   });
@@ -452,6 +462,7 @@ export function buildCalendarMonth({
   monthDate = getCurrentMonthStart(),
   planBlocks,
   projects,
+  scheduledItems = [],
   weekStart = getCurrentWeekStart(),
   workShifts,
 }: BuildCalendarMonthOptions) {
@@ -501,11 +512,15 @@ export function buildCalendarMonth({
         (first, second) =>
           new Date(first.startsAt).getTime() - new Date(second.startsAt).getTime(),
       );
+    const dayScheduledItems = sortScheduledItems(
+      scheduledItems.filter((item) => item.itemDate === monthDay.isoDate),
+    );
 
     return {
       ...monthDay,
       importedEvents: dayImportedEvents,
       planBlocks: dayPlanBlocks,
+      scheduledItems: dayScheduledItems,
       workShifts: dayWorkShifts,
     };
   });

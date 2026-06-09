@@ -8,9 +8,15 @@ import {
 } from "@/lib/weekly-plan";
 import {
   formatImportedEventTimeRange,
+  formatImportedEventSource,
   isScheduleBuilderExportedEvent,
   type ImportedCalendarEvent,
 } from "@/lib/imported-calendar";
+import {
+  formatScheduledItemTimeLabel,
+  parseScheduledItemDate,
+  type ScheduledItem,
+} from "@/lib/scheduled-items";
 import {
   formatWorkShiftRange,
   getWorkShiftDurationHours,
@@ -35,6 +41,13 @@ export type WeeklyPlanImportedEventConflict = {
   event: ImportedCalendarEvent;
   eventRangeLabel: string;
   message: string;
+};
+
+export type ScheduledItemConflict = {
+  item: ScheduledItem;
+  kind: "imported_event" | "scheduled_item" | "weekly_plan" | "work_shift";
+  message: string;
+  sourceLabel: string;
 };
 
 function formatDayList(days: WeekDay[]) {
@@ -106,6 +119,26 @@ function getCurrentWeekStart(referenceDate = new Date()) {
 
 function getWeekDateForDay(day: WeekDay, weekStart = getCurrentWeekStart()) {
   return addDays(weekStart, weekDays.indexOf(day));
+}
+
+function getWeekDayFromDate(date: Date): WeekDay {
+  const dayIndex = date.getDay();
+  const dayByIndex: Record<number, WeekDay> = {
+    0: "Sunday",
+    1: "Monday",
+    2: "Tuesday",
+    3: "Wednesday",
+    4: "Thursday",
+    5: "Friday",
+    6: "Saturday",
+  };
+
+  return dayByIndex[dayIndex];
+}
+
+function isDateInWeek(date: Date, weekStart = getCurrentWeekStart()) {
+  const targetIso = toIsoDate(date);
+  return weekDays.some((day) => toIsoDate(getWeekDateForDay(day, weekStart)) === targetIso);
 }
 
 export function getWorkScheduleSummary(workShifts: WorkShift[]) {
@@ -294,8 +327,201 @@ export function findWeeklyPlanImportedEventConflicts(
     )
     .filter(
       (conflict): conflict is WeeklyPlanImportedEventConflict =>
-        conflict !== null,
+      conflict !== null,
     );
+}
+
+function scheduledItemTimeRange(item: ScheduledItem) {
+  const start = parseStartTimeToMinutes(item.startTime);
+
+  if (start === null) {
+    return null;
+  }
+
+  return {
+    end: start + item.estimatedHours * 60,
+    start,
+  };
+}
+
+function overlaps(start: number, end: number, otherStart: number, otherEnd: number) {
+  return start < otherEnd && end > otherStart;
+}
+
+function importedEventTimeRange(event: ImportedCalendarEvent) {
+  if (event.allDay) {
+    return {
+      end: 1440,
+      start: 0,
+    };
+  }
+
+  const startsAt = new Date(event.startsAt);
+
+  if (Number.isNaN(startsAt.getTime())) {
+    return null;
+  }
+
+  const endsAt = event.endsAt ? new Date(event.endsAt) : null;
+  const start = startsAt.getHours() * 60 + startsAt.getMinutes();
+  const end =
+    endsAt && !Number.isNaN(endsAt.getTime())
+      ? endsAt.getHours() * 60 + endsAt.getMinutes()
+      : start + 30;
+
+  return { end, start };
+}
+
+export function findScheduledItemConflicts({
+  importedEvents,
+  item,
+  planBlocks,
+  scheduledItems,
+  weekStart = getCurrentWeekStart(),
+  workShifts,
+}: {
+  importedEvents: ImportedCalendarEvent[];
+  item: ScheduledItem;
+  planBlocks: WeeklyPlanBlock[];
+  scheduledItems: ScheduledItem[];
+  weekStart?: Date;
+  workShifts: WorkShift[];
+}) {
+  const itemDate = parseScheduledItemDate(item.itemDate);
+  const itemRange = scheduledItemTimeRange(item);
+
+  if (!itemDate || !itemRange) {
+    return [] as ScheduledItemConflict[];
+  }
+
+  const itemDay = getWeekDayFromDate(itemDate);
+  const itemIsoDate = toIsoDate(itemDate);
+  const conflicts: ScheduledItemConflict[] = [];
+  const kindLabel = item.itemType === "appointment" ? "appointment" : "task";
+
+  const workShift = workShifts.find((shift) => {
+    if (shift.day !== itemDay) {
+      return false;
+    }
+
+    const shiftStart = parseStartTimeToMinutes(shift.startTime);
+    const shiftEnd = parseStartTimeToMinutes(shift.endTime);
+
+    return (
+      shiftStart !== null &&
+      shiftEnd !== null &&
+      overlaps(itemRange.start, itemRange.end, shiftStart, shiftEnd)
+    );
+  });
+
+  if (workShift) {
+    conflicts.push({
+      item,
+      kind: "work_shift",
+      message: `This ${kindLabel} may overlap with your saved work shift (${formatWorkShiftRange(
+        workShift,
+      )}).`,
+      sourceLabel: "Work shift",
+    });
+  }
+
+  const importedEvent = importedEvents.find((event) => {
+    if (isScheduleBuilderExportedEvent(event)) {
+      return false;
+    }
+
+    const eventStart = new Date(event.startsAt);
+
+    if (Number.isNaN(eventStart.getTime()) || toIsoDate(eventStart) !== itemIsoDate) {
+      return false;
+    }
+
+    const eventRange = importedEventTimeRange(event);
+
+    return (
+      eventRange !== null &&
+      overlaps(itemRange.start, itemRange.end, eventRange.start, eventRange.end)
+    );
+  });
+
+  if (importedEvent) {
+    const sourceLabel =
+      importedEvent.source === "google_calendar"
+        ? "Google Calendar event"
+        : `${formatImportedEventSource(importedEvent)} event`;
+
+    conflicts.push({
+      item,
+      kind: "imported_event",
+      message: `This ${kindLabel} may overlap with a ${sourceLabel.toLowerCase()} (${
+        importedEvent.title
+      }, ${formatImportedEventTimeRange(importedEvent)}).`,
+      sourceLabel,
+    });
+  }
+
+  const otherScheduledItem = scheduledItems.find((candidate) => {
+    if (candidate.id === item.id || candidate.itemDate !== item.itemDate) {
+      return false;
+    }
+
+    const candidateRange = scheduledItemTimeRange(candidate);
+
+    return (
+      candidateRange !== null &&
+      overlaps(
+        itemRange.start,
+        itemRange.end,
+        candidateRange.start,
+        candidateRange.end,
+      )
+    );
+  });
+
+  if (otherScheduledItem) {
+    conflicts.push({
+      item,
+      kind: "scheduled_item",
+      message: `This item may overlap with another scheduled item (${otherScheduledItem.title}, ${formatScheduledItemTimeLabel(
+        otherScheduledItem,
+      )}).`,
+      sourceLabel: "Scheduled item",
+    });
+  }
+
+  if (isDateInWeek(itemDate, weekStart)) {
+    const weeklyPlanBlock = planBlocks.find((block) => {
+      if (block.day !== itemDay) {
+        return false;
+      }
+
+      const blockStart = parseStartTimeToMinutes(block.startTime);
+
+      if (blockStart === null) {
+        return false;
+      }
+
+      return overlaps(
+        itemRange.start,
+        itemRange.end,
+        blockStart,
+        blockStart + block.estimatedHours * 60,
+      );
+    });
+
+    if (weeklyPlanBlock) {
+      conflicts.push({
+        item,
+        kind: "weekly_plan",
+        message: `This ${kindLabel} may overlap with a weekly plan block (${weeklyPlanBlock.projectName}, ${formatStartTime(
+          weeklyPlanBlock.startTime,
+        )}).`,
+        sourceLabel: "Weekly plan",
+      });
+    }
+  }
+
+  return conflicts;
 }
 
 export function describeWeeklyPlanWorkConflict(

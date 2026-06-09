@@ -11,7 +11,10 @@ import {
 } from "@/components/projects/icons";
 import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Input } from "@/components/ui/input";
 import {
   formatImportedEventSource,
   formatImportedEventTimeRange,
@@ -31,8 +34,21 @@ import {
 } from "@/lib/calendar";
 import type { Project } from "@/lib/projects";
 import {
+  createDefaultScheduledItemDraft,
+  createScheduledItemPayload,
+  formatScheduledItemTimeLabel,
+  formatScheduledItemTypeLabel,
+  sortScheduledItems,
+  validateScheduledItemDraft,
+  type ScheduledItem,
+  type ScheduledItemDraft,
+  type ScheduledItemType,
+} from "@/lib/scheduled-items";
+import {
+  findScheduledItemConflicts,
   findWeeklyPlanImportedEventConflicts,
   findWeeklyPlanWorkConflicts,
+  type ScheduledItemConflict,
   type WeeklyPlanImportedEventConflict,
   type WeeklyPlanWorkConflict,
 } from "@/lib/schedule-conflicts";
@@ -43,8 +59,12 @@ import {
 import {
   fetchProjectsForUser,
   fetchImportedCalendarEventsForUser,
+  createScheduledItemForUser,
+  deleteScheduledItemForUser,
+  fetchScheduledItemsForUser,
   fetchWeeklyPlanBlocksForUser,
   fetchWorkShiftsForUser,
+  updateScheduledItemForUser,
 } from "@/lib/supabase/scheduler";
 import { formatEstimatedHours, type WeeklyPlanBlock } from "@/lib/weekly-plan";
 import {
@@ -62,6 +82,7 @@ type CalendarFilters = {
   flexible: boolean;
   importedEvents: boolean;
   planBlocks: boolean;
+  scheduledItems: boolean;
   workShifts: boolean;
 };
 
@@ -75,11 +96,18 @@ type GoogleCalendarSyncStatusResponse = {
   }>;
 };
 
+type ScheduledItemFormState = {
+  initialDraft: ScheduledItemDraft;
+  item?: ScheduledItem;
+  mode: "create" | "edit";
+};
+
 const defaultFilters: CalendarFilters = {
   deadlines: true,
   flexible: true,
   importedEvents: true,
   planBlocks: true,
+  scheduledItems: true,
   workShifts: true,
 };
 
@@ -94,6 +122,10 @@ const filterItems: Array<{
   {
     key: "planBlocks",
     label: "Plan",
+  },
+  {
+    key: "scheduledItems",
+    label: "Tasks",
   },
   {
     key: "deadlines",
@@ -119,6 +151,8 @@ type MonthIndicatorTone =
   | "plan"
   | "scheduleBuilder"
   | "school"
+  | "task"
+  | "appointment"
   | "work";
 
 type CalendarEventGroup = {
@@ -149,6 +183,7 @@ function getMissingTableMessage(error: unknown) {
 
   if (
     message.includes("projects") ||
+    message.includes("scheduled_items") ||
     message.includes("weekly_plan_blocks") ||
     message.includes("work_shifts") ||
     message.includes("imported_calendar_events")
@@ -201,6 +236,7 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
   const planBlocks = filters.planBlocks
     ? day.planBlocks.filter((block) => filters.flexible || block.startTime)
     : [];
+  const scheduledItems = filters.scheduledItems ? day.scheduledItems : [];
   const deadlines = filters.deadlines ? day.deadlines : [];
   const importedEvents = filters.importedEvents ? day.importedEvents : [];
   const externalCommitmentEvents = importedEvents.filter(
@@ -212,6 +248,7 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
       0,
     ) +
     planBlocks.reduce((sum, block) => sum + block.estimatedHours, 0) +
+    scheduledItems.reduce((sum, item) => sum + item.estimatedHours, 0) +
     externalCommitmentEvents.reduce(
       (sum, event) => sum + getImportedEventDurationHours(event),
       0,
@@ -222,10 +259,12 @@ function getVisibleDayData(day: CalendarDaySchedule, filters: CalendarFilters) {
     hasEvents:
       workShifts.length > 0 ||
       planBlocks.length > 0 ||
+      scheduledItems.length > 0 ||
       deadlines.length > 0 ||
       importedEvents.length > 0,
     importedEvents,
     planBlocks,
+    scheduledItems,
     scheduledHours,
     workShifts,
   };
@@ -321,6 +360,31 @@ function getMonthEventSummary(
     });
   }
 
+  const taskCount = visibleDay.scheduledItems.filter(
+    (item) => item.itemType === "task",
+  ).length;
+  const appointmentCount = visibleDay.scheduledItems.filter(
+    (item) => item.itemType === "appointment",
+  ).length;
+
+  if (taskCount > 0) {
+    indicators.push({
+      count: taskCount,
+      id: "task",
+      label: "Task",
+      tone: "task",
+    });
+  }
+
+  if (appointmentCount > 0) {
+    indicators.push({
+      count: appointmentCount,
+      id: "appointment",
+      label: "Appt",
+      tone: "appointment",
+    });
+  }
+
   if (visibleDay.deadlines.length > 0) {
     indicators.push({
       count: visibleDay.deadlines.length,
@@ -368,6 +432,7 @@ function getMonthEventSummary(
     totalItems:
       visibleDay.workShifts.length +
       visibleDay.planBlocks.length +
+      visibleDay.scheduledItems.length +
       visibleDay.deadlines.length +
       visibleDay.importedEvents.length,
     visibleDay,
@@ -403,6 +468,14 @@ function getMonthEventToneClass(tone: MonthIndicatorTone) {
     return "border-[#a44824]/14 bg-[#fff2ea] text-[#a44824]";
   }
 
+  if (tone === "appointment") {
+    return "border-brand-coral/14 bg-brand-coral/[0.075] text-brand-coral";
+  }
+
+  if (tone === "task") {
+    return "border-brand-teal/14 bg-brand-teal/[0.07] text-brand-teal";
+  }
+
   if (tone === "external") {
     return "border-brand-ink/10 bg-brand-ink/[0.045] text-brand-ink/70";
   }
@@ -431,7 +504,15 @@ function EventCardShell({
   meta,
   title,
 }: {
-  accent: "deadline" | "external" | "google" | "ics" | "plan" | "work";
+  accent:
+    | "appointment"
+    | "deadline"
+    | "external"
+    | "google"
+    | "ics"
+    | "plan"
+    | "task"
+    | "work";
   badges: ReactNode;
   children?: ReactNode;
   meta?: string;
@@ -440,6 +521,10 @@ function EventCardShell({
   const accentClass =
     accent === "work"
       ? "border-brand-ocean/14 bg-brand-ocean/[0.055]"
+      : accent === "appointment"
+        ? "border-brand-coral/14 bg-brand-coral/[0.055]"
+      : accent === "task"
+        ? "border-brand-teal/14 bg-brand-teal/[0.045]"
       : accent === "deadline"
         ? "border-brand-coral/14 bg-brand-coral/[0.055]"
         : accent === "plan"
@@ -628,6 +713,320 @@ function ImportedCalendarEventCard({
   );
 }
 
+function ScheduledItemEvent({
+  conflicts,
+  item,
+  onEdit,
+  onRemove,
+}: {
+  conflicts: ScheduledItemConflict[];
+  item: ScheduledItem;
+  onEdit: (item: ScheduledItem) => void;
+  onRemove: (item: ScheduledItem) => void;
+}) {
+  const typeLabel = formatScheduledItemTypeLabel(item.itemType);
+
+  return (
+    <EventCardShell
+      accent={item.itemType === "appointment" ? "appointment" : "task"}
+      badges={
+        <>
+          <Badge
+            className={
+              item.itemType === "appointment"
+                ? "bg-brand-coral/10 text-brand-coral"
+                : "bg-brand-teal/10 text-brand-teal"
+            }
+            variant="subtle"
+          >
+            {typeLabel}
+          </Badge>
+          {conflicts.length > 0 ? (
+            <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">
+              Conflict
+            </Badge>
+          ) : null}
+        </>
+      }
+      meta={formatScheduledItemTimeLabel(item)}
+      title={item.title}
+    >
+      {item.description ? (
+        <p className="mt-1 text-sm leading-6 text-brand-ink/65">
+          {item.description}
+        </p>
+      ) : null}
+      {item.location ? (
+        <p className="mt-2 text-sm font-medium leading-6 text-brand-ink/58">
+          {item.location}
+        </p>
+      ) : null}
+      {conflicts.map((conflict) => (
+        <p
+          key={`${item.id}-${conflict.kind}-${conflict.sourceLabel}`}
+          className="mt-3 rounded-2xl border border-brand-coral/16 bg-white/66 px-3 py-2 text-xs font-semibold leading-5 text-brand-coral"
+        >
+          {conflict.message}
+        </p>
+      ))}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          className="rounded-full border border-brand-ink/10 bg-white/72 px-3 py-1.5 text-xs font-semibold text-brand-ink/58 transition hover:bg-white hover:text-brand-ink"
+          type="button"
+          onClick={() => onEdit(item)}
+        >
+          Edit
+        </button>
+        <button
+          className="rounded-full border border-brand-coral/12 bg-white/72 px-3 py-1.5 text-xs font-semibold text-brand-coral/75 transition hover:bg-brand-coral/8 hover:text-brand-coral"
+          type="button"
+          onClick={() => onRemove(item)}
+        >
+          Remove
+        </button>
+      </div>
+    </EventCardShell>
+  );
+}
+
+function ScheduledItemFormDialog({
+  getConflicts,
+  initialDraft,
+  loading,
+  mode,
+  onCancel,
+  onSubmit,
+  open,
+}: {
+  getConflicts: (draft: ScheduledItemDraft) => ScheduledItemConflict[];
+  initialDraft: ScheduledItemDraft;
+  loading: boolean;
+  mode: "create" | "edit";
+  onCancel: () => void;
+  onSubmit: (draft: ScheduledItemDraft) => void;
+  open: boolean;
+}) {
+  const [draft, setDraft] = useState<ScheduledItemDraft>(initialDraft);
+
+  useEffect(() => {
+    if (open) {
+      setDraft(initialDraft);
+    }
+  }, [initialDraft, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const validationMessage = validateScheduledItemDraft(draft);
+  const conflicts = getConflicts(draft);
+  const typeLabel = formatScheduledItemTypeLabel(draft.itemType);
+  const submitLabel =
+    mode === "edit"
+      ? "Save changes"
+      : draft.itemType === "appointment"
+        ? "Add appointment"
+        : "Add task";
+
+  return (
+    <div
+      className="fixed inset-0 z-[110] flex items-center justify-center bg-brand-ink/28 px-4 py-6 backdrop-blur-sm"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !loading) {
+          onCancel();
+        }
+      }}
+    >
+      <form
+        className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-[2rem] border border-white/70 bg-white p-5 shadow-[0_30px_90px_rgba(18,32,47,0.24)] sm:p-6"
+        onSubmit={(event) => {
+          event.preventDefault();
+
+          if (!validationMessage) {
+            onSubmit(draft);
+          }
+        }}
+      >
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-teal">
+              {mode === "edit" ? "Edit" : "Add"} exact-date item
+            </p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-brand-ink">
+              {mode === "edit" ? `Edit ${typeLabel}` : "Task or appointment"}
+            </h2>
+          </div>
+          <button
+            className="w-fit rounded-full border border-brand-ink/10 bg-white/78 px-3 py-1.5 text-xs font-semibold text-brand-ink/58 transition hover:bg-white hover:text-brand-ink"
+            disabled={loading}
+            type="button"
+            onClick={onCancel}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-4">
+          <div>
+            <p className="mb-2 text-sm font-semibold text-brand-ink">
+              Item type
+            </p>
+            <div className="grid gap-2 rounded-[22px] bg-brand-ink/[0.045] p-1 sm:grid-cols-2">
+              {(["task", "appointment"] as const).map((itemType) => (
+                <button
+                  key={itemType}
+                  aria-pressed={draft.itemType === itemType}
+                  className={`rounded-[18px] px-4 py-3 text-sm font-semibold transition ${
+                    draft.itemType === itemType
+                      ? "bg-white text-brand-ink shadow-[0_10px_24px_rgba(18,32,47,0.08)]"
+                      : "text-brand-ink/58 hover:bg-white/60 hover:text-brand-ink"
+                  }`}
+                  type="button"
+                  onClick={() =>
+                    setDraft((current) => ({
+                      ...current,
+                      itemType,
+                    }))
+                  }
+                >
+                  {formatScheduledItemTypeLabel(itemType)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="space-y-2 text-sm font-semibold text-brand-ink">
+              Title
+              <Input
+                value={draft.title}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    title: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="space-y-2 text-sm font-semibold text-brand-ink">
+              Date
+              <Input
+                type="date"
+                value={draft.itemDate}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    itemDate: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          </div>
+
+          <label className="space-y-2 text-sm font-semibold text-brand-ink">
+            Details <span className="font-normal text-brand-ink/42">optional</span>
+            <textarea
+              className="min-h-24 w-full rounded-2xl border border-brand-ink/10 bg-white/82 px-4 py-3 text-sm leading-6 text-brand-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] placeholder:text-brand-ink/36 focus:border-brand-teal/35 focus:bg-white"
+              value={draft.description}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  description: event.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <label className="space-y-2 text-sm font-semibold text-brand-ink">
+              Start{" "}
+              <span className="font-normal text-brand-ink/42">
+                {draft.itemType === "task" ? "optional" : "required"}
+              </span>
+              <Input
+                type="time"
+                value={draft.startTime ?? ""}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    startTime: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="space-y-2 text-sm font-semibold text-brand-ink">
+              Duration
+              <Input
+                min="0.25"
+                step="0.25"
+                type="number"
+                value={draft.estimatedHours}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    estimatedHours: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="space-y-2 text-sm font-semibold text-brand-ink">
+              Location{" "}
+              <span className="font-normal text-brand-ink/42">optional</span>
+              <Input
+                value={draft.location}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    location: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          </div>
+
+          {validationMessage ? (
+            <p className="rounded-2xl border border-brand-coral/16 bg-brand-coral/[0.07] px-4 py-3 text-sm font-semibold leading-6 text-brand-coral">
+              {validationMessage}
+            </p>
+          ) : null}
+
+          {!validationMessage && conflicts.length > 0 ? (
+            <div className="rounded-[22px] border border-brand-coral/14 bg-brand-coral/[0.055] p-4">
+              <p className="text-sm font-semibold text-brand-coral">
+                Heads up before saving
+              </p>
+              <div className="mt-2 grid gap-2">
+                {conflicts.map((conflict) => (
+                  <p
+                    key={`${conflict.kind}-${conflict.sourceLabel}`}
+                    className="text-sm leading-6 text-brand-coral/88"
+                  >
+                    {conflict.message}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_1fr]">
+          <Button
+            disabled={loading}
+            type="button"
+            variant="outline"
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+          <Button disabled={loading || Boolean(validationMessage)} type="submit">
+            {loading ? "Saving..." : submitLabel}
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function CalendarEventGroupSection({ children, count, label }: CalendarEventGroup) {
   if (count === 0) {
     return null;
@@ -653,14 +1052,20 @@ function DayEventGroups({
   conflictByBlockId,
   day,
   importedConflictByBlockId,
+  onEditScheduledItem,
+  onRemoveScheduledItem,
   planBlockSyncStatusById,
   projects,
+  scheduledItemConflictsById,
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   day: ReturnType<typeof getVisibleDayData>;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
+  onEditScheduledItem: (item: ScheduledItem) => void;
+  onRemoveScheduledItem: (item: ScheduledItem) => void;
   planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
   projects: Project[];
+  scheduledItemConflictsById: Map<string, ScheduledItemConflict[]>;
 }) {
   const { flexiblePlanBlocks, timedPlanBlocks } = splitPlanBlocks(
     day.planBlocks,
@@ -698,6 +1103,21 @@ function DayEventGroups({
             projects={projects}
             syncStatus={planBlockSyncStatusById[block.id]}
             workConflict={conflictByBlockId.get(block.id)}
+          />
+        ))}
+      </CalendarEventGroupSection>
+
+      <CalendarEventGroupSection
+        count={day.scheduledItems.length}
+        label="Tasks & appointments"
+      >
+        {day.scheduledItems.map((item) => (
+          <ScheduledItemEvent
+            key={item.id}
+            conflicts={scheduledItemConflictsById.get(item.id) ?? []}
+            item={item}
+            onEdit={onEditScheduledItem}
+            onRemove={onRemoveScheduledItem}
           />
         ))}
       </CalendarEventGroupSection>
@@ -766,6 +1186,10 @@ function MonthEventDot({ tone }: { tone: MonthIndicatorTone }) {
         ? "bg-brand-teal/55"
       : tone === "school"
         ? "bg-[#a44824]"
+      : tone === "appointment"
+        ? "bg-brand-coral"
+      : tone === "task"
+        ? "bg-brand-teal"
       : tone === "external"
         ? "bg-brand-ink/55"
       : tone === "deadline"
@@ -787,16 +1211,24 @@ function MonthDayDetail({
   day,
   filters,
   importedConflictByBlockId,
+  onCreateScheduledItem,
+  onEditScheduledItem,
+  onRemoveScheduledItem,
   planBlockSyncStatusById,
   projects,
+  scheduledItemConflictsById,
   status,
 }: {
   conflictByBlockId: Map<string, WeeklyPlanWorkConflict>;
   day: CalendarMonthDaySchedule | null;
   filters: CalendarFilters;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
+  onCreateScheduledItem: (itemDate: string) => void;
+  onEditScheduledItem: (item: ScheduledItem) => void;
+  onRemoveScheduledItem: (item: ScheduledItem) => void;
   planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
   projects: Project[];
+  scheduledItemConflictsById: Map<string, ScheduledItemConflict[]>;
   status: CalendarStatus;
 }) {
   if (!day) {
@@ -837,6 +1269,13 @@ function MonthDayDetail({
           >
             Add plan block
           </Link>
+          <button
+            className="inline-flex h-9 items-center justify-center rounded-full border border-brand-teal/15 bg-brand-teal/8 px-3 text-xs font-semibold text-brand-teal transition hover:-translate-y-0.5 hover:bg-brand-teal/12"
+            type="button"
+            onClick={() => onCreateScheduledItem(day.isoDate)}
+          >
+            Add task or appointment
+          </button>
         </div>
 
         <div className="mt-4">
@@ -852,7 +1291,7 @@ function MonthDayDetail({
                 Nothing scheduled here yet.
               </p>
               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                No work shifts, plan blocks, or external events.
+                No work shifts, plan blocks, tasks, or external events.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <Link
@@ -867,6 +1306,13 @@ function MonthDayDetail({
                 >
                   Add work shift
                 </Link>
+                <button
+                  className="inline-flex h-9 items-center justify-center rounded-full border border-brand-teal/15 bg-brand-teal/8 px-3 text-xs font-semibold text-brand-teal"
+                  type="button"
+                  onClick={() => onCreateScheduledItem(day.isoDate)}
+                >
+                  Add task
+                </button>
               </div>
             </div>
           ) : null}
@@ -876,8 +1322,11 @@ function MonthDayDetail({
               conflictByBlockId={conflictByBlockId}
               day={visibleDay}
               importedConflictByBlockId={importedConflictByBlockId}
+              onEditScheduledItem={onEditScheduledItem}
+              onRemoveScheduledItem={onRemoveScheduledItem}
               planBlockSyncStatusById={planBlockSyncStatusById}
               projects={projects}
+              scheduledItemConflictsById={scheduledItemConflictsById}
             />
           ) : null}
         </div>
@@ -891,8 +1340,12 @@ function CalendarMonthView({
   filters,
   importedConflictByBlockId,
   monthCalendar,
+  onCreateScheduledItem,
+  onEditScheduledItem,
+  onRemoveScheduledItem,
   planBlockSyncStatusById,
   projects,
+  scheduledItemConflictsById,
   selectedMonthDay,
   selectedMonthIso,
   setSelectedMonthIso,
@@ -902,8 +1355,12 @@ function CalendarMonthView({
   filters: CalendarFilters;
   importedConflictByBlockId: Map<string, WeeklyPlanImportedEventConflict>;
   monthCalendar: ReturnType<typeof buildCalendarMonth>;
+  onCreateScheduledItem: (itemDate: string) => void;
+  onEditScheduledItem: (item: ScheduledItem) => void;
+  onRemoveScheduledItem: (item: ScheduledItem) => void;
   planBlockSyncStatusById: Record<string, PlanBlockGoogleSyncStatus>;
   projects: Project[];
+  scheduledItemConflictsById: Map<string, ScheduledItemConflict[]>;
   selectedMonthDay: CalendarMonthDaySchedule | null;
   selectedMonthIso: string | null;
   setSelectedMonthIso: (isoDate: string) => void;
@@ -1042,8 +1499,12 @@ function CalendarMonthView({
         day={selectedMonthDay}
         filters={filters}
         importedConflictByBlockId={importedConflictByBlockId}
+        onCreateScheduledItem={onCreateScheduledItem}
+        onEditScheduledItem={onEditScheduledItem}
+        onRemoveScheduledItem={onRemoveScheduledItem}
         planBlockSyncStatusById={planBlockSyncStatusById}
         projects={projects}
+        scheduledItemConflictsById={scheduledItemConflictsById}
         status={status}
       />
     </section>
@@ -1056,6 +1517,7 @@ export function CalendarPage() {
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [planBlocks, setPlanBlocks] = useState<WeeklyPlanBlock[]>([]);
+  const [scheduledItems, setScheduledItems] = useState<ScheduledItem[]>([]);
   const [workShifts, setWorkShifts] = useState<WorkShift[]>([]);
   const [importedEvents, setImportedEvents] = useState<ImportedCalendarEvent[]>([]);
   const [filters, setFilters] = useState<CalendarFilters>(defaultFilters);
@@ -1069,6 +1531,16 @@ export function CalendarPage() {
     Record<string, PlanBlockGoogleSyncStatus>
   >({});
   const [error, setError] = useState<string | null>(null);
+  const [scheduledItemMessage, setScheduledItemMessage] = useState<string | null>(
+    null,
+  );
+  const [scheduledItemForm, setScheduledItemForm] =
+    useState<ScheduledItemFormState | null>(null);
+  const [scheduledItemFormLoading, setScheduledItemFormLoading] = useState(false);
+  const [scheduledItemToRemove, setScheduledItemToRemove] =
+    useState<ScheduledItem | null>(null);
+  const [scheduledItemRemoveLoading, setScheduledItemRemoveLoading] =
+    useState(false);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -1102,10 +1574,16 @@ export function CalendarPage() {
           return;
         }
 
-        const [projectsResult, planResult, workResult, importedEventsResult] =
-          await Promise.all([
+        const [
+          projectsResult,
+          planResult,
+          scheduledItemsResult,
+          workResult,
+          importedEventsResult,
+        ] = await Promise.all([
             fetchProjectsForUser(supabase, userId),
             fetchWeeklyPlanBlocksForUser(supabase, userId),
+            fetchScheduledItemsForUser(supabase, userId),
             fetchWorkShiftsForUser(supabase, userId),
             fetchImportedCalendarEventsForUser(supabase, userId),
           ]);
@@ -1116,6 +1594,7 @@ export function CalendarPage() {
 
         setProjects(projectsResult.data);
         setPlanBlocks(planResult.data);
+        setScheduledItems(scheduledItemsResult.data);
         setWorkShifts(workResult.data);
         setImportedEvents(importedEventsResult.data);
         setStatus("ready");
@@ -1123,6 +1602,7 @@ export function CalendarPage() {
         const errors = [
           projectsResult.error,
           planResult.error,
+          scheduledItemsResult.error,
           workResult.error,
           importedEventsResult.error,
         ].filter(Boolean);
@@ -1218,10 +1698,18 @@ export function CalendarPage() {
         importedEvents,
         planBlocks,
         projects,
+        scheduledItems,
         weekStart: weekStartDate,
         workShifts,
       }),
-    [importedEvents, planBlocks, projects, weekStartDate, workShifts],
+    [
+      importedEvents,
+      planBlocks,
+      projects,
+      scheduledItems,
+      weekStartDate,
+      workShifts,
+    ],
   );
 
   const monthCalendar = useMemo(
@@ -1231,9 +1719,10 @@ export function CalendarPage() {
         monthDate,
         planBlocks,
         projects,
+        scheduledItems,
         workShifts,
       }),
-    [importedEvents, monthDate, planBlocks, projects, workShifts],
+    [importedEvents, monthDate, planBlocks, projects, scheduledItems, workShifts],
   );
 
   const planWorkConflicts = useMemo(
@@ -1267,6 +1756,21 @@ export function CalendarPage() {
       ),
     [planImportedEventConflicts],
   );
+  const scheduledItemConflictsById = useMemo(() => {
+    const entries = scheduledItems.map((item) => [
+      item.id,
+      findScheduledItemConflicts({
+        importedEvents,
+        item,
+        planBlocks,
+        scheduledItems,
+        weekStart: weekStartDate,
+        workShifts,
+      }),
+    ] as const);
+
+    return new Map(entries.filter(([, conflicts]) => conflicts.length > 0));
+  }, [importedEvents, planBlocks, scheduledItems, weekStartDate, workShifts]);
 
   const weekSummary = useMemo(() => {
     const workHours = workShifts.reduce(
@@ -1281,6 +1785,7 @@ export function CalendarPage() {
       return (
         day.workShifts.length > 0 ||
         day.planBlocks.length > 0 ||
+        day.scheduledItems.length > 0 ||
         day.deadlines.length > 0 ||
         day.importedEvents.length > 0
       );
@@ -1297,6 +1802,10 @@ export function CalendarPage() {
       (sum, day) => sum + day.deadlines.length,
       0,
     );
+    const scheduledItemCount = calendar.days.reduce(
+      (sum, day) => sum + day.scheduledItems.length,
+      0,
+    );
 
     return {
       deadlineCount,
@@ -1304,6 +1813,7 @@ export function CalendarPage() {
       importedEventCount,
       openDays: Math.max(0, 7 - daysWithCommitments),
       plannedProjectHours,
+      scheduledItemCount,
       workHours,
     };
   }, [calendar.days, planBlocks, workShifts]);
@@ -1326,6 +1836,10 @@ export function CalendarPage() {
       (sum, day) => sum + day.deadlines.length,
       0,
     );
+    const scheduledItemCount = visibleDays.reduce(
+      (sum, day) => sum + day.scheduledItems.length,
+      0,
+    );
     const importedEventCount = visibleDays.reduce(
       (sum, day) =>
         sum +
@@ -1343,6 +1857,7 @@ export function CalendarPage() {
       importedEventCount,
       openDays,
       plannedBlocks,
+      scheduledItemCount,
       workShiftDays,
     };
   }, [filters, monthCalendar.days]);
@@ -1357,6 +1872,10 @@ export function CalendarPage() {
           {
             label: "Plan blocks",
             value: formatEstimatedHours(weekSummary.plannedProjectHours),
+          },
+          {
+            label: "Tasks/appts",
+            value: weekSummary.scheduledItemCount,
           },
           {
             label: "External events",
@@ -1379,6 +1898,10 @@ export function CalendarPage() {
           {
             label: "Plan blocks",
             value: monthSummary.plannedBlocks,
+          },
+          {
+            label: "Tasks/appts",
+            value: monthSummary.scheduledItemCount,
           },
           {
             label: "Deadlines",
@@ -1454,9 +1977,212 @@ export function CalendarPage() {
     setWeekStartDate(getCurrentWeekStart());
   }
 
+  function openCreateScheduledItem(itemDate: string) {
+    setScheduledItemMessage(null);
+    setScheduledItemForm({
+      initialDraft: createDefaultScheduledItemDraft(itemDate),
+      mode: "create",
+    });
+  }
+
+  function openEditScheduledItem(item: ScheduledItem) {
+    setScheduledItemMessage(null);
+    setScheduledItemForm({
+      initialDraft: {
+        itemType: item.itemType,
+        title: item.title,
+        description: item.description,
+        itemDate: item.itemDate,
+        startTime: item.startTime ?? "",
+        estimatedHours: String(item.estimatedHours),
+        location: item.location,
+      },
+      item,
+      mode: "edit",
+    });
+  }
+
+  function getScheduledItemDraftConflicts(draft: ScheduledItemDraft) {
+    if (validateScheduledItemDraft(draft)) {
+      return [];
+    }
+
+    const payload = createScheduledItemPayload(draft);
+    const previewItem: ScheduledItem = {
+      id: scheduledItemForm?.item?.id ?? "scheduled-item-preview",
+      ...payload,
+    };
+
+    return findScheduledItemConflicts({
+      importedEvents,
+      item: previewItem,
+      planBlocks,
+      scheduledItems,
+      weekStart: weekStartDate,
+      workShifts,
+    });
+  }
+
+  async function getSignedInUserForScheduledItems() {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error: sessionError } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      return {
+        error: sessionError.message,
+        supabase,
+        userId: null,
+      };
+    }
+
+    return {
+      error: data.session?.user.id ? null : "Sign in to manage scheduled items.",
+      supabase,
+      userId: data.session?.user.id ?? null,
+    };
+  }
+
+  async function submitScheduledItem(draft: ScheduledItemDraft) {
+    const validationMessage = validateScheduledItemDraft(draft);
+
+    if (validationMessage || !scheduledItemForm) {
+      setScheduledItemMessage(validationMessage ?? "Try opening the form again.");
+      return;
+    }
+
+    setScheduledItemFormLoading(true);
+    setScheduledItemMessage(null);
+
+    try {
+      const { error: sessionError, supabase, userId } =
+        await getSignedInUserForScheduledItems();
+
+      if (!userId) {
+        setScheduledItemMessage(sessionError);
+        return;
+      }
+
+      if (scheduledItemForm.mode === "edit" && scheduledItemForm.item) {
+        const result = await updateScheduledItemForUser(
+          supabase,
+          userId,
+          scheduledItemForm.item.id,
+          draft,
+        );
+
+        if (result.error || !result.data) {
+          setScheduledItemMessage(
+            result.error?.message ?? "This item could not be updated.",
+          );
+          return;
+        }
+
+        setScheduledItems((current) =>
+          sortScheduledItems(
+            current.map((item) =>
+              item.id === result.data?.id ? result.data : item,
+            ),
+          ),
+        );
+        setScheduledItemForm(null);
+        setScheduledItemMessage("Scheduled item updated.");
+        return;
+      }
+
+      const result = await createScheduledItemForUser(supabase, userId, draft);
+
+      if (result.error || !result.data) {
+        setScheduledItemMessage(
+          result.error?.message ?? "This item could not be added.",
+        );
+        return;
+      }
+
+      setScheduledItems((current) => sortScheduledItems([...current, result.data!]));
+      setScheduledItemForm(null);
+      setScheduledItemMessage(
+        result.data.itemType === "appointment"
+          ? "Appointment added."
+          : "Task added.",
+      );
+    } finally {
+      setScheduledItemFormLoading(false);
+    }
+  }
+
+  async function confirmRemoveScheduledItem() {
+    if (!scheduledItemToRemove) {
+      return;
+    }
+
+    setScheduledItemRemoveLoading(true);
+    setScheduledItemMessage(null);
+
+    try {
+      const { error: sessionError, supabase, userId } =
+        await getSignedInUserForScheduledItems();
+
+      if (!userId) {
+        setScheduledItemMessage(sessionError);
+        return;
+      }
+
+      const result = await deleteScheduledItemForUser(
+        supabase,
+        userId,
+        scheduledItemToRemove.id,
+      );
+
+      if (result.error) {
+        setScheduledItemMessage(
+          result.error.message ?? "This item could not be removed.",
+        );
+        return;
+      }
+
+      setScheduledItems((current) =>
+        current.filter((item) => item.id !== scheduledItemToRemove.id),
+      );
+      setScheduledItemMessage("Scheduled item removed.");
+      setScheduledItemToRemove(null);
+    } finally {
+      setScheduledItemRemoveLoading(false);
+    }
+  }
+
   return (
     <div className="px-3 pb-[calc(10rem+env(safe-area-inset-bottom))] pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
       <div className="app-shell flex flex-col gap-5 sm:gap-6">
+        <ScheduledItemFormDialog
+          getConflicts={getScheduledItemDraftConflicts}
+          initialDraft={
+            scheduledItemForm?.initialDraft ??
+            createDefaultScheduledItemDraft(formatDateInputValue(new Date()))
+          }
+          loading={scheduledItemFormLoading}
+          mode={scheduledItemForm?.mode ?? "create"}
+          open={Boolean(scheduledItemForm)}
+          onCancel={() => {
+            if (!scheduledItemFormLoading) {
+              setScheduledItemForm(null);
+            }
+          }}
+          onSubmit={submitScheduledItem}
+        />
+        <ConfirmDialog
+          confirmLabel="Remove item"
+          description="This removes the task or appointment from Schedule Builder. It will not change Google Calendar or imported calendar events."
+          destructive
+          loading={scheduledItemRemoveLoading}
+          open={Boolean(scheduledItemToRemove)}
+          title="Remove scheduled item?"
+          onCancel={() => {
+            if (!scheduledItemRemoveLoading) {
+              setScheduledItemToRemove(null);
+            }
+          }}
+          onConfirm={confirmRemoveScheduledItem}
+        />
         <SchedulerNav />
 
         <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
@@ -1553,7 +2279,7 @@ export function CalendarPage() {
                     : monthCalendar.monthLabel}
                 </p>
 
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 xl:grid-cols-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2">
                   {summaryCards.map((card) => (
                     <div
                       key={card.label}
@@ -1676,6 +2402,20 @@ export function CalendarPage() {
               </p>
             ) : null}
 
+            {scheduledItemMessage ? (
+              <p
+                className={`rounded-[22px] border px-4 py-3 text-sm font-medium leading-6 ${
+                  scheduledItemMessage.toLowerCase().includes("could not") ||
+                  scheduledItemMessage.toLowerCase().includes("sign in") ||
+                  scheduledItemMessage.toLowerCase().includes("required")
+                    ? "border-brand-coral/18 bg-brand-coral/[0.08] text-brand-coral"
+                    : "border-brand-teal/16 bg-brand-teal/[0.08] text-brand-teal"
+                }`}
+              >
+                {scheduledItemMessage}
+              </p>
+            ) : null}
+
             {view === "week" ? (
               <section className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
                 {calendar.days.map((day) => {
@@ -1712,12 +2452,21 @@ export function CalendarPage() {
                               {day.dateLabel}
                             </p>
                           </div>
-                          <Badge
-                            className="bg-brand-teal/8 text-brand-teal"
-                            variant="subtle"
-                          >
-                            {formatHours(visibleDay.scheduledHours)}
-                          </Badge>
+                          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                            <Badge
+                              className="bg-brand-teal/8 text-brand-teal"
+                              variant="subtle"
+                            >
+                              {formatHours(visibleDay.scheduledHours)}
+                            </Badge>
+                            <button
+                              className="inline-flex h-8 items-center justify-center rounded-full border border-brand-teal/15 bg-brand-teal/8 px-3 text-xs font-semibold text-brand-teal transition hover:bg-brand-teal/12"
+                              type="button"
+                              onClick={() => openCreateScheduledItem(day.isoDate)}
+                            >
+                              Add task
+                            </button>
+                          </div>
                         </div>
 
                         <div className="flex flex-1 flex-col gap-3">
@@ -1733,7 +2482,7 @@ export function CalendarPage() {
                                 Open day
                               </p>
                               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                                No work shifts, plan blocks, or external events.
+                                No work shifts, plan blocks, tasks, or external events.
                               </p>
                             </div>
                           ) : null}
@@ -1743,8 +2492,11 @@ export function CalendarPage() {
                               conflictByBlockId={conflictByBlockId}
                               day={visibleDay}
                               importedConflictByBlockId={importedConflictByBlockId}
+                              onEditScheduledItem={openEditScheduledItem}
+                              onRemoveScheduledItem={setScheduledItemToRemove}
                               planBlockSyncStatusById={planBlockSyncStatusById}
                               projects={projects}
+                              scheduledItemConflictsById={scheduledItemConflictsById}
                             />
                           ) : null}
                         </div>
@@ -1759,8 +2511,12 @@ export function CalendarPage() {
                 filters={filters}
                 importedConflictByBlockId={importedConflictByBlockId}
                 monthCalendar={monthCalendar}
+                onCreateScheduledItem={openCreateScheduledItem}
+                onEditScheduledItem={openEditScheduledItem}
+                onRemoveScheduledItem={setScheduledItemToRemove}
                 planBlockSyncStatusById={planBlockSyncStatusById}
                 projects={projects}
+                scheduledItemConflictsById={scheduledItemConflictsById}
                 selectedMonthDay={selectedMonthDay}
                 selectedMonthIso={selectedMonthIso}
                 setSelectedMonthIso={setSelectedMonthIso}

@@ -18,6 +18,12 @@ import {
   type ImportedCalendarEventDraft,
 } from "@/lib/imported-calendar";
 import {
+  createScheduledItemPayload,
+  type ScheduledItem,
+  type ScheduledItemDraft,
+  type ScheduledItemType,
+} from "@/lib/scheduled-items";
+import {
   normalizeStartTime,
   type WeekDay,
   type WeeklyPlanBlock,
@@ -84,6 +90,20 @@ type ImportedCalendarEventRow = {
   ends_at: string | null;
   all_day: boolean;
   imported_at: string;
+};
+
+type ScheduledItemRow = {
+  id: string;
+  user_id: string;
+  item_type: ScheduledItemType;
+  title: string;
+  description: string | null;
+  item_date: string;
+  start_time: string | null;
+  estimated_hours: number | string;
+  location: string | null;
+  inserted_at: string;
+  updated_at: string;
 };
 
 function createTimeoutError(operation: string) {
@@ -264,6 +284,41 @@ function mapImportedCalendarEventRowToEvent(
     endsAt: row.ends_at,
     allDay: row.all_day,
     importedAt: row.imported_at,
+  };
+}
+
+function mapScheduledItemRowToItem(row: ScheduledItemRow): ScheduledItem {
+  const startTime = normalizeStartTime(row.start_time ?? "");
+
+  return {
+    id: row.id,
+    itemType: row.item_type,
+    title: row.title,
+    description: row.description ?? "",
+    itemDate: row.item_date,
+    startTime: startTime ?? undefined,
+    estimatedHours: Number(row.estimated_hours),
+    location: row.location ?? "",
+    insertedAt: row.inserted_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapScheduledItemDraftToRow(
+  userId: string,
+  draft: ScheduledItemDraft,
+): Omit<ScheduledItemRow, "id" | "inserted_at" | "updated_at"> {
+  const payload = createScheduledItemPayload(draft);
+
+  return {
+    user_id: userId,
+    item_type: payload.itemType,
+    title: payload.title,
+    description: payload.description || null,
+    item_date: payload.itemDate,
+    start_time: payload.startTime ?? null,
+    estimated_hours: payload.estimatedHours,
+    location: payload.location || null,
   };
 }
 
@@ -858,6 +913,99 @@ export async function deleteImportedCalendarEventsForSource(
       .eq("user_id", userId)
       .eq("source", source),
     `Removing ${source} calendar events from Supabase`,
+  );
+
+  return { error: result.error };
+}
+
+export async function fetchScheduledItemsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("scheduled_items")
+      .select(
+        "id, user_id, item_type, title, description, item_date, start_time, estimated_hours, location, inserted_at, updated_at",
+      )
+      .eq("user_id", userId)
+      .order("item_date", { ascending: true })
+      .order("start_time", { ascending: true, nullsFirst: false }),
+    "Loading scheduled items from Supabase",
+  );
+
+  return {
+    data:
+      result.data?.map((row) =>
+        mapScheduledItemRowToItem(row as ScheduledItemRow),
+      ) ?? [],
+    error: result.error,
+  };
+}
+
+export async function createScheduledItemForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  draft: ScheduledItemDraft,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("scheduled_items")
+      .insert(mapScheduledItemDraftToRow(userId, draft))
+      .select(
+        "id, user_id, item_type, title, description, item_date, start_time, estimated_hours, location, inserted_at, updated_at",
+      )
+      .single(),
+    "Saving scheduled item to Supabase",
+  );
+
+  return {
+    data: result.data
+      ? mapScheduledItemRowToItem(result.data as ScheduledItemRow)
+      : null,
+    error: result.error,
+  };
+}
+
+export async function updateScheduledItemForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  itemId: string,
+  draft: ScheduledItemDraft,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("scheduled_items")
+      .update(mapScheduledItemDraftToRow(userId, draft))
+      .eq("user_id", userId)
+      .eq("id", itemId)
+      .select(
+        "id, user_id, item_type, title, description, item_date, start_time, estimated_hours, location, inserted_at, updated_at",
+      )
+      .single(),
+    "Updating scheduled item in Supabase",
+  );
+
+  return {
+    data: result.data
+      ? mapScheduledItemRowToItem(result.data as ScheduledItemRow)
+      : null,
+    error: result.error,
+  };
+}
+
+export async function deleteScheduledItemForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  itemId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("scheduled_items")
+      .delete()
+      .eq("user_id", userId)
+      .eq("id", itemId),
+    "Removing scheduled item from Supabase",
   );
 
   return { error: result.error };
