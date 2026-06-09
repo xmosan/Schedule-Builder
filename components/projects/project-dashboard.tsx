@@ -271,6 +271,10 @@ function formatDashboardDate(date: Date) {
   }).format(date);
 }
 
+function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function getDashboardPersona(plannerType: PlannerType) {
   if (plannerType === "Student") {
     return {
@@ -710,6 +714,7 @@ function buildSuggestedDashboardActions({
       actions.push(action);
     }
   };
+  const hasAction = (id: string) => actions.some((item) => item.id === id);
 
   if (conflictCount > 0) {
     addAction({
@@ -756,13 +761,23 @@ function buildSuggestedDashboardActions({
   }
 
   if (weeklyWorkHours >= 30 && weeklyPlanHours <= 2) {
+    const workHoursLabel = formatEstimatedHours(weeklyWorkHours);
+    const hasLikelyOpenings = openTimeSummaries.length > 0;
+
     addAction({
       description:
-        "You have limited open time this week. Ask the Assistant to find your best planning windows.",
+        hasLikelyOpenings
+          ? `${workHoursLabel} of work is scheduled this week, and there are ${pluralize(
+              openTimeSummaries.length,
+              "likely opening",
+            )}. Ask the Assistant to choose the best time for your next block.`
+          : `${workHoursLabel} of work is scheduled this week. Ask the Assistant to find the safest planning window before adding more.`,
       href: "/assistant",
       id: "limited-open-time",
       label: "Find windows",
-      title: "Find the best open time",
+      title: hasLikelyOpenings
+        ? "Choose the best open time"
+        : "Find the best open time",
     });
   }
 
@@ -919,21 +934,50 @@ function buildSuggestedDashboardActions({
     }
   }
 
-  addAction({
-    description:
-      openTimeSummaries.length > 0
-        ? `Likely openings: ${openTimeSummaries.join(", ")}.`
-        : "Ask for open windows, conflict checks, or what to prioritize next.",
-    href: "/assistant",
-    id: "assistant",
-    label: "Open Assistant",
-    title:
-      plannerType === "Student"
-        ? "Find open study time"
-        : plannerType === "Organization leader"
-          ? "Check conflicts and prep time"
-          : "Ask for open time",
-  });
+  if (!hasAction("limited-open-time") && !hasAction("review-conflicts")) {
+    addAction({
+      description:
+        openTimeSummaries.length > 0
+          ? `Likely openings: ${openTimeSummaries.join(", ")}.`
+          : "Ask for open windows, conflict checks, or what to prioritize next.",
+      href: "/assistant",
+      id: "assistant",
+      label: "Open Assistant",
+      title:
+        plannerType === "Student"
+          ? "Find open study time"
+          : plannerType === "Organization leader"
+            ? "Check conflicts and prep time"
+            : "Ask for open time",
+    });
+  } else if (hasPlanBlocks) {
+    addAction({
+      description:
+        "Review the blocks already on your weekly board and add one more concrete next step if the week still has room.",
+      href: "/plan",
+      id: "review-weekly-plan",
+      label: "Open Weekly Plan",
+      title: "Review Weekly Plan",
+    });
+  } else if (hasProjects) {
+    addAction({
+      description:
+        "Pick one active project or standalone task and turn it into a weekly block.",
+      href: "/plan",
+      id: "add-plan-block",
+      label: "Add block",
+      title: "Add a plan block",
+    });
+  } else {
+    addAction({
+      description:
+        "Use the Calendar hub to see what is already on the week before adding more.",
+      href: "/calendar",
+      id: "review-calendar",
+      label: "Open Calendar",
+      title: "Review Calendar",
+    });
+  }
 
   return actions.slice(0, 3);
 }
@@ -989,13 +1033,17 @@ function SetupProgressCard({
 
 function SuggestedSetupCard({
   actions,
+  isSetupComplete,
   plannerType,
 }: {
   actions: DashboardAction[];
+  isSetupComplete: boolean;
   plannerType: PlannerType;
 }) {
   const primaryAction = actions[0];
   const secondaryActions = actions.slice(1, 3);
+  const eyebrow = isSetupComplete ? "Recommended next step" : "Suggested setup";
+  const heading = isSetupComplete ? "Your next move" : "Best next step";
 
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
@@ -1003,10 +1051,10 @@ function SuggestedSetupCard({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-              Suggested setup
+              {eyebrow}
             </p>
             <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-              Best next step
+              {heading}
             </h2>
           </div>
           <Badge variant="subtle">{plannerType}</Badge>
@@ -1191,10 +1239,10 @@ function TodayWeekCard({
           </div>
           <div className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-3">
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
-              Open days
+              Open
             </p>
             <p className="mt-2 text-lg font-semibold text-brand-ink">
-              {openDayCount}
+              {pluralize(openDayCount, "open day")}
             </p>
           </div>
         </div>
@@ -2731,12 +2779,12 @@ export function ProjectDashboard() {
                   </p>
 
                   <div className="mt-5 flex flex-wrap gap-2.5">
-                    <Badge>{activeProjects} active projects</Badge>
+                    <Badge>{pluralize(activeProjects, "active project")}</Badge>
                     <Badge variant="subtle">
-                      {planBlocks.length} weekly blocks
+                      {pluralize(planBlocks.length, "weekly block")}
                     </Badge>
                     <Badge variant="subtle">
-                      {workShifts.length} unavailable blocks
+                      {pluralize(workShifts.length, "unavailable block")}
                     </Badge>
                     <Badge variant="subtle">
                       {hasGoogleCalendar
@@ -2807,6 +2855,7 @@ export function ProjectDashboard() {
               <aside className="flex min-w-0 flex-col gap-5 sm:gap-6 lg:sticky lg:top-6">
                 <SuggestedSetupCard
                   actions={suggestedDashboardActions}
+                  isSetupComplete={setupCompleteCount === setupProgressItems.length}
                   plannerType={plannerType}
                 />
                 <NeedsAttentionCard items={attentionItems} />
