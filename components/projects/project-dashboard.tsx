@@ -76,6 +76,7 @@ import {
   formatEstimatedHours,
   formatStartTime,
   getWeeklyPlanStorageKey,
+  parseStartTimeToMinutes,
   parseStoredWeeklyPlan,
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
@@ -111,6 +112,14 @@ type DashboardAction = {
   id: string;
   label: string;
   title: string;
+};
+
+type SetupProgressItem = {
+  done: boolean;
+  href: string;
+  label: string;
+  nextLabel: string;
+  statusLabel?: string;
 };
 
 type DashboardTopThreeItem = {
@@ -303,24 +312,28 @@ function getPlanBlockTimeSummary(block: WeeklyPlanBlock) {
   return `${timeLabel} - ${formatEstimatedHours(block.estimatedHours)}`;
 }
 
-function getTodayScheduleItems(today: CalendarDaySchedule | undefined) {
+function getTodayScheduleGroups(today: CalendarDaySchedule | undefined) {
   if (!today) {
-    return [];
+    return {
+      external: [],
+      plan: [],
+      work: [],
+    };
   }
 
-  const workItems = today.workShifts.map((shift) => ({
+  const work = today.workShifts.map((shift) => ({
     detail: shift.location || shift.notes || "Unavailable time",
     id: `work-${shift.id}`,
     label: "Work",
     title: formatWorkShiftRange(shift),
   }));
-  const planItems = today.planBlocks.map((block) => ({
+  const plan = today.planBlocks.map((block) => ({
     detail: block.plannedTask,
     id: `plan-${block.id}`,
     label: block.startTime ? "Plan" : "Flexible",
     title: `${block.projectName} - ${getPlanBlockTimeSummary(block)}`,
   }));
-  const importedItems = today.importedEvents
+  const external = today.importedEvents
     .filter((event) => !isScheduleBuilderExportedEvent(event))
     .map((event) => ({
       detail: formatImportedEventSource(event),
@@ -332,17 +345,336 @@ function getTodayScheduleItems(today: CalendarDaySchedule | undefined) {
           : "External",
       title: `${event.title} - ${formatImportedEventTimeRange(event)}`,
     }));
-  const deadlineItems = today.deadlines.map((deadline) => ({
-    detail: deadline.deadlineText,
-    id: `deadline-${deadline.projectId}`,
-    label: "Due",
-    title: deadline.projectName,
-  }));
 
-  return [...workItems, ...importedItems, ...planItems, ...deadlineItems].slice(0, 5);
+  return {
+    external,
+    plan,
+    work,
+  };
+}
+
+function getCommitmentCounts(day: CalendarDaySchedule) {
+  const externalEvents = day.importedEvents.filter(
+    (event) => !isScheduleBuilderExportedEvent(event),
+  );
+
+  return {
+    deadlines: day.deadlines.length,
+    externalEvents: externalEvents.length,
+    planBlocks: day.planBlocks.length,
+    workShifts: day.workShifts.length,
+  };
+}
+
+function hasAnyCommitment(day: CalendarDaySchedule) {
+  const counts = getCommitmentCounts(day);
+
+  return (
+    counts.workShifts > 0 ||
+    counts.planBlocks > 0 ||
+    counts.externalEvents > 0 ||
+    counts.deadlines > 0
+  );
+}
+
+function importedEventOverlapsWindow(
+  event: ImportedCalendarEvent,
+  startMinutes: number,
+  endMinutes: number,
+) {
+  if (isScheduleBuilderExportedEvent(event)) {
+    return false;
+  }
+
+  if (event.allDay) {
+    return true;
+  }
+
+  const startDate = new Date(event.startsAt);
+  const endDate = event.endsAt ? new Date(event.endsAt) : null;
+
+  if (Number.isNaN(startDate.getTime())) {
+    return false;
+  }
+
+  const eventStart = startDate.getHours() * 60 + startDate.getMinutes();
+  const eventEnd =
+    endDate && !Number.isNaN(endDate.getTime())
+      ? endDate.getHours() * 60 + endDate.getMinutes()
+      : eventStart + 30;
+
+  return eventStart < endMinutes && eventEnd > startMinutes;
+}
+
+function dayHasCommitmentInWindow(
+  day: CalendarDaySchedule,
+  startMinutes: number,
+  endMinutes: number,
+) {
+  const hasWorkShift = day.workShifts.some((shift) => {
+    const shiftStart = parseStartTimeToMinutes(shift.startTime);
+    const shiftEnd = parseStartTimeToMinutes(shift.endTime);
+
+    if (shiftStart === null || shiftEnd === null) {
+      return false;
+    }
+
+    return shiftStart < endMinutes && shiftEnd > startMinutes;
+  });
+
+  if (hasWorkShift) {
+    return true;
+  }
+
+  const hasPlanBlock = day.planBlocks.some((block) => {
+    const blockStart = parseStartTimeToMinutes(block.startTime);
+
+    if (blockStart === null) {
+      return false;
+    }
+
+    return (
+      blockStart < endMinutes &&
+      blockStart + block.estimatedHours * 60 > startMinutes
+    );
+  });
+
+  if (hasPlanBlock) {
+    return true;
+  }
+
+  return day.importedEvents.some((event) =>
+    importedEventOverlapsWindow(event, startMinutes, endMinutes),
+  );
+}
+
+function getOpenTimeSummaries(days: CalendarDaySchedule[]) {
+  const summaries: string[] = [];
+
+  days.forEach((day) => {
+    if (!hasAnyCommitment(day)) {
+      summaries.push(`${day.day} open`);
+    }
+  });
+
+  if (summaries.length >= 3) {
+    return summaries.slice(0, 3);
+  }
+
+  days.forEach((day) => {
+    if (
+      summaries.length < 3 &&
+      hasAnyCommitment(day) &&
+      !dayHasCommitmentInWindow(day, 17 * 60, 22 * 60)
+    ) {
+      summaries.push(`${day.day} evening`);
+    }
+  });
+
+  if (summaries.length >= 3) {
+    return summaries.slice(0, 3);
+  }
+
+  days.forEach((day) => {
+    if (
+      summaries.length < 3 &&
+      hasAnyCommitment(day) &&
+      !dayHasCommitmentInWindow(day, 8 * 60, 12 * 60)
+    ) {
+      summaries.push(`${day.day} morning`);
+    }
+  });
+
+  return summaries.slice(0, 3);
+}
+
+function wantsIntegration(
+  profile: PlannerProfile | null,
+  integration: "D2L / Brightspace" | "Google Calendar",
+  fallback = true,
+) {
+  if (!profile) {
+    return fallback;
+  }
+
+  return profile.desiredIntegrations.includes(integration);
+}
+
+function buildSetupProgressItems({
+  hasGoogleCalendar,
+  hasImportedCalendarEvents,
+  hasPlanBlocks,
+  hasProjects,
+  hasSchoolEvents,
+  hasWorkShifts,
+  plannerProfile,
+  plannerType,
+}: {
+  hasGoogleCalendar: boolean;
+  hasImportedCalendarEvents: boolean;
+  hasPlanBlocks: boolean;
+  hasProjects: boolean;
+  hasSchoolEvents: boolean;
+  hasWorkShifts: boolean;
+  plannerProfile: PlannerProfile | null;
+  plannerType: PlannerType;
+}) {
+  const wantsGoogleCalendar = wantsIntegration(
+    plannerProfile,
+    "Google Calendar",
+    true,
+  );
+  const wantsD2l = wantsIntegration(
+    plannerProfile,
+    "D2L / Brightspace",
+    plannerType === "Student",
+  );
+  const googleDone = hasGoogleCalendar || !wantsGoogleCalendar;
+  const d2lDone = hasSchoolEvents || !wantsD2l;
+
+  if (plannerType === "Student") {
+    return [
+      {
+        done: hasProjects,
+        href: "/projects",
+        label: "Courses/projects",
+        nextLabel: "Add",
+      },
+      {
+        done: d2lDone,
+        href: "/integrations",
+        label: "D2L / Brightspace",
+        nextLabel: "Import",
+        statusLabel: hasSchoolEvents ? "Set" : "Skipped",
+      },
+      {
+        done: googleDone,
+        href: "/integrations",
+        label: "Google Calendar",
+        nextLabel: "Connect",
+        statusLabel: hasGoogleCalendar ? "Set" : "Skipped",
+      },
+      {
+        done: hasPlanBlocks,
+        href: "/plan",
+        label: "Weekly plan",
+        nextLabel: "Plan",
+      },
+      {
+        done: true,
+        href: "/assistant",
+        label: "Assistant",
+        nextLabel: "Ready",
+        statusLabel: "Ready",
+      },
+    ] satisfies SetupProgressItem[];
+  }
+
+  if (plannerType === "Professional") {
+    return [
+      {
+        done: hasWorkShifts,
+        href: "/work",
+        label: "Work shifts",
+        nextLabel: "Add",
+      },
+      {
+        done: googleDone,
+        href: "/integrations",
+        label: "Google Calendar",
+        nextLabel: "Connect",
+        statusLabel: hasGoogleCalendar ? "Set" : "Skipped",
+      },
+      {
+        done: hasProjects,
+        href: "/projects",
+        label: "Projects/tasks",
+        nextLabel: "Add",
+      },
+      {
+        done: hasPlanBlocks,
+        href: "/plan",
+        label: "Weekly plan",
+        nextLabel: "Plan",
+      },
+      {
+        done: true,
+        href: "/assistant",
+        label: "Assistant",
+        nextLabel: "Ready",
+        statusLabel: "Ready",
+      },
+    ] satisfies SetupProgressItem[];
+  }
+
+  if (plannerType === "Organization leader") {
+    return [
+      {
+        done: hasProjects,
+        href: "/projects",
+        label: "Organization projects",
+        nextLabel: "Add",
+      },
+      {
+        done: hasGoogleCalendar || hasImportedCalendarEvents,
+        href: "/integrations",
+        label: "Calendar context",
+        nextLabel: "Connect/import",
+      },
+      {
+        done: hasPlanBlocks,
+        href: "/plan",
+        label: "Weekly plan",
+        nextLabel: "Plan",
+      },
+      {
+        done: true,
+        href: "/assistant",
+        label: "Assistant",
+        nextLabel: "Ready",
+        statusLabel: "Ready",
+      },
+    ] satisfies SetupProgressItem[];
+  }
+
+  return [
+    {
+      done: hasProjects,
+      href: "/projects",
+      label: "Projects/tasks",
+      nextLabel: "Add",
+    },
+    {
+      done: hasWorkShifts,
+      href: "/work",
+      label: "Unavailable time",
+      nextLabel: "Add",
+    },
+    {
+      done: googleDone,
+      href: "/integrations",
+      label: "Google Calendar",
+      nextLabel: "Connect",
+      statusLabel: hasGoogleCalendar ? "Set" : "Skipped",
+    },
+    {
+      done: hasPlanBlocks,
+      href: "/plan",
+      label: "Weekly plan",
+      nextLabel: "Plan",
+    },
+    {
+      done: true,
+      href: "/assistant",
+      label: "Assistant",
+      nextLabel: "Ready",
+      statusLabel: "Ready",
+    },
+  ] satisfies SetupProgressItem[];
 }
 
 function buildSuggestedDashboardActions({
+  conflictCount,
   flexibleBlocksCount,
   hasGoogleCalendar,
   hasImportedCalendarEvents,
@@ -350,8 +682,14 @@ function buildSuggestedDashboardActions({
   hasProjects,
   hasSchoolEvents,
   hasWorkShifts,
+  isGoogleSyncEnabled,
+  openTimeSummaries,
   plannerType,
+  syncNeedsAttentionCount,
+  weeklyPlanHours,
+  weeklyWorkHours,
 }: {
+  conflictCount: number;
   flexibleBlocksCount: number;
   hasGoogleCalendar: boolean;
   hasImportedCalendarEvents: boolean;
@@ -359,7 +697,12 @@ function buildSuggestedDashboardActions({
   hasProjects: boolean;
   hasSchoolEvents: boolean;
   hasWorkShifts: boolean;
+  isGoogleSyncEnabled: boolean;
+  openTimeSummaries: string[];
   plannerType: PlannerType;
+  syncNeedsAttentionCount: number;
+  weeklyPlanHours: number;
+  weeklyWorkHours: number;
 }) {
   const actions: DashboardAction[] = [];
   const addAction = (action: DashboardAction) => {
@@ -367,6 +710,61 @@ function buildSuggestedDashboardActions({
       actions.push(action);
     }
   };
+
+  if (conflictCount > 0) {
+    addAction({
+      description:
+        "A planned block may overlap work time or an external calendar event.",
+      href: "/calendar",
+      id: "review-conflicts",
+      label: "Check Calendar",
+      title: "Review schedule conflicts",
+    });
+  }
+
+  if (syncNeedsAttentionCount > 0) {
+    addAction({
+      description:
+        "Some synced blocks changed after being sent to Google Calendar.",
+      href: "/plan",
+      id: "review-sync-attention",
+      label: "Review sync",
+      title: "Review Google sync updates",
+    });
+  }
+
+  if (!hasPlanBlocks) {
+    addAction({
+      description:
+        "Add the first block so your week has a real plan to work from.",
+      href: "/plan",
+      id: "start-weekly-plan",
+      label: "Start planning",
+      title: "Start your weekly plan",
+    });
+  }
+
+  if (flexibleBlocksCount > 0 && isGoogleSyncEnabled) {
+    addAction({
+      description:
+        "Timed blocks can be sent to Google Calendar; flexible blocks need start times first.",
+      href: "/plan",
+      id: "add-start-times",
+      label: "Add times",
+      title: "Add start times before syncing",
+    });
+  }
+
+  if (weeklyWorkHours >= 30 && weeklyPlanHours <= 2) {
+    addAction({
+      description:
+        "You have limited open time this week. Ask the Assistant to find your best planning windows.",
+      href: "/assistant",
+      id: "limited-open-time",
+      label: "Find windows",
+      title: "Find the best open time",
+    });
+  }
 
   if (plannerType === "Student") {
     if (!hasSchoolEvents) {
@@ -521,19 +919,11 @@ function buildSuggestedDashboardActions({
     }
   }
 
-  if (flexibleBlocksCount > 0) {
-    addAction({
-      description:
-        "Timed blocks can be sent to Google Calendar; flexible blocks stay in Schedule Builder.",
-      href: "/plan",
-      id: "add-start-times",
-      label: "Review blocks",
-      title: "Add start times when ready",
-    });
-  }
-
   addAction({
-    description: "Ask for open windows, conflict checks, or what to prioritize next.",
+    description:
+      openTimeSummaries.length > 0
+        ? `Likely openings: ${openTimeSummaries.join(", ")}.`
+        : "Ask for open windows, conflict checks, or what to prioritize next.",
     href: "/assistant",
     id: "assistant",
     label: "Open Assistant",
@@ -545,7 +935,7 @@ function buildSuggestedDashboardActions({
           : "Ask for open time",
   });
 
-  return actions.slice(0, 4);
+  return actions.slice(0, 3);
 }
 
 function SetupProgressCard({
@@ -553,12 +943,7 @@ function SetupProgressCard({
   items,
 }: {
   completeCount: number;
-  items: Array<{
-    done: boolean;
-    href: string;
-    label: string;
-    nextLabel: string;
-  }>;
+  items: SetupProgressItem[];
 }) {
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
@@ -592,7 +977,7 @@ function SetupProgressCard({
                     : "rounded-full bg-brand-ink/5 px-2.5 py-1 text-xs font-semibold text-brand-ink/55"
                 }
               >
-                {item.done ? "Set" : item.nextLabel}
+                {item.done ? item.statusLabel ?? "Set" : item.nextLabel}
               </span>
             </Link>
           ))}
@@ -609,6 +994,9 @@ function SuggestedSetupCard({
   actions: DashboardAction[];
   plannerType: PlannerType;
 }) {
+  const primaryAction = actions[0];
+  const secondaryActions = actions.slice(1, 3);
+
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
       <CardContent className="p-4 sm:p-6">
@@ -618,33 +1006,56 @@ function SuggestedSetupCard({
               Suggested setup
             </p>
             <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-              Best next steps
+              Best next step
             </h2>
           </div>
           <Badge variant="subtle">{plannerType}</Badge>
         </div>
 
-        <div className="mt-4 grid gap-3">
-          {actions.map((action) => (
-            <Link
-              className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
-              href={action.href}
-              key={action.id}
-            >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">{action.title}</p>
-                  <p className="mt-1 text-sm leading-5 text-brand-ink/58">
-                    {action.description}
-                  </p>
+        {primaryAction ? (
+          <Link
+            className="mt-4 block rounded-[24px] border border-brand-teal/15 bg-brand-teal/8 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-brand-teal/12"
+            href={primaryAction.href}
+          >
+            <p className="text-sm font-semibold text-brand-teal">Do this first</p>
+            <h3 className="mt-2 text-lg font-semibold tracking-[-0.02em] text-brand-ink">
+              {primaryAction.title}
+            </h3>
+            <p className="mt-2 text-sm leading-5 text-brand-ink/62">
+              {primaryAction.description}
+            </p>
+            <span className="mt-4 inline-flex rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-brand-teal">
+              {primaryAction.label}
+            </span>
+          </Link>
+        ) : null}
+
+        {secondaryActions.length > 0 ? (
+          <div className="mt-4 grid gap-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+              Also useful
+            </p>
+            {secondaryActions.map((action) => (
+              <Link
+                className="rounded-[22px] border border-brand-ink/8 bg-white/70 p-4 text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
+                href={action.href}
+                key={action.id}
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">{action.title}</p>
+                    <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                      {action.description}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-brand-teal/10 px-3 py-1 text-xs font-semibold text-brand-teal">
+                    {action.label}
+                  </span>
                 </div>
-                <span className="shrink-0 rounded-full bg-brand-teal/10 px-3 py-1 text-xs font-semibold text-brand-teal">
-                  {action.label}
-                </span>
-              </div>
-            </Link>
-          ))}
-        </div>
+              </Link>
+            ))}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -652,6 +1063,7 @@ function SuggestedSetupCard({
 
 function TodayWeekCard({
   openDayCount,
+  openTimeSummaries,
   today,
   weekRangeLabel,
   weeklyExternalEvents,
@@ -659,13 +1071,44 @@ function TodayWeekCard({
   weeklyWorkHours,
 }: {
   openDayCount: number;
+  openTimeSummaries: string[];
   today: CalendarDaySchedule | undefined;
   weekRangeLabel: string;
   weeklyExternalEvents: number;
   weeklyPlanHours: number;
   weeklyWorkHours: number;
 }) {
-  const todayItems = getTodayScheduleItems(today);
+  const todayGroups = getTodayScheduleGroups(today);
+  const todayItemCount =
+    todayGroups.work.length + todayGroups.plan.length + todayGroups.external.length;
+  const renderTodayGroup = (
+    label: string,
+    items: ReturnType<typeof getTodayScheduleGroups>["work"],
+  ) =>
+    items.length > 0 ? (
+      <div className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
+          {label}
+        </p>
+        <div className="mt-3 grid gap-3">
+          {items.slice(0, 3).map((item) => (
+            <div key={item.id}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-brand-ink/5 px-2.5 py-1 text-xs font-semibold text-brand-ink/60">
+                  {item.label}
+                </span>
+                <p className="min-w-0 text-sm font-semibold text-brand-ink">
+                  {item.title}
+                </p>
+              </div>
+              <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                {item.detail}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null;
 
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
@@ -673,13 +1116,52 @@ function TodayWeekCard({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-              Today / this week
+              Today
             </p>
             <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-              {today ? formatDashboardDate(today.date) : "This week"}
+              {today ? formatDashboardDate(today.date) : "Nothing selected"}
             </h2>
           </div>
-          <Badge variant="subtle">{weekRangeLabel}</Badge>
+          <Badge variant="subtle">
+            {todayItemCount > 0
+              ? `${todayItemCount} item${todayItemCount === 1 ? "" : "s"}`
+              : "Open"}
+          </Badge>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {todayItemCount > 0 ? (
+            <>
+              {renderTodayGroup("Work shifts", todayGroups.work)}
+              {renderTodayGroup("Plan blocks", todayGroups.plan)}
+              {renderTodayGroup("External events", todayGroups.external)}
+            </>
+          ) : (
+            <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/50 p-4">
+              <p className="text-sm font-semibold text-brand-ink">
+                Nothing scheduled today yet.
+              </p>
+              <p className="mt-1 text-sm leading-5 text-brand-ink/58">
+                Use this as open space, or add a plan block when the day needs
+                structure.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-brand-ink/8 pt-5">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+              This week
+            </p>
+            <p className="mt-1 text-sm text-brand-ink/58">{weekRangeLabel}</p>
+          </div>
+          <Link
+            className="rounded-full bg-brand-teal/10 px-3 py-1 text-xs font-semibold text-brand-teal"
+            href="/assistant"
+          >
+            Ask Assistant for open time
+          </Link>
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-4">
@@ -717,36 +1199,26 @@ function TodayWeekCard({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3">
-          {todayItems.length > 0 ? (
-            todayItems.map((item) => (
-              <div
-                className="rounded-[20px] border border-brand-ink/8 bg-white/70 p-4"
-                key={item.id}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-brand-ink/5 px-2.5 py-1 text-xs font-semibold text-brand-ink/60">
-                    {item.label}
-                  </span>
-                  <p className="min-w-0 text-sm font-semibold text-brand-ink">
-                    {item.title}
-                  </p>
-                </div>
-                <p className="mt-2 text-sm leading-5 text-brand-ink/58">
-                  {item.detail}
-                </p>
-              </div>
-            ))
-          ) : (
-            <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/50 p-4">
-              <p className="text-sm font-semibold text-brand-ink">
-                Nothing scheduled today yet.
-              </p>
-              <p className="mt-1 text-sm leading-5 text-brand-ink/58">
-                Add a plan block, work shift, or imported calendar event when
-                this day needs structure.
-              </p>
+        <div className="mt-4 rounded-[22px] border border-brand-ink/8 bg-white/70 p-4">
+          <p className="text-sm font-semibold text-brand-ink">
+            Open-time snapshot
+          </p>
+          {openTimeSummaries.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {openTimeSummaries.map((summary) => (
+                <span
+                  className="rounded-full bg-brand-teal/10 px-3 py-1 text-xs font-semibold text-brand-teal"
+                  key={summary}
+                >
+                  {summary}
+                </span>
+              ))}
             </div>
+          ) : (
+            <p className="mt-2 text-sm leading-5 text-brand-ink/58">
+              Open windows need a closer look this week. The Assistant can scan
+              work shifts, plan blocks, and external events for you.
+            </p>
           )}
         </div>
       </CardContent>
@@ -755,11 +1227,13 @@ function TodayWeekCard({
 }
 
 function DashboardTopThreeCard({ items }: { items: DashboardTopThreeItem[] }) {
+  const heading = items.length >= 3 ? "Today's Top 3" : "Today's priorities";
+
   return (
     <Card className="rounded-[28px] border-white/70 bg-white/84 sm:rounded-[32px]">
       <CardContent className="p-4 sm:p-6">
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-          Today&apos;s Top 3
+          {heading}
         </p>
         <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
           What to focus on next
@@ -796,7 +1270,7 @@ function DashboardTopThreeCard({ items }: { items: DashboardTopThreeItem[] }) {
           ) : (
             <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/50 p-4">
               <p className="text-sm font-semibold text-brand-ink">
-                Add projects or plan blocks to generate your Top 3.
+                Add projects or plan blocks to generate priorities.
               </p>
               <p className="mt-1 text-sm leading-5 text-brand-ink/58">
                 Once Schedule Builder has a few priorities, this card becomes
@@ -805,6 +1279,12 @@ function DashboardTopThreeCard({ items }: { items: DashboardTopThreeItem[] }) {
             </div>
           )}
         </div>
+
+        {items.length === 1 ? (
+          <p className="mt-4 rounded-[18px] bg-brand-ink/5 px-4 py-3 text-sm leading-5 text-brand-ink/60">
+            Add more projects or plan blocks to build a fuller priority list.
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -918,11 +1398,11 @@ function FocusRuleCard() {
           </div>
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-              Focus Rule
+              Focus note
             </p>
             <p className="mt-2 text-sm leading-6 text-brand-ink/70">
-              Incomplete projects are ranked by priority first, then by planned
-              weekly effort.
+              Priorities are suggested from your active projects, deadlines,
+              and weekly plan.
             </p>
           </div>
         </div>
@@ -1620,53 +2100,59 @@ export function ProjectDashboard() {
     googleSyncStatus?.removedSyncedEvents?.length ?? 0;
 
   const setupProgressItems = useMemo(
-    () => [
-      {
-        done: projects.length > 0,
-        href: "/projects",
-        label: "Projects or tasks",
-        nextLabel: "Add",
-      },
-      {
-        done: workShifts.length > 0,
-        href: "/work",
-        label: "Unavailable time",
-        nextLabel: "Add",
-      },
-      {
-        done: hasGoogleCalendar,
-        href: "/integrations",
-        label: "Google Calendar",
-        nextLabel: "Connect",
-      },
-      {
-        done: externalImportedEvents.length > 0,
-        href: "/integrations",
-        label: plannerType === "Student" ? "School calendar" : "ICS imports",
-        nextLabel: "Import",
-      },
-      {
-        done: planBlocks.length > 0,
-        href: "/plan",
-        label: "Weekly plan",
-        nextLabel: "Plan",
-      },
-    ],
+    () =>
+      buildSetupProgressItems({
+        hasGoogleCalendar,
+        hasImportedCalendarEvents: externalImportedEvents.length > 0,
+        hasPlanBlocks: planBlocks.length > 0,
+        hasProjects: projects.length > 0,
+        hasSchoolEvents: schoolEventCount > 0,
+        hasWorkShifts: workShifts.length > 0,
+        plannerProfile,
+        plannerType,
+      }),
     [
       externalImportedEvents.length,
       hasGoogleCalendar,
       planBlocks.length,
+      plannerProfile,
       plannerType,
       projects.length,
       workShifts.length,
+      schoolEventCount,
     ],
   );
 
   const setupCompleteCount = setupProgressItems.filter((item) => item.done).length;
 
+  const workConflicts = useMemo(
+    () => findWeeklyPlanWorkConflicts(planBlocks, workShifts),
+    [planBlocks, workShifts],
+  );
+
+  const importedConflicts = useMemo(
+    () =>
+      findWeeklyPlanImportedEventConflicts(
+        planBlocks,
+        importedEvents,
+        weekStartDate,
+      ),
+    [importedEvents, planBlocks, weekStartDate],
+  );
+
+  const conflictCount = workConflicts.length + importedConflicts.length;
+
+  const openTimeSummaries = useMemo(
+    () => getOpenTimeSummaries(calendarWeek.days),
+    [calendarWeek.days],
+  );
+
+  const isGoogleSyncEnabled = Boolean(googleSyncStatus?.syncEnabled);
+
   const suggestedDashboardActions = useMemo(
     () =>
       buildSuggestedDashboardActions({
+        conflictCount,
         flexibleBlocksCount,
         hasGoogleCalendar,
         hasImportedCalendarEvents: externalImportedEvents.length > 0,
@@ -1674,16 +2160,27 @@ export function ProjectDashboard() {
         hasProjects: projects.length > 0,
         hasSchoolEvents: schoolEventCount > 0,
         hasWorkShifts: workShifts.length > 0,
+        isGoogleSyncEnabled,
+        openTimeSummaries,
         plannerType,
+        syncNeedsAttentionCount,
+        weeklyPlanHours,
+        weeklyWorkHours,
       }),
     [
+      conflictCount,
       externalImportedEvents.length,
       flexibleBlocksCount,
       hasGoogleCalendar,
+      isGoogleSyncEnabled,
+      openTimeSummaries,
       planBlocks.length,
       plannerType,
       projects.length,
       schoolEventCount,
+      syncNeedsAttentionCount,
+      weeklyPlanHours,
+      weeklyWorkHours,
       workShifts.length,
     ],
   );
@@ -1744,12 +2241,6 @@ export function ProjectDashboard() {
   }, [deadlineBuckets.exactDeadlines, projects, todayIsoDate, todaySchedule]);
 
   const attentionItems = useMemo(() => {
-    const workConflicts = findWeeklyPlanWorkConflicts(planBlocks, workShifts);
-    const importedConflicts = findWeeklyPlanImportedEventConflicts(
-      planBlocks,
-      importedEvents,
-      weekStartDate,
-    );
     const items: DashboardAttentionItem[] = [];
 
     if (syncNeedsAttentionCount > 0) {
@@ -1820,12 +2311,10 @@ export function ProjectDashboard() {
     deadlineBuckets.deadlinesNeedingDates.length,
     flexibleBlocksCount,
     googleSyncStatus?.syncEnabled,
-    importedEvents,
-    planBlocks,
+    importedConflicts.length,
     removedSyncedEventsCount,
     syncNeedsAttentionCount,
-    weekStartDate,
-    workShifts,
+    workConflicts.length,
   ]);
 
   function addProject(project: Project) {
@@ -2305,6 +2794,7 @@ export function ProjectDashboard() {
                 />
                 <TodayWeekCard
                   openDayCount={openDayCount}
+                  openTimeSummaries={openTimeSummaries}
                   today={todaySchedule}
                   weekRangeLabel={calendarWeek.weekRangeLabel}
                   weeklyExternalEvents={weeklyExternalEvents}
