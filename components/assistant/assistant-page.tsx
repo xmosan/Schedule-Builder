@@ -23,8 +23,9 @@ import {
   type ProjectCategory,
   type ProjectPriority,
 } from "@/lib/projects";
+import type { ScheduledItemType } from "@/lib/scheduled-items";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
-import { weekDays, type WeekDay } from "@/lib/weekly-plan";
+import { formatStartTime, weekDays, type WeekDay } from "@/lib/weekly-plan";
 import { cn } from "@/lib/utils";
 
 type AssistantStatus = "loading" | "ready" | "signed_out" | "error";
@@ -83,6 +84,7 @@ const confirmationPromptPattern =
 const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
   new_project: "Project draft",
   update_project: "Project edit",
+  suggested_scheduled_item: "Task / appointment",
   suggested_weekly_block: "Schedule idea",
   suggested_next_action: "Next action",
   workload_warning: "Workload note",
@@ -93,6 +95,7 @@ const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
 const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
   new_project: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   update_project: "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
+  suggested_scheduled_item: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   suggested_weekly_block: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   suggested_next_action: "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
   workload_warning: "border-[#e7c783] bg-[#fff8e6] text-[#8a5d0a]",
@@ -103,6 +106,7 @@ const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
 const suggestionMarkerStyles: Record<AssistantSuggestionType, string> = {
   new_project: "bg-brand-teal",
   update_project: "bg-brand-ocean",
+  suggested_scheduled_item: "bg-brand-teal",
   suggested_weekly_block: "bg-brand-teal",
   suggested_next_action: "bg-brand-ocean",
   workload_warning: "bg-[#c99725]",
@@ -139,6 +143,7 @@ function isActionableSuggestion(suggestion: AssistantSuggestion) {
   return (
     suggestion.type === "new_project" ||
     suggestion.type === "update_project" ||
+    suggestion.type === "suggested_scheduled_item" ||
     suggestion.type === "suggested_weekly_block" ||
     suggestion.type === "suggested_next_action"
   );
@@ -323,6 +328,7 @@ function ActionCard({
     actionState.status === "dismissing" ||
     actionState.status === "removed";
   const isExiting = actionState.status === "dismissing";
+  const isScheduledItemSuggestion = suggestion.type === "suggested_scheduled_item";
   const isWeeklyBlockSuggestion = suggestion.type === "suggested_weekly_block";
   const projectNameLabel =
     suggestion.type === "update_project"
@@ -333,7 +339,23 @@ function ActionCard({
   const detailItems = [
     suggestion.rationale ? { label: "Why this helps", value: suggestion.rationale } : null,
     suggestion.plannedTask
-      ? { label: isWeeklyBlockSuggestion ? "Details" : "Task", value: suggestion.plannedTask }
+      ? { label: isWeeklyBlockSuggestion || isScheduledItemSuggestion ? "Details" : "Task", value: suggestion.plannedTask }
+      : null,
+    suggestion.itemDate ? { label: "Date", value: suggestion.itemDate } : null,
+    isScheduledItemSuggestion
+      ? {
+          label: "Time",
+          value: suggestion.startTime
+            ? formatStartTime(suggestion.startTime)
+            : "Flexible",
+        }
+      : null,
+    suggestion.location ? { label: "Location", value: suggestion.location } : null,
+    suggestion.conflictWarnings?.length
+      ? {
+          label: "Conflict warnings",
+          value: suggestion.conflictWarnings.join(" "),
+        }
       : null,
     suggestion.newProjectName
       ? { label: "New project name", value: suggestion.newProjectName }
@@ -395,6 +417,10 @@ function ActionCard({
         </div>
 
         {(suggestion.projectName ||
+          suggestion.itemType ||
+          suggestion.itemDate ||
+          suggestion.startTime ||
+          suggestion.location ||
           suggestion.day ||
           suggestion.estimatedHours ||
           suggestion.weeklyHours ||
@@ -410,6 +436,30 @@ function ActionCard({
                   {isWeeklyBlockSuggestion ? "Project / title" : "Project"}
                 </span>
                 <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.projectName}</span>
+              </div>
+            )}
+            {isScheduledItemSuggestion && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+                  Type
+                </span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">
+                  {suggestion.itemType === "appointment" ? "Appointment" : "Task"}
+                </span>
+              </div>
+            )}
+            {suggestion.itemDate && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Date</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.itemDate}</span>
+              </div>
+            )}
+            {isScheduledItemSuggestion && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Time</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">
+                  {suggestion.startTime ? formatStartTime(suggestion.startTime) : "Flexible"}
+                </span>
               </div>
             )}
             {suggestion.newProjectName && (
@@ -454,11 +504,83 @@ function ActionCard({
                 <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.weeklyHours}h</span>
               </div>
             )}
+            {suggestion.location && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Location</span>
+                <span className="mt-0.5 block truncate font-semibold text-brand-ink">{suggestion.location}</span>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {suggestion.conflictWarnings && suggestion.conflictWarnings.length > 0 && !isEditing ? (
+          <div className="mt-3 space-y-2">
+            {suggestion.conflictWarnings.map((warning) => (
+              <p
+                key={warning}
+                className="rounded-2xl border border-brand-coral/20 bg-brand-coral/10 px-3 py-2 text-xs font-semibold leading-5 text-brand-coral"
+              >
+                {warning}
+              </p>
+            ))}
           </div>
         ) : null}
 
         {isEditing ? (
           <div className="mt-4 grid gap-3 text-sm">
+            {isScheduledItemSuggestion && (
+              <>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Title</span>
+                  <input
+                    className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                    value={suggestion.title ?? ""}
+                    onChange={(event) => onUpdate({ title: event.target.value })}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Type</span>
+                  <select
+                    className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                    value={suggestion.itemType ?? "task"}
+                    onChange={(event) =>
+                      onUpdate({ itemType: event.target.value as ScheduledItemType })
+                    }
+                  >
+                    <option value="task">Task</option>
+                    <option value="appointment">Appointment</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Date</span>
+                  <input
+                    className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                    type="date"
+                    value={suggestion.itemDate ?? ""}
+                    onChange={(event) => onUpdate({ itemDate: event.target.value })}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-brand-ink/60">
+                    Start {suggestion.itemType === "appointment" ? "" : "optional"}
+                  </span>
+                  <input
+                    className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                    type="time"
+                    value={suggestion.startTime ?? ""}
+                    onChange={(event) => onUpdate({ startTime: event.target.value })}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Location optional</span>
+                  <input
+                    className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                    value={suggestion.location ?? ""}
+                    onChange={(event) => onUpdate({ location: event.target.value })}
+                  />
+                </label>
+              </>
+            )}
             {suggestion.projectName !== undefined && (
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold text-brand-ink/60">
@@ -640,8 +762,12 @@ function ActionCard({
                   ? "Applying..."
                   : suggestion.type === "new_project"
                     ? "Save project"
-                    : suggestion.type === "update_project"
-                      ? "Update project"
+                  : suggestion.type === "update_project"
+                    ? "Update project"
+                    : suggestion.type === "suggested_scheduled_item"
+                      ? suggestion.itemType === "appointment"
+                        ? "Add appointment"
+                        : "Add task"
                     : "Apply"}
               </Button>
               {isEditableSuggestion(suggestion) && (

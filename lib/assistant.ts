@@ -17,6 +17,7 @@ import {
 import {
   describeWeeklyPlanWorkConflict,
   describeWeeklyPlanImportedEventConflict,
+  findScheduledItemConflicts,
   findWeeklyPlanImportedEventConflicts,
   findWeeklyPlanWorkConflicts,
   getDayWorkShiftRanges,
@@ -28,6 +29,14 @@ import {
   type WeeklyPlanWorkConflict,
 } from "@/lib/schedule-conflicts";
 import {
+  formatScheduledItemTimeLabel,
+  isScheduledItemType,
+  normalizeScheduledItemDate,
+  parseScheduledItemDate,
+  type ScheduledItem,
+  type ScheduledItemType,
+} from "@/lib/scheduled-items";
+import {
   getImportedEventDurationHours,
   isScheduleBuilderExportedEvent,
   type ImportedCalendarEvent,
@@ -35,6 +44,7 @@ import {
 import {
   formatEstimatedHours,
   formatStartTime,
+  normalizeStartTime,
   parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
@@ -48,6 +58,7 @@ import {
 export const assistantSuggestionTypes = [
   "new_project",
   "update_project",
+  "suggested_scheduled_item",
   "suggested_weekly_block",
   "suggested_next_action",
   "workload_warning",
@@ -58,6 +69,7 @@ export const assistantSuggestionTypes = [
 export const assistantPlanningSuggestionTypes = [
   "new_project",
   "update_project",
+  "suggested_scheduled_item",
   "suggested_weekly_block",
   "suggested_next_action",
   "workload_warning",
@@ -97,6 +109,7 @@ export type AssistantPlanningContext = AssistantContextSummary & {
   importedCalendarEvents: ImportedCalendarEvent[];
   importedEventConflicts: WeeklyPlanImportedEventConflict[];
   projects: Project[];
+  scheduledItems: ScheduledItem[];
   weeklyPlanBlocks: WeeklyPlanBlock[];
   workScheduleSummary: string | null;
   workShifts: WorkShift[];
@@ -112,7 +125,11 @@ export type AssistantSuggestion = {
   rationale: string;
   severity: AssistantSuggestionSeverity;
   category?: ProjectCategory;
+  conflictWarnings?: string[];
   deadline?: string;
+  itemDate?: string;
+  itemType?: ScheduledItemType;
+  location?: string;
   newProjectName?: string;
   projectName?: string;
   priority?: ProjectPriority;
@@ -120,6 +137,7 @@ export type AssistantSuggestion = {
   estimatedHours?: number;
   plannedTask?: string;
   proposedNextAction?: string;
+  startTime?: string;
   weeklyHours?: number;
 };
 
@@ -196,7 +214,7 @@ const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don
 const planningIntentPattern =
   /\b(plan|schedule|week|weekly|block|blocks|overlap|conflict|conflicts|overload|overloaded|priority|priorities|top 3|study|balance|deadline|deadlines|next action|project|projects|workload|time|focus|first|open time|open|study|sync|synced|google calendar|calendar|start time|start times|task|tasks|appointment|appointments|errand|errands|reminder|reminders)\b/i;
 const actionCardIntentPattern =
-  /\b(plan my week|plan this week|make a plan|create blocks?|create .*blocks?|add .*blocks?|add a .*block|add .*calendar|add .*appointment|add .*task|add .*reminder|add .*errand|schedule .*blocks?|schedule .*appointment|schedule .*task|schedule my top 3|turn .* into .*blocks?|generate .*blocks?|move|update|change|edit|set|shift|rename|draft|save|create .*project|add .*project|new project|add time|add start time)\b/i;
+  /\b(plan my week|plan this week|make a plan|create blocks?|create .*blocks?|add .*blocks?|add a .*block|add .*calendar|add .*appointment|add .*task|add .*reminder|add .*errand|remind me|schedule .*blocks?|schedule .*appointment|schedule .*task|schedule my top 3|turn .* into .*blocks?|generate .*blocks?|move|update|change|edit|set|shift|rename|draft|save|create .*project|add .*project|new project|add time|add start time)\b/i;
 const directQuestionPromptPattern =
   /\?|^(do|does|did|is|are|am|can|could|should|would|what|why|how|which|when|where)\b/i;
 const analysisOnlyPromptPattern =
@@ -211,11 +229,13 @@ const openTimePromptPattern =
 const projectDraftPromptPattern =
   /\b(create|add|start|draft|make|save)\b.*\b(project|goal|initiative|class|course)\b|\bnew project\b/i;
 const standaloneBlockPromptPattern =
-  /\b(add|create|schedule|put|save)\b.*\b(task|appointment|errand|reminder|calendar)\b/i;
+  /\b(add|create|schedule|put|save)\b.*\b(task|appointment|errand|reminder|calendar)\b|\bremind me\b/i;
 const projectUpdatePromptPattern =
   /\b(change|update|edit|move|set|shift|rename|adjust|confirm)\b.*\b(project|deadline|due date|priority|category|weekly hours|hours|next action|name)\b|\b(due date|deadline)\b.*\b(later|earlier|after|before|to|on|by)\b/i;
 const googleSyncPromptPattern =
   /\b(sync|synced|google calendar|send to google|calendar sync|ready to sync|start time|start times|needs time|prepare.*calendar|before syncing|what.*sync|still.*sync|fix.*sync)\b/i;
+const scheduledItemQuestionPattern =
+  /\b(appointments?|tasks?|reminders?|anything scheduled|anything on|what.*(?:today|tomorrow|this week|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i;
 
 export function isGreetingPrompt(prompt: string) {
   return greetingPattern.test(prompt.trim());
@@ -360,6 +380,10 @@ function getSuggestionPriority(suggestion: AssistantSuggestion) {
     return 6;
   }
 
+  if (suggestion.type === "suggested_scheduled_item") {
+    return 5;
+  }
+
   if (suggestion.type === "suggested_weekly_block") {
     return 5;
   }
@@ -381,6 +405,12 @@ function getSuggestionPriority(suggestion: AssistantSuggestion) {
 
 function getSuggestionDedupeKey(suggestion: AssistantSuggestion) {
   const projectName = suggestion.projectName?.toLowerCase().trim() ?? "";
+  const scheduledItemKey =
+    suggestion.type === "suggested_scheduled_item"
+      ? `${suggestion.itemDate ?? ""}:${suggestion.startTime ?? ""}:${
+          suggestion.title
+        }`
+      : "";
   const titleRoot = suggestion.title
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, "")
@@ -388,7 +418,7 @@ function getSuggestionDedupeKey(suggestion: AssistantSuggestion) {
     .slice(0, 5)
     .join(" ");
 
-  return `${suggestion.type}:${projectName}:${suggestion.day ?? ""}:${titleRoot}`;
+  return `${suggestion.type}:${projectName}:${suggestion.day ?? ""}:${scheduledItemKey}:${titleRoot}`;
 }
 
 export function filterAssistantSuggestions(
@@ -576,9 +606,27 @@ function normalizeSuggestion(
     category: isProjectCategory(candidate.category)
       ? candidate.category
       : undefined,
+    conflictWarnings: Array.isArray(candidate.conflictWarnings)
+      ? candidate.conflictWarnings
+          .filter((warning): warning is string => typeof warning === "string")
+          .map((warning) => warning.trim().slice(0, 180))
+          .filter(Boolean)
+          .slice(0, 4)
+      : undefined,
     deadline:
       typeof candidate.deadline === "string"
         ? candidate.deadline.trim().slice(0, 120)
+        : undefined,
+    itemDate:
+      typeof candidate.itemDate === "string"
+        ? normalizeScheduledItemDate(candidate.itemDate) ?? undefined
+        : undefined,
+    itemType: isScheduledItemType(candidate.itemType)
+      ? candidate.itemType
+      : undefined,
+    location:
+      typeof candidate.location === "string"
+        ? candidate.location.trim().slice(0, 160)
         : undefined,
     newProjectName:
       typeof candidate.newProjectName === "string"
@@ -605,6 +653,10 @@ function normalizeSuggestion(
     proposedNextAction:
       typeof candidate.proposedNextAction === "string"
         ? candidate.proposedNextAction.trim().slice(0, 220)
+        : undefined,
+    startTime:
+      typeof candidate.startTime === "string"
+        ? normalizeStartTime(candidate.startTime) ?? undefined
         : undefined,
     weeklyHours:
       typeof candidate.weeklyHours === "number" &&
@@ -673,6 +725,7 @@ export function createAssistantPlanningContext(
   importedCalendarEvents: ImportedCalendarEvent[] = [],
   googleSyncRows: AssistantGoogleSyncRow[] = [],
   googleSyncOptions: {
+    scheduledItems?: ScheduledItem[];
     syncCalendarName?: string | null;
     syncEnabled?: boolean;
     weekStartDate?: string;
@@ -690,6 +743,7 @@ export function createAssistantPlanningContext(
     externalImportedEvents,
   );
   const deadlineBuckets = getProjectDeadlineBuckets(projects);
+  const scheduledItems = googleSyncOptions.scheduledItems ?? [];
   const googleSync = createAssistantGoogleSyncContext({
     importedCalendarEvents: externalImportedEvents,
     syncCalendarName: googleSyncOptions.syncCalendarName ?? null,
@@ -717,6 +771,7 @@ export function createAssistantPlanningContext(
     importedCalendarEvents: externalImportedEvents,
     importedEventConflicts,
     projects,
+    scheduledItems,
     weeklyPlanBlocks,
     workScheduleSummary: getWorkScheduleSummary(workShifts),
     workShifts,
@@ -965,6 +1020,457 @@ function inferStandaloneBlockHours(prompt: string) {
   return Number.isFinite(duration) && duration > 0 ? Math.min(duration, 8) : 1;
 }
 
+const monthNames = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+] as const;
+
+const jsWeekdayNames = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
+const numberWords = new Map<string, number>([
+  ["a", 1],
+  ["an", 1],
+  ["one", 1],
+  ["two", 2],
+  ["three", 3],
+  ["four", 4],
+  ["five", 5],
+  ["six", 6],
+  ["seven", 7],
+  ["eight", 8],
+]);
+
+function toTitleCaseLight(value: string) {
+  const cleaned = value.trim().replace(/\s+/g, " ");
+
+  if (!cleaned) {
+    return "";
+  }
+
+  return `${cleaned.charAt(0).toUpperCase()}${cleaned.slice(1)}`;
+}
+
+function parseDurationToken(value: string) {
+  const normalized = value.trim().toLowerCase();
+  const wordValue = numberWords.get(normalized);
+
+  if (wordValue !== undefined) {
+    return wordValue;
+  }
+
+  const numericValue = Number(normalized);
+
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function parseNaturalDurationHours(prompt: string) {
+  const hourMatch = prompt.match(
+    /\b(?:for|lasting|duration(?: of)?)\s+(a|an|one|two|three|four|five|six|seven|eight|\d+(?:\.\d+)?)\s*(?:hours?|hrs?|hr)\b/i,
+  );
+
+  if (hourMatch?.[1]) {
+    const hours = parseDurationToken(hourMatch[1]);
+
+    if (hours && hours > 0) {
+      return Math.min(hours, 12);
+    }
+  }
+
+  const minuteMatch = prompt.match(
+    /\b(?:for|lasting|duration(?: of)?)\s+(\d{1,3})\s*(?:minutes?|mins?|min)\b/i,
+  );
+
+  if (minuteMatch?.[1]) {
+    const minutes = Number(minuteMatch[1]);
+
+    if (Number.isFinite(minutes) && minutes > 0) {
+      return Math.min(minutes / 60, 12);
+    }
+  }
+
+  return null;
+}
+
+function parseNaturalStartTime(prompt: string) {
+  const timeMatch = prompt.match(
+    /\b(?:at|from)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i,
+  ) ?? prompt.match(/\b(\d{1,2})(?::(\d{2}))\s*(am|pm)\b/i);
+
+  if (!timeMatch) {
+    return null;
+  }
+
+  let hour = Number(timeMatch[1]);
+  const minute = timeMatch[2] ? Number(timeMatch[2]) : 0;
+  const meridiem = timeMatch[3]?.toLowerCase();
+
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    minute < 0 ||
+    minute > 59 ||
+    hour < 1 ||
+    hour > 12 ||
+    (meridiem !== "am" && meridiem !== "pm")
+  ) {
+    return null;
+  }
+
+  if (meridiem === "pm" && hour !== 12) {
+    hour += 12;
+  }
+
+  if (meridiem === "am" && hour === 12) {
+    hour = 0;
+  }
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function getJsWeekdayIndex(value: string) {
+  return jsWeekdayNames.findIndex((day) => day === value.toLowerCase());
+}
+
+function getMonthIndex(value: string) {
+  const normalized = value.toLowerCase().replace(/\.$/, "");
+
+  return monthNames.findIndex(
+    (month) => month === normalized || month.startsWith(normalized),
+  );
+}
+
+function parseNaturalItemDate(
+  prompt: string,
+  referenceDate = new Date(),
+): { date: string | null; message?: string } {
+  const today = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+  );
+  const normalizedPrompt = prompt.toLowerCase();
+
+  if (/\btoday\b/i.test(prompt)) {
+    return { date: toInputDate(today) };
+  }
+
+  if (/\btomorrow\b/i.test(prompt)) {
+    return { date: toInputDate(addDays(today, 1)) };
+  }
+
+  const monthDayMatch = normalizedPrompt.match(
+    /\b(?:(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,\s*(\d{4}))?\b/i,
+  );
+
+  if (monthDayMatch?.[2] && monthDayMatch[3]) {
+    const monthIndex = getMonthIndex(monthDayMatch[2]);
+    const day = Number(monthDayMatch[3]);
+    const explicitYear = monthDayMatch[4] ? Number(monthDayMatch[4]) : null;
+    const year = explicitYear ?? today.getFullYear();
+    const date = new Date(year, monthIndex, day);
+
+    if (
+      monthIndex < 0 ||
+      !Number.isInteger(day) ||
+      date.getFullYear() !== year ||
+      date.getMonth() !== monthIndex ||
+      date.getDate() !== day
+    ) {
+      return {
+        date: null,
+        message: "I could not read that date clearly. What exact date should I use?",
+      };
+    }
+
+    if (!explicitYear && date.getTime() < today.getTime()) {
+      return {
+        date: null,
+        message:
+          "That date has already passed this year. What exact date and year should I use?",
+      };
+    }
+
+    const requestedWeekday = monthDayMatch[1]
+      ? getJsWeekdayIndex(monthDayMatch[1])
+      : -1;
+
+    if (requestedWeekday >= 0 && requestedWeekday !== date.getDay()) {
+      return {
+        date: null,
+        message: `${toTitleCaseLight(
+          monthDayMatch[2],
+        )} ${day} does not fall on ${toTitleCaseLight(
+          monthDayMatch[1],
+        )} for ${year}. Which exact date should I use?`,
+      };
+    }
+
+    return { date: toInputDate(date) };
+  }
+
+  const isoDateMatch = normalizedPrompt.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+
+  if (isoDateMatch?.[1]) {
+    const normalizedDate = normalizeScheduledItemDate(isoDateMatch[1]);
+
+    return normalizedDate
+      ? { date: normalizedDate }
+      : {
+          date: null,
+          message: "I could not read that date clearly. What exact date should I use?",
+        };
+  }
+
+  const relativeWeekdayMatch = normalizedPrompt.match(
+    /\b(this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+  );
+
+  if (relativeWeekdayMatch?.[1] && relativeWeekdayMatch[2]) {
+    const direction = relativeWeekdayMatch[1].toLowerCase();
+    const targetDay = getJsWeekdayIndex(relativeWeekdayMatch[2]);
+    const currentDay = today.getDay();
+    let offset = (targetDay - currentDay + 7) % 7;
+
+    if (direction === "next") {
+      offset = offset === 0 ? 7 : offset + 7;
+    }
+
+    return { date: toInputDate(addDays(today, offset)) };
+  }
+
+  const bareWeekdayMatch = normalizedPrompt.match(
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+  );
+
+  if (bareWeekdayMatch?.[1]) {
+    return {
+      date: null,
+      message: `When you say ${toTitleCaseLight(
+        bareWeekdayMatch[1],
+      )}, do you mean this week or next week?`,
+    };
+  }
+
+  return {
+    date: null,
+    message: "What exact date should I use for this task or appointment?",
+  };
+}
+
+function inferScheduledItemType(prompt: string): ScheduledItemType {
+  return /\b(appointment|meeting|doctor|dentist|visit)\b/i.test(prompt)
+    ? "appointment"
+    : "task";
+}
+
+function inferScheduledItemTitle(prompt: string, itemType: ScheduledItemType) {
+  const quotedMatch = prompt.match(/["“”']([^"“”']{2,80})["“”']/);
+
+  if (quotedMatch?.[1]) {
+    return toTitleCaseLight(quotedMatch[1]);
+  }
+
+  const cleanedPrompt = prompt
+    .replace(/^\s*(?:can you\s+)?(?:please\s+)?/i, "")
+    .replace(/^\s*remind me\s+(?:to\s+)?/i, "")
+    .replace(
+      /^\s*(?:add|create|schedule|put|save)\s+(?:to\s+my\s+calendar\s+)?(?:my\s+)?/i,
+      "",
+    )
+    .replace(
+      /\b(?:today|tomorrow|this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b.*$/i,
+      "",
+    )
+    .replace(
+      /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?.*$/i,
+      "",
+    )
+    .replace(
+      /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?.*$/i,
+      "",
+    )
+    .replace(/\b(?:on|at|for|from)\b.*$/i, "")
+    .replace(/\b(?:task|appointment|calendar item|reminder|errand)\b$/i, "")
+    .trim();
+
+  if (cleanedPrompt.length >= 3) {
+    return toTitleCaseLight(cleanedPrompt.replace(/^(?:my|a|an)\s+/i, ""));
+  }
+
+  return itemType === "appointment" ? "Appointment" : "Task";
+}
+
+function createScheduledItemPreviewFromSuggestion(
+  suggestion: AssistantSuggestion,
+): ScheduledItem | null {
+  if (
+    suggestion.type !== "suggested_scheduled_item" ||
+    !suggestion.itemType ||
+    !suggestion.itemDate ||
+    !suggestion.estimatedHours
+  ) {
+    return null;
+  }
+
+  return {
+    id: suggestion.id,
+    itemType: suggestion.itemType,
+    title: suggestion.title,
+    description: suggestion.plannedTask ?? suggestion.description,
+    itemDate: suggestion.itemDate,
+    startTime: suggestion.startTime,
+    estimatedHours: suggestion.estimatedHours,
+    location: suggestion.location ?? "",
+  };
+}
+
+function getScheduledItemConflictWarnings(
+  suggestion: AssistantSuggestion,
+  context: AssistantPlanningContext,
+) {
+  const previewItem = createScheduledItemPreviewFromSuggestion(suggestion);
+
+  if (!previewItem) {
+    return [];
+  }
+
+  return findScheduledItemConflicts({
+    importedEvents: context.importedCalendarEvents,
+    item: previewItem,
+    planBlocks: context.weeklyPlanBlocks,
+    scheduledItems: context.scheduledItems,
+    workShifts: context.workShifts,
+  })
+    .map((conflict) => conflict.message)
+    .slice(0, 4);
+}
+
+function withScheduledItemConflictWarnings(
+  suggestion: AssistantSuggestion,
+  context: AssistantPlanningContext,
+): AssistantSuggestion {
+  if (suggestion.type !== "suggested_scheduled_item") {
+    return suggestion;
+  }
+
+  const conflictWarnings = [
+    ...(suggestion.conflictWarnings ?? []),
+    ...getScheduledItemConflictWarnings(suggestion, context),
+  ];
+  const uniqueWarnings = [...new Set(conflictWarnings)].slice(0, 4);
+
+  return {
+    ...suggestion,
+    conflictWarnings: uniqueWarnings,
+    severity: uniqueWarnings.length > 0 ? "warning" : suggestion.severity,
+  };
+}
+
+export function addScheduledItemConflictWarningsToSuggestions(
+  suggestions: AssistantSuggestion[],
+  context: AssistantPlanningContext,
+) {
+  return suggestions.map((suggestion) =>
+    withScheduledItemConflictWarnings(suggestion, context),
+  );
+}
+
+function createFallbackScheduledItemSuggestion(
+  context: AssistantPlanningContext,
+  prompt: string,
+  index: number,
+):
+  | { message: string; suggestion?: undefined }
+  | { message: string; suggestion: AssistantSuggestion } {
+  const itemType = inferScheduledItemType(prompt);
+  const itemDate = parseNaturalItemDate(prompt);
+  const startTime = parseNaturalStartTime(prompt);
+  const durationHours = parseNaturalDurationHours(prompt);
+  const title = inferScheduledItemTitle(prompt, itemType);
+  const missingFields: string[] = [];
+
+  if (!itemDate.date) {
+    return {
+      message:
+        itemDate.message ??
+        "What exact date should I use for this task or appointment?",
+    };
+  }
+
+  if (itemType === "appointment" && !startTime) {
+    missingFields.push("start time");
+  }
+
+  if (itemType === "appointment" && !durationHours) {
+    missingFields.push("duration");
+  }
+
+  if (!title.trim()) {
+    missingFields.push("title");
+  }
+
+  if (missingFields.length > 0) {
+    return {
+      message: `I can draft that ${itemType}, but I need the ${missingFields.join(
+        " and ",
+      )} first. What should I use?`,
+    };
+  }
+
+  const estimatedHours = durationHours ?? 1;
+  const typeLabel = itemType === "appointment" ? "appointment" : "task";
+  const description =
+    itemType === "task" && !startTime
+      ? `Draft a flexible task for ${itemDate.date}. Duration is set to ${formatEstimatedHours(
+          estimatedHours,
+        )} so you can review it before saving.`
+      : `Draft a ${typeLabel} for ${itemDate.date} at ${formatStartTime(
+          startTime,
+        )}.`;
+  const suggestion = withScheduledItemConflictWarnings(
+    {
+      confidence: 0.78,
+      description,
+      estimatedHours,
+      id: createSuggestionId("scheduled-item", index),
+      itemDate: itemDate.date,
+      itemType,
+      location: "",
+      plannedTask: prompt.trim(),
+      rationale:
+        "This is an exact-date standalone item, so it should be saved as a task or appointment rather than a project or weekly block.",
+      severity: "important",
+      startTime: startTime ?? undefined,
+      summary: description,
+      title,
+      type: "suggested_scheduled_item",
+    },
+    context,
+  );
+
+  return {
+    message: `I drafted ${title} as a ${typeLabel} for review. Nothing is saved until you apply the card.`,
+    suggestion,
+  };
+}
+
 function createFallbackStandaloneBlockSuggestion(
   context: AssistantPlanningContext,
   prompt: string,
@@ -1178,6 +1684,20 @@ function getOpenTimeWindows(
       addBusyRange(busyRanges, start, end, dayStart, dayEnd);
     });
 
+    context.scheduledItems
+      .filter((item) => item.itemDate === dayDateKey)
+      .forEach((item) => {
+        const start = parseStartTimeToMinutes(item.startTime);
+
+        addBusyRange(
+          busyRanges,
+          start,
+          start === null ? null : start + item.estimatedHours * 60,
+          dayStart,
+          dayEnd,
+        );
+      });
+
     const mergedRanges = busyRanges
       .sort((first, second) => first.start - second.start)
       .reduce<Array<{ end: number; start: number }>>((merged, range) => {
@@ -1243,6 +1763,98 @@ function formatOpenTimeWindows(windows: OpenTimeWindow[]) {
         )})`,
     )
     .join("; ");
+}
+
+function formatScheduledItemDateLabel(itemDate: string) {
+  const date = parseScheduledItemDate(itemDate);
+
+  if (!date) {
+    return itemDate;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    weekday: "short",
+  }).format(date);
+}
+
+function getCurrentWeekDateKeys(referenceDate = new Date()) {
+  const weekStart = getCurrentWeekStart(referenceDate);
+
+  return new Set(weekDays.map((day) => getWeekDateKeyForDay(day, weekStart)));
+}
+
+function getRequestedScheduledItemDateKey(prompt: string) {
+  if (/\bthis week\b/i.test(prompt)) {
+    return null;
+  }
+
+  if (/\btoday\b/i.test(prompt)) {
+    return toInputDate(new Date());
+  }
+
+  if (/\btomorrow\b/i.test(prompt)) {
+    return toInputDate(addDays(new Date(), 1));
+  }
+
+  const requestedDay = weekDays.find((day) =>
+    new RegExp(`\\b${day}\\b`, "i").test(prompt),
+  );
+
+  if (!requestedDay) {
+    return null;
+  }
+
+  return getWeekDateKeyForDay(requestedDay);
+}
+
+function formatScheduledItemList(items: ScheduledItem[]) {
+  return items
+    .slice(0, 5)
+    .map((item) => {
+      const typeLabel = item.itemType === "appointment" ? "appointment" : "task";
+
+      return `${item.title} (${typeLabel}, ${formatScheduledItemDateLabel(
+        item.itemDate,
+      )}, ${formatScheduledItemTimeLabel(item)})`;
+    })
+    .join("; ");
+}
+
+function createScheduledItemsFallbackMessage(
+  context: AssistantPlanningContext,
+  prompt: string,
+) {
+  const requestedDateKey = getRequestedScheduledItemDateKey(prompt);
+  const weekDateKeys = getCurrentWeekDateKeys();
+  const scopedItems = context.scheduledItems.filter((item) =>
+    requestedDateKey ? item.itemDate === requestedDateKey : weekDateKeys.has(item.itemDate),
+  );
+  const appointmentOnly = /\bappointments?\b/i.test(prompt);
+  const taskOnly = /\btasks?|reminders?\b/i.test(prompt) && !appointmentOnly;
+  const filteredItems = scopedItems.filter((item) => {
+    if (appointmentOnly) {
+      return item.itemType === "appointment";
+    }
+
+    if (taskOnly) {
+      return item.itemType === "task";
+    }
+
+    return true;
+  });
+  const scopeLabel = requestedDateKey
+    ? formatScheduledItemDateLabel(requestedDateKey)
+    : "this week";
+
+  if (filteredItems.length === 0) {
+    return `I don’t see any ${appointmentOnly ? "appointments" : taskOnly ? "tasks" : "tasks or appointments"} on ${scopeLabel}.`;
+  }
+
+  return `Here’s what I see on ${scopeLabel}: ${formatScheduledItemList(
+    filteredItems,
+  )}.`;
 }
 
 function createGoogleSyncBlock(
@@ -1985,6 +2597,18 @@ export function createFallbackAssistantResponse(
     });
   }
 
+  if (
+    scheduledItemQuestionPattern.test(prompt) &&
+    !shouldGenerateAssistantActionCards(prompt)
+  ) {
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message: createScheduledItemsFallbackMessage(context, prompt),
+      suggestions: [],
+    });
+  }
+
   if (shouldAnswerWithoutActionCards(prompt)) {
     return createAssistantResponseFromSuggestions({
       activeProjects: sortProjectsForFocus(context.projects),
@@ -2033,13 +2657,37 @@ export function createFallbackAssistantResponse(
     standaloneBlockPromptPattern.test(prompt) &&
     shouldGenerateAssistantActionCards(prompt)
   ) {
-    suggestions.push(
-      createFallbackStandaloneBlockSuggestion(
+    const shouldUseExactDateItem =
+      /\b(today|tomorrow|this\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|next\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+\d{1,2}|\d{4}-\d{2}-\d{2})\b/i.test(
+        prompt,
+      ) || /\b(appointment|remind me)\b/i.test(prompt);
+
+    if (shouldUseExactDateItem) {
+      const scheduledItemResult = createFallbackScheduledItemSuggestion(
         context,
         prompt,
         suggestions.length,
-      ),
-    );
+      );
+
+      if (!scheduledItemResult.suggestion) {
+        return createAssistantResponseFromSuggestions({
+          activeProjects,
+          context,
+          message: scheduledItemResult.message,
+          suggestions: [],
+        });
+      }
+
+      suggestions.push(scheduledItemResult.suggestion);
+    } else {
+      suggestions.push(
+        createFallbackStandaloneBlockSuggestion(
+          context,
+          prompt,
+          suggestions.length,
+        ),
+      );
+    }
   }
 
   if (

@@ -19,11 +19,20 @@ import {
   fetchImportedCalendarEventsForUser,
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
+  fetchScheduledItemsForUser,
   fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
+  createScheduledItemForUser,
 } from "@/lib/supabase/scheduler";
 import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
 import { getWeeklyPlanImportedEventConflictForBlock } from "@/lib/schedule-conflicts";
+import {
+  isScheduledItemType,
+  normalizeScheduledItemDate,
+  validateScheduledItemDraft,
+  type ScheduledItem,
+  type ScheduledItemDraft,
+} from "@/lib/scheduled-items";
 import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
 import { formatWorkShiftRange, type WorkShift } from "@/lib/work-schedule";
 
@@ -196,6 +205,7 @@ function validateActionableSuggestion(suggestion: AssistantSuggestion) {
   if (
     suggestion.type !== "new_project" &&
     suggestion.type !== "update_project" &&
+    suggestion.type !== "suggested_scheduled_item" &&
     suggestion.type !== "suggested_weekly_block" &&
     suggestion.type !== "suggested_next_action"
   ) {
@@ -203,6 +213,79 @@ function validateActionableSuggestion(suggestion: AssistantSuggestion) {
   }
 
   return null;
+}
+
+async function applyScheduledItemSuggestion({
+  currentScheduledItems,
+  suggestion,
+  supabase,
+  userId,
+}: {
+  currentScheduledItems: ScheduledItem[];
+  suggestion: AssistantSuggestion;
+  supabase: SupabaseClient;
+  userId: string;
+}) {
+  if (suggestion.type !== "suggested_scheduled_item") {
+    return createResult(
+      suggestion,
+      "error",
+      "This suggestion is not a scheduled task or appointment.",
+    );
+  }
+
+  const title = suggestion.title.trim();
+  const itemDate = normalizeScheduledItemDate(suggestion.itemDate);
+  const itemType = isScheduledItemType(suggestion.itemType)
+    ? suggestion.itemType
+    : null;
+  const estimatedHours = suggestion.estimatedHours;
+  const draft: ScheduledItemDraft | null =
+    itemType && title && itemDate && estimatedHours
+      ? {
+          itemType,
+          title,
+          description: suggestion.plannedTask?.trim() ?? "",
+          itemDate,
+          startTime: suggestion.startTime ?? "",
+          estimatedHours: String(estimatedHours),
+          location: suggestion.location?.trim() ?? "",
+        }
+      : null;
+
+  if (!draft) {
+    return createResult(
+      suggestion,
+      "error",
+      "Scheduled item needs a title, type, date, and duration.",
+    );
+  }
+
+  const validationMessage = validateScheduledItemDraft(draft);
+
+  if (validationMessage) {
+    return createResult(suggestion, "error", validationMessage);
+  }
+
+  const result = await createScheduledItemForUser(supabase, userId, draft);
+
+  if (result.error || !result.data) {
+    return createResult(
+      suggestion,
+      "error",
+      result.error?.message ?? "Scheduled item could not be saved.",
+    );
+  }
+
+  currentScheduledItems.push(result.data);
+
+  return createResult(
+    suggestion,
+    "applied",
+    itemType === "appointment"
+      ? "Appointment added to your schedule."
+      : "Task added to your schedule.",
+  );
 }
 
 async function applyWeeklyBlockSuggestion({
@@ -624,19 +707,22 @@ export async function POST(request: NextRequest) {
     weeklyPlanResult,
     workShiftsResult,
     importedEventsResult,
+    scheduledItemsResult,
   ] = await Promise.all([
     fetchProjectsForUser(authResult.supabase, authResult.userId),
     fetchWeeklyPlanBlocksForUser(authResult.supabase, authResult.userId),
     fetchWorkShiftsForUser(authResult.supabase, authResult.userId),
     fetchImportedCalendarEventsForUser(authResult.supabase, authResult.userId),
+    fetchScheduledItemsForUser(authResult.supabase, authResult.userId),
   ]);
 
-  if (projectsResult.error || weeklyPlanResult.error) {
+  if (projectsResult.error || weeklyPlanResult.error || scheduledItemsResult.error) {
     return NextResponse.json(
       {
         error: `Could not load scheduler data before applying suggestions. ${[
           projectsResult.error,
           weeklyPlanResult.error,
+          scheduledItemsResult.error,
         ]
           .filter(Boolean)
           .map(getErrorMessage)
@@ -648,6 +734,7 @@ export async function POST(request: NextRequest) {
 
   const currentProjects = [...projectsResult.data];
   const currentBlocks = [...weeklyPlanResult.data];
+  const currentScheduledItems = [...scheduledItemsResult.data];
   const workShifts = workShiftsResult.error ? [] : [...workShiftsResult.data];
   const importedCalendarEvents =
     importedEventsResult.error == null
@@ -693,6 +780,18 @@ export async function POST(request: NextRequest) {
         appliedBlockCount += 1;
       }
 
+      continue;
+    }
+
+    if (item.normalized.type === "suggested_scheduled_item") {
+      results.push(
+        await applyScheduledItemSuggestion({
+          currentScheduledItems,
+          suggestion: item.normalized,
+          supabase: authResult.supabase,
+          userId: authResult.userId,
+        }),
+      );
       continue;
     }
 

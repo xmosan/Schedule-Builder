@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  addScheduledItemConflictWarningsToSuggestions,
   assistantPlanningSuggestionTypes,
   createCalendarConflictSuggestions,
   createAssistantPlanningContext,
@@ -24,6 +25,7 @@ import {
   fetchPlannerProfileForUser,
   fetchImportedCalendarEventsForUser,
   fetchProjectsForUser,
+  fetchScheduledItemsForUser,
   fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
@@ -90,6 +92,18 @@ const assistantResponseJsonSchema = {
             enum: ["High", "Medium", "Low", ""],
           },
           deadline: { type: "string" },
+          itemType: {
+            type: "string",
+            enum: ["task", "appointment", ""],
+          },
+          itemDate: { type: "string" },
+          startTime: { type: "string" },
+          location: { type: "string" },
+          conflictWarnings: {
+            type: "array",
+            maxItems: 4,
+            items: { type: "string" },
+          },
           day: {
             type: "string",
             enum: [
@@ -121,6 +135,11 @@ const assistantResponseJsonSchema = {
           "category",
           "priority",
           "deadline",
+          "itemType",
+          "itemDate",
+          "startTime",
+          "location",
+          "conflictWarnings",
           "day",
           "estimatedHours",
           "plannedTask",
@@ -309,6 +328,7 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
     weeklyPlanResult,
     workShiftsResult,
     importedEventsResult,
+    scheduledItemsResult,
     googleSyncConnectionResult,
     googleSyncRowsResult,
   ] = await Promise.all([
@@ -317,6 +337,7 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
     fetchWeeklyPlanBlocksForUser(supabase, userId),
     fetchWorkShiftsForUser(supabase, userId),
     fetchImportedCalendarEventsForUser(supabase, userId),
+    fetchScheduledItemsForUser(supabase, userId),
     supabase
       .from("google_calendar_connections")
       .select("sync_enabled, sync_calendar_name")
@@ -336,6 +357,7 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
     weeklyPlanResult.error,
     workShiftsResult.error,
     importedEventsResult.error,
+    scheduledItemsResult.error,
     googleSyncConnectionResult.error,
     googleSyncRowsResult.error,
   ].filter(Boolean);
@@ -377,6 +399,8 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
           googleSyncConnectionResult.error == null
             ? Boolean(googleSyncConnectionResult.data?.sync_enabled)
             : false,
+        scheduledItems:
+          scheduledItemsResult.error == null ? scheduledItemsResult.data : [],
         weekStartDate: syncWeekStartDate,
       },
     ),
@@ -415,14 +439,20 @@ function createAiPrompt(
     "Separate insights in the message from actions in the suggestions.",
     "Do not claim anything was saved.",
     "The app can create new projects, update project next actions, and create weekly blocks only after the user applies a reviewed action card.",
+    "The app can also create exact-date standalone tasks and appointments only after the user applies a reviewed action card.",
     "The app can also update existing project fields after review: name, category, priority, deadline, next action, and weekly hours.",
     "If the user asks you to create, add, draft, or save a project, return a new_project suggestion card. Do not say you cannot create or save it; say you drafted it for review and the user can apply it.",
     "Do not create a new_project card unless the user explicitly asks for a project, goal, initiative, class, course, or work project.",
-    "If the user asks to add a normal task, appointment, errand, reminder, or personal calendar item, return a suggested_weekly_block card instead of a new_project card. Use projectName as the standalone block title and plannedTask as the details.",
+    "If the user asks to add a normal task, appointment, errand, reminder, or personal calendar item tied to an exact date, return a suggested_scheduled_item card. Do not create a project.",
+    "Use suggested_weekly_block only for week-oriented plan blocks tied to Monday through Sunday planning.",
+    "For suggested_scheduled_item cards, title is the task or appointment title. plannedTask is the description/details. itemDate must be YYYY-MM-DD. itemType must be task or appointment. startTime must be HH:MM or empty.",
+    "Appointments require itemDate, startTime, and estimatedHours. If a requested appointment is missing any of those, ask a clarifying question and return zero suggestions.",
+    "Tasks require itemDate, title, and estimatedHours. Tasks may be flexible with empty startTime.",
+    "Use the current server date for relative dates. If a date is ambiguous, ask a clarifying question and return zero suggestions.",
     "If the user asks to change, edit, move, confirm, or update a project deadline, due date, priority, category, weekly hours, next action, or name, return an update_project suggestion card. Do not return an informational deadline warning for a requested project edit.",
     "For update_project cards, projectName must be the existing project to update. Include only the new values in deadline, category, priority, proposedNextAction, weeklyHours, or newProjectName. Leave unused fields empty or 0.",
     "If the user says to confirm a drafted change, remind them they still need to click the apply/update button unless the action card has already been applied. Never say the change is confirmed or completed before apply.",
-    "Do not create calendar events.",
+    "Do not create Google Calendar events.",
     "Do not mark projects done.",
     "Do not delete anything.",
     "Do not suggest destructive overwrites.",
@@ -439,11 +469,12 @@ function createAiPrompt(
     "When suggesting new weekly blocks, prefer evenings, Friday, Saturday, Sunday, or flexible blocks when weekday work shifts make daytime unavailable.",
     "If the user asks to plan the week, find open time, or balance work and school, mention saved work shifts and imported calendar commitments naturally when they exist.",
     "Exact-dated deadlines can be placed on the calendar. Vague deadlines need exact dates and should not be placed on a month grid.",
-    "Allowed suggestion types only: new_project, update_project, suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
+    "Allowed suggestion types only: new_project, update_project, suggested_scheduled_item, suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
     "Every suggestion must include id, type, title, description, confidence, rationale, and severity.",
-    "For optional fields that do not apply, return an empty string or 0.",
+    "For optional fields that do not apply, return an empty string, 0, or an empty array for conflictWarnings.",
     "For new_project cards, include projectName, category, priority, deadline, proposedNextAction, and weeklyHours.",
     "For update_project cards, include projectName and the proposed changed fields.",
+    "For suggested_scheduled_item cards, include itemType, title, plannedTask, itemDate, startTime, estimatedHours, location, and conflictWarnings.",
     "For suggested_weekly_block cards, include projectName, day, estimatedHours, and plannedTask. projectName may be an existing project name or a standalone task/appointment title.",
     "For suggested_next_action cards, include projectName and proposedNextAction.",
     "",
@@ -451,6 +482,7 @@ function createAiPrompt(
     JSON.stringify(recentMessages),
     "",
     `User request: ${prompt}`,
+    `Current server date: ${new Date().toISOString().slice(0, 10)}`,
     "",
     "Onboarding profile:",
     JSON.stringify(
@@ -512,6 +544,19 @@ function createAiPrompt(
         plannedTask: block.plannedTask,
         estimatedHours: block.estimatedHours,
         startTime: block.startTime ?? null,
+      })),
+    ),
+    "",
+    "Scheduled tasks and appointments:",
+    JSON.stringify(
+      context.scheduledItems.map((item) => ({
+        itemType: item.itemType,
+        title: item.title,
+        description: item.description,
+        itemDate: item.itemDate,
+        startTime: item.startTime ?? null,
+        estimatedHours: item.estimatedHours,
+        location: item.location,
       })),
     ),
     "",
@@ -603,6 +648,8 @@ function createAssistantMessagePrompt(
     "If the user asks for analysis, sync status, or open time, answer directly and do not promise action cards.",
     "Only mention review cards when the user clearly asks to create, add, move, update, schedule, plan, or generate blocks/projects.",
     "For 'find open time' requests, list open windows or likely openings and ask whether the user wants to turn one into a plan block.",
+    "For questions about tasks or appointments, answer from scheduledItems context and do not create cards unless the user asks to add or schedule something.",
+    "If the user asks to add an exact-date task, appointment, reminder, or errand, say you can draft it for review. Never say it was saved.",
     "If work shifts exist, treat them as unavailable and reference them naturally for planning requests.",
     "If imported calendar events exist, treat them as unavailable commitments and reference them naturally for planning/open-time requests.",
     "Use onboarding profile as soft context without being pushy. Student means study/class language can help; Professional means work-shift-aware planning can help; Organization leader means prep time and conflicts can help; General planning should stay broad.",
@@ -614,6 +661,7 @@ function createAssistantMessagePrompt(
     "Avoid repeating the same opening wording from prior assistant messages.",
     "Never claim anything was saved or changed.",
     "The app can create projects, update next actions, and add weekly blocks only after the user applies a reviewed action card.",
+    "The app can create exact-date tasks and appointments only after the user applies a reviewed action card.",
     "The app can update project deadlines, priority, category, weekly hours, next action, and name only after the user applies a reviewed action card.",
     "If the user asks to create or save a project, say you drafted it for review. Do not say you cannot create or save it from here.",
     "If the user asks to confirm a project edit, say the edit is ready to apply in the review card. Do not say it is confirmed, saved, completed, or changed unless the user clicked apply.",
@@ -661,6 +709,15 @@ function createAssistantMessagePrompt(
         estimatedHours: block.estimatedHours,
         startTime: block.startTime ?? null,
       })),
+      scheduledItems: context.scheduledItems.map((item) => ({
+        itemType: item.itemType,
+        title: item.title,
+        description: item.description,
+        itemDate: item.itemDate,
+        startTime: item.startTime ?? null,
+        estimatedHours: item.estimatedHours,
+        location: item.location,
+      })),
       workShifts: context.workShifts.map((shift) => ({
         day: shift.day,
         startTime: shift.startTime,
@@ -696,30 +753,28 @@ function createAssistantMessagePrompt(
   ].join("\n");
 }
 
-function preserveFallbackProjectEdits(
+function preserveFallbackCriticalSuggestions(
   aiSuggestions: AssistantPlanReviewResponse["suggestions"],
   fallbackSuggestions: AssistantPlanReviewResponse["suggestions"],
 ) {
-  const fallbackProjectEdits = fallbackSuggestions.filter(
-    (suggestion) => suggestion.type === "update_project",
+  const fallbackCriticalSuggestions = fallbackSuggestions.filter(
+    (suggestion) =>
+      suggestion.type === "update_project" ||
+      suggestion.type === "suggested_scheduled_item",
   );
 
-  if (fallbackProjectEdits.length === 0) {
+  if (fallbackCriticalSuggestions.length === 0) {
     return aiSuggestions;
   }
 
-  const hasProjectEdit = aiSuggestions.some(
-    (suggestion) => suggestion.type === "update_project",
+  const missingFallbackSuggestions = fallbackCriticalSuggestions.filter(
+    (fallbackSuggestion) =>
+      !aiSuggestions.some((suggestion) => suggestion.type === fallbackSuggestion.type),
   );
 
-  if (hasProjectEdit) {
-    return aiSuggestions;
-  }
-
-  return filterAssistantSuggestions([
-    ...fallbackProjectEdits,
-    ...aiSuggestions,
-  ]);
+  return missingFallbackSuggestions.length > 0
+    ? filterAssistantSuggestions([...missingFallbackSuggestions, ...aiSuggestions])
+    : aiSuggestions;
 }
 
 async function createOpenAiSuggestions(
@@ -760,9 +815,12 @@ async function createOpenAiSuggestions(
     message?: unknown;
     suggestions?: unknown;
   };
-  const suggestions = normalizeAssistantSuggestions(
-    parsed.suggestions,
-    assistantPlanningSuggestionTypes as readonly AssistantSuggestionType[],
+  const suggestions = addScheduledItemConflictWarningsToSuggestions(
+    normalizeAssistantSuggestions(
+      parsed.suggestions,
+      assistantPlanningSuggestionTypes as readonly AssistantSuggestionType[],
+    ),
+    context,
   );
   const filteredSuggestions = filterAssistantSuggestions([
     ...createCalendarConflictSuggestions(context),
@@ -945,7 +1003,7 @@ export async function POST(request: NextRequest) {
           profile,
           recentMessages,
         );
-        suggestions = preserveFallbackProjectEdits(
+        suggestions = preserveFallbackCriticalSuggestions(
           aiResponse.suggestions,
           fallbackResponse.suggestions,
         );
