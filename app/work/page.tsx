@@ -4,7 +4,7 @@ import { WorkSchedulePage } from "@/components/work/work-schedule-page";
 export const metadata: Metadata = {
   title: "Work Schedule",
   description:
-    "Add weekly work shifts so Schedule Builder can plan around unavailable hours.",
+    "Add weekly work shifts so Schedule Builder can plan around blocked hours.",
 };
 
 export default function WorkScheduleRoutePage() {

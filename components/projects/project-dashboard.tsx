@@ -278,7 +278,7 @@ function pluralize(count: number, singular: string, plural = `${singular}s`) {
 function getDashboardPersona(plannerType: PlannerType) {
   if (plannerType === "Student") {
     return {
-      eyebrow: "Student command center",
+      eyebrow: "Student planning summary",
       title: "Keep classes, deadlines, and study time in one calm view.",
       subtitle:
         "Start with school events and study blocks, then use the Assistant to find open time around the rest of your week.",
@@ -287,16 +287,16 @@ function getDashboardPersona(plannerType: PlannerType) {
 
   if (plannerType === "Professional") {
     return {
-      eyebrow: "Work-aware command center",
+      eyebrow: "Work-aware planning summary",
       title: "Plan around work shifts without losing the rest of your week.",
       subtitle:
-        "See unavailable hours, personal projects, calendar commitments, and the next open window before adding more.",
+        "See blocked hours, personal projects, calendar commitments, and the next open window before adding more.",
     };
   }
 
   if (plannerType === "Organization leader") {
     return {
-      eyebrow: "Organization command center",
+      eyebrow: "Organization planning summary",
       title: "Keep events, prep blocks, and team work from colliding.",
       subtitle:
         "Use projects and imported calendars to spot conflicts, protect prep time, and keep upcoming commitments visible.",
@@ -304,10 +304,10 @@ function getDashboardPersona(plannerType: PlannerType) {
   }
 
   return {
-    eyebrow: "Planning command center",
+    eyebrow: "Your planning summary",
     title: "Know what matters next without hunting through every page.",
     subtitle:
-      "Bring projects, tasks, unavailable time, calendars, and weekly blocks into one useful starting point.",
+      "Bring projects, tasks, blocked time, calendars, and time blocks into one useful starting point.",
   };
 }
 
@@ -326,7 +326,7 @@ function getTodayScheduleGroups(today: CalendarDaySchedule | undefined) {
   }
 
   const work = today.workShifts.map((shift) => ({
-    detail: shift.location || shift.notes || "Unavailable time",
+    detail: shift.location || shift.notes || "Blocked time",
     id: `work-${shift.id}`,
     label: "Work",
     title: formatWorkShiftRange(shift),
@@ -506,7 +506,9 @@ function wantsIntegration(
 
 function buildSetupProgressItems({
   hasGoogleCalendar,
+  hasGoogleSyncDestination,
   hasImportedCalendarEvents,
+  hasNextActions,
   hasPlanBlocks,
   hasProjects,
   hasSchoolEvents,
@@ -515,7 +517,9 @@ function buildSetupProgressItems({
   plannerType,
 }: {
   hasGoogleCalendar: boolean;
+  hasGoogleSyncDestination: boolean;
   hasImportedCalendarEvents: boolean;
+  hasNextActions: boolean;
   hasPlanBlocks: boolean;
   hasProjects: boolean;
   hasSchoolEvents: boolean;
@@ -541,28 +545,40 @@ function buildSetupProgressItems({
       {
         done: hasProjects,
         href: "/projects",
-        label: "Courses/projects",
+        label: "Projects prioritized",
         nextLabel: "Add",
+      },
+      {
+        done: hasNextActions,
+        href: "/projects",
+        label: "Next actions set",
+        nextLabel: "Choose",
       },
       {
         done: d2lDone,
         href: "/integrations",
-        label: "D2L / Brightspace",
+        label: "School calendar imported",
         nextLabel: "Import",
         statusLabel: hasSchoolEvents ? "Set" : "Skipped",
       },
       {
         done: googleDone,
         href: "/integrations",
-        label: "Google Calendar",
+        label: "Read-only calendar connected",
         nextLabel: "Connect",
         statusLabel: hasGoogleCalendar ? "Set" : "Skipped",
       },
       {
         done: hasPlanBlocks,
         href: "/plan",
-        label: "Weekly plan",
+        label: "Time blocks created",
         nextLabel: "Plan",
+      },
+      {
+        done: hasGoogleSyncDestination,
+        href: "/integrations",
+        label: "Sync destination created",
+        nextLabel: "Enable",
       },
       {
         done: true,
@@ -579,27 +595,39 @@ function buildSetupProgressItems({
       {
         done: hasWorkShifts,
         href: "/work",
-        label: "Work shifts",
+        label: "Work hours entered",
         nextLabel: "Add",
       },
       {
         done: googleDone,
         href: "/integrations",
-        label: "Google Calendar",
+        label: "Read-only calendar connected",
         nextLabel: "Connect",
         statusLabel: hasGoogleCalendar ? "Set" : "Skipped",
       },
       {
         done: hasProjects,
         href: "/projects",
-        label: "Projects/tasks",
+        label: "Projects prioritized",
         nextLabel: "Add",
+      },
+      {
+        done: hasNextActions,
+        href: "/projects",
+        label: "Next actions set",
+        nextLabel: "Choose",
       },
       {
         done: hasPlanBlocks,
         href: "/plan",
-        label: "Weekly plan",
+        label: "Time blocks created",
         nextLabel: "Plan",
+      },
+      {
+        done: hasGoogleSyncDestination,
+        href: "/integrations",
+        label: "Sync destination created",
+        nextLabel: "Enable",
       },
       {
         done: true,
@@ -616,20 +644,32 @@ function buildSetupProgressItems({
       {
         done: hasProjects,
         href: "/projects",
-        label: "Organization projects",
+        label: "Projects prioritized",
         nextLabel: "Add",
+      },
+      {
+        done: hasNextActions,
+        href: "/projects",
+        label: "Next actions set",
+        nextLabel: "Choose",
       },
       {
         done: hasGoogleCalendar || hasImportedCalendarEvents,
         href: "/integrations",
-        label: "Calendar context",
+        label: "Calendar connected/imported",
         nextLabel: "Connect/import",
       },
       {
         done: hasPlanBlocks,
         href: "/plan",
-        label: "Weekly plan",
+        label: "Time blocks created",
         nextLabel: "Plan",
+      },
+      {
+        done: hasGoogleSyncDestination,
+        href: "/integrations",
+        label: "Sync destination created",
+        nextLabel: "Enable",
       },
       {
         done: true,
@@ -645,27 +685,39 @@ function buildSetupProgressItems({
     {
       done: hasProjects,
       href: "/projects",
-      label: "Projects/tasks",
+      label: "Projects prioritized",
       nextLabel: "Add",
     },
     {
-      done: hasWorkShifts,
-      href: "/work",
-      label: "Unavailable time",
-      nextLabel: "Add",
+      done: hasNextActions,
+      href: "/projects",
+      label: "Next actions set",
+      nextLabel: "Choose",
     },
     {
       done: googleDone,
       href: "/integrations",
-      label: "Google Calendar",
+      label: "Read-only calendar connected",
       nextLabel: "Connect",
       statusLabel: hasGoogleCalendar ? "Set" : "Skipped",
     },
     {
+      done: hasWorkShifts,
+      href: "/work",
+      label: "Blocked time entered",
+      nextLabel: "Add",
+    },
+    {
       done: hasPlanBlocks,
       href: "/plan",
-      label: "Weekly plan",
+      label: "Time blocks created",
       nextLabel: "Plan",
+    },
+    {
+      done: hasGoogleSyncDestination,
+      href: "/integrations",
+      label: "Sync destination created",
+      nextLabel: "Enable",
     },
     {
       done: true,
@@ -719,7 +771,7 @@ function buildSuggestedDashboardActions({
   if (conflictCount > 0) {
     addAction({
       description:
-        "A planned block may overlap work time or an external calendar event.",
+        "A time block may overlap work time or an external calendar event.",
       href: "/calendar",
       id: "review-conflicts",
       label: "Check Calendar",
@@ -730,7 +782,7 @@ function buildSuggestedDashboardActions({
   if (syncNeedsAttentionCount > 0) {
     addAction({
       description:
-        "Some synced blocks changed after being sent to Google Calendar.",
+        "Some synced time blocks changed after being sent to Google Calendar.",
       href: "/plan",
       id: "review-sync-attention",
       label: "Review sync",
@@ -741,7 +793,7 @@ function buildSuggestedDashboardActions({
   if (!hasPlanBlocks) {
     addAction({
       description:
-        "Add the first block so your week has a real plan to work from.",
+        "Add the first time block so your week has a real plan to work from.",
       href: "/plan",
       id: "start-weekly-plan",
       label: "Start planning",
@@ -752,7 +804,7 @@ function buildSuggestedDashboardActions({
   if (flexibleBlocksCount > 0 && isGoogleSyncEnabled) {
     addAction({
       description:
-        "Timed blocks can be sent to Google Calendar; flexible blocks need start times first.",
+        "Time blocks with start times can be sent to Google Calendar; flexible ones need times first.",
       href: "/plan",
       id: "add-start-times",
       label: "Add times",
@@ -813,7 +865,7 @@ function buildSuggestedDashboardActions({
     }
     if (!hasPlanBlocks) {
       addAction({
-        description: "Turn one upcoming class task into a realistic study block.",
+        description: "Turn one upcoming class task into a realistic study time block.",
         href: "/plan",
         id: "create-study-blocks",
         label: "Open Weekly Plan",
@@ -823,7 +875,7 @@ function buildSuggestedDashboardActions({
   } else if (plannerType === "Professional") {
     if (!hasWorkShifts) {
       addAction({
-        description: "Add recurring unavailable hours so plans avoid work time.",
+        description: "Add recurring blocked hours so plans avoid work time.",
         href: "/work",
         id: "add-work-shifts",
         label: "Add shifts",
@@ -854,7 +906,7 @@ function buildSuggestedDashboardActions({
         href: "/plan",
         id: "create-weekly-block",
         label: "Open Weekly Plan",
-        title: "Create weekly blocks",
+        title: "Create time blocks",
       });
     }
   } else if (plannerType === "Organization leader") {
@@ -909,9 +961,9 @@ function buildSuggestedDashboardActions({
       addAction({
         description: "Protect fixed commitments so plans fit your real week.",
         href: "/work",
-        id: "add-unavailable",
-        label: "Add unavailable time",
-        title: "Add recurring unavailable time",
+        id: "add-blocked-time",
+        label: "Add blocked time",
+        title: "Add recurring blocked time",
       });
     }
     if (!hasGoogleCalendar) {
@@ -929,7 +981,7 @@ function buildSuggestedDashboardActions({
         href: "/plan",
         id: "weekly-plan",
         label: "Open Weekly Plan",
-        title: "Create a weekly plan block",
+        title: "Create a time block",
       });
     }
   }
@@ -962,11 +1014,11 @@ function buildSuggestedDashboardActions({
   } else if (hasProjects) {
     addAction({
       description:
-        "Pick one active project or standalone task and turn it into a weekly block.",
+        "Pick one active project or standalone task and turn it into a time block.",
       href: "/plan",
-      id: "add-plan-block",
-      label: "Add block",
-      title: "Add a plan block",
+      id: "add-time-block",
+      label: "Add time block",
+      title: "Add a time block",
     });
   } else {
     addAction({
@@ -1028,6 +1080,31 @@ function SetupProgressCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function DashboardStatusLink({
+  helper,
+  href,
+  label,
+  value,
+}: {
+  helper: string;
+  href: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <Link
+      className="rounded-[22px] border border-brand-ink/8 bg-white/78 p-3 text-brand-ink shadow-[0_12px_28px_rgba(18,32,47,0.05)] transition hover:-translate-y-0.5 hover:bg-white"
+      href={href}
+    >
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-ink/42">
+        {label}
+      </p>
+      <p className="mt-2 text-sm font-semibold text-brand-ink">{value}</p>
+      <p className="mt-1 text-xs leading-5 text-brand-ink/55">{helper}</p>
+    </Link>
   );
 }
 
@@ -1181,7 +1258,7 @@ function TodayWeekCard({
           {todayItemCount > 0 ? (
             <>
               {renderTodayGroup("Work shifts", todayGroups.work)}
-              {renderTodayGroup("Plan blocks", todayGroups.plan)}
+              {renderTodayGroup("Time blocks", todayGroups.plan)}
               {renderTodayGroup("External events", todayGroups.external)}
             </>
           ) : (
@@ -1190,7 +1267,7 @@ function TodayWeekCard({
                 Nothing scheduled today yet.
               </p>
               <p className="mt-1 text-sm leading-5 text-brand-ink/58">
-                Use this as open space, or add a plan block when the day needs
+                Use this as open space, or add a time block when the day needs
                 structure.
               </p>
             </div>
@@ -1265,7 +1342,7 @@ function TodayWeekCard({
           ) : (
             <p className="mt-2 text-sm leading-5 text-brand-ink/58">
               Open windows need a closer look this week. The Assistant can scan
-              work shifts, plan blocks, and external events for you.
+              work shifts, time blocks, and external events for you.
             </p>
           )}
         </div>
@@ -1318,7 +1395,7 @@ function DashboardTopThreeCard({ items }: { items: DashboardTopThreeItem[] }) {
           ) : (
             <div className="rounded-[22px] border border-dashed border-brand-ink/12 bg-white/50 p-4">
               <p className="text-sm font-semibold text-brand-ink">
-                Add projects or plan blocks to generate priorities.
+                Add projects or time blocks to generate priorities.
               </p>
               <p className="mt-1 text-sm leading-5 text-brand-ink/58">
                 Once Schedule Builder has a few priorities, this card becomes
@@ -1330,7 +1407,7 @@ function DashboardTopThreeCard({ items }: { items: DashboardTopThreeItem[] }) {
 
         {items.length === 1 ? (
           <p className="mt-4 rounded-[18px] bg-brand-ink/5 px-4 py-3 text-sm leading-5 text-brand-ink/60">
-            Add more projects or plan blocks to build a fuller priority list.
+            Add more projects or time blocks to build a fuller priority list.
           </p>
         ) : null}
       </CardContent>
@@ -1450,7 +1527,7 @@ function FocusRuleCard() {
             </p>
             <p className="mt-2 text-sm leading-6 text-brand-ink/70">
               Priorities are suggested from your active projects, deadlines,
-              and weekly plan.
+              and weekly time blocks.
             </p>
           </div>
         </div>
@@ -1522,7 +1599,7 @@ function SettingsQuickLinksCard({
               <div>
                 <p className="text-sm font-semibold">Work Schedule</p>
                 <p className="text-sm leading-5 text-brand-ink/58">
-                  Add unavailable work hours.
+                  Add blocked work hours.
                 </p>
               </div>
             </div>
@@ -2102,6 +2179,28 @@ export function ProjectDashboard() {
     [googleCalendarStatus?.connected, importedEvents],
   );
 
+  const hasGoogleSyncDestination = useMemo(
+    () =>
+      Boolean(
+        googleSyncStatus?.syncEnabled ||
+          googleCalendarStatus?.syncEnabled ||
+          googleCalendarStatus?.syncCalendarName,
+      ),
+    [
+      googleCalendarStatus?.syncCalendarName,
+      googleCalendarStatus?.syncEnabled,
+      googleSyncStatus?.syncEnabled,
+    ],
+  );
+
+  const hasNextActions = useMemo(
+    () =>
+      projects.some(
+        (project) => !project.completed && project.nextAction.trim().length > 0,
+      ),
+    [projects],
+  );
+
   const weeklyExternalEvents = useMemo(
     () =>
       calendarWeek.days.reduce(
@@ -2151,7 +2250,9 @@ export function ProjectDashboard() {
     () =>
       buildSetupProgressItems({
         hasGoogleCalendar,
+        hasGoogleSyncDestination,
         hasImportedCalendarEvents: externalImportedEvents.length > 0,
+        hasNextActions,
         hasPlanBlocks: planBlocks.length > 0,
         hasProjects: projects.length > 0,
         hasSchoolEvents: schoolEventCount > 0,
@@ -2162,6 +2263,8 @@ export function ProjectDashboard() {
     [
       externalImportedEvents.length,
       hasGoogleCalendar,
+      hasGoogleSyncDestination,
+      hasNextActions,
       planBlocks.length,
       plannerProfile,
       plannerType,
@@ -2470,7 +2573,7 @@ export function ProjectDashboard() {
 
       if (result.error) {
         const message = getSchedulerErrorMessage(result.error);
-        setDataMessage(`Weekly plan block was not removed from Supabase: ${message}`);
+        setDataMessage(`Time block was not removed from Supabase: ${message}`);
         throw new Error(message);
       }
 
@@ -2707,10 +2810,10 @@ export function ProjectDashboard() {
             <Card className="rounded-[30px] border-white/75 bg-white/90">
               <CardContent className="p-6 sm:p-7">
                 <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
-                  Loading
+                  Loading your planning summary
                 </p>
                 <h1 className="mt-3 text-2xl font-semibold text-brand-ink sm:text-3xl">
-                  Preparing your synced scheduler...
+                  Bringing your schedule into view...
                 </h1>
                 <p className="mt-3 text-sm leading-6 text-brand-ink/65">
                   {dataMessage ?? "Checking your session and loading your latest schedule."}
@@ -2778,21 +2881,37 @@ export function ProjectDashboard() {
                     {dashboardPersona.subtitle}
                   </p>
 
-                  <div className="mt-5 flex flex-wrap gap-2.5">
-                    <Badge>{pluralize(activeProjects, "active project")}</Badge>
-                    <Badge variant="subtle">
-                      {pluralize(planBlocks.length, "weekly block")}
-                    </Badge>
-                    <Badge variant="subtle">
-                      {pluralize(workShifts.length, "unavailable block")}
-                    </Badge>
-                    <Badge variant="subtle">
-                      {hasGoogleCalendar
-                        ? googleCalendarStatus?.syncEnabled
-                          ? "Google sync enabled"
-                          : "Google connected"
-                        : "Calendar optional"}
-                    </Badge>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                    <DashboardStatusLink
+                      helper="Review priorities"
+                      href="/projects"
+                      label="Projects"
+                      value={pluralize(activeProjects, "active project")}
+                    />
+                    <DashboardStatusLink
+                      helper="Draft this week"
+                      href="/plan"
+                      label="Time blocks"
+                      value={pluralize(planBlocks.length, "time block")}
+                    />
+                    <DashboardStatusLink
+                      helper="Protect fixed time"
+                      href="/work"
+                      label="Blocked time"
+                      value={pluralize(workShifts.length, "blocked entry", "blocked entries")}
+                    />
+                    <DashboardStatusLink
+                      helper="Existing events as context"
+                      href="/integrations"
+                      label="Read-only calendar"
+                      value={hasGoogleCalendar ? "Imported" : "Off"}
+                    />
+                    <DashboardStatusLink
+                      helper="For manual Google sends"
+                      href="/integrations"
+                      label="Sync destination"
+                      value={hasGoogleSyncDestination ? "Created" : "Not created"}
+                    />
                   </div>
                 </div>
 
@@ -2941,8 +3060,7 @@ export function ProjectDashboard() {
                   Weekly Plan
                 </h1>
                 <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                  Turn project priorities into scheduled work blocks for the
-                  week.
+                  Draft your time blocks.
                 </p>
               </div>
             </section>

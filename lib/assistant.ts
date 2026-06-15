@@ -1490,7 +1490,7 @@ function createFallbackStandaloneBlockSuggestion(
     plannedTask: prompt.trim() || title,
     projectName: title,
     rationale:
-      "This sounds like a one-off task or appointment, so it can become a Weekly Plan block without creating a project.",
+      "This sounds like a one-off task or appointment, so it can become a time block without creating a project.",
     severity: "important",
     summary: description,
     title: `Add ${title}`,
@@ -2365,8 +2365,8 @@ function createOpenTimeFallbackMessage(context: AssistantPlanningContext) {
   );
   const contextNote =
     context.workShiftsCount > 0 || context.importedEventsCount > 0
-      ? "I treated work shifts, timed plan blocks, and external calendar events as commitments."
-      : "I treated your timed plan blocks as commitments.";
+      ? "I treated work shifts, scheduled time blocks, and external calendar events as commitments."
+      : "I treated your scheduled time blocks as commitments.";
   const flexibleNote =
     flexibleBlocks.length > 0
       ? ` You also have ${flexibleBlocks.length} flexible block${
@@ -2380,7 +2380,7 @@ function createOpenTimeFallbackMessage(context: AssistantPlanningContext) {
 
   return `${contextNote} The clearest open windows I see are ${formatOpenTimeWindows(
     windows,
-  )}.${flexibleNote} Want me to turn one of these into a plan block?`;
+  )}.${flexibleNote} Want me to turn one of these into a time block?`;
 }
 
 function createAnalysisFallbackMessage(
@@ -2753,8 +2753,8 @@ export function createFallbackAssistantResponse(
       summary: description,
       rationale:
         getWorkShiftRangesForDay(context.workShifts, day).length > 0
-          ? "This project is high priority and does not yet appear in your weekly plan blocks. The suggested day includes work hours, so keep the block outside that shift."
-          : "This project is high priority and does not yet appear in your weekly plan blocks.",
+          ? "This project is high priority and does not yet appear in your weekly time blocks. The suggested day includes work hours, so keep the block outside that shift."
+          : "This project is high priority and does not yet appear in your weekly time blocks.",
       severity: "important",
       projectName: project.name,
       day,
@@ -2884,7 +2884,7 @@ export function createFallbackAssistantResponse(
       : openTimePromptPattern.test(prompt) && importedCalendarText
       ? `I’m treating your ${importedCalendarText} as fixed commitments. I’d look for open time around ${lightPlanningDayText} first and keep project blocks away from imported events.`
       : openTimePromptPattern.test(prompt)
-      ? `I’d look for open time around ${lightPlanningDayText} first. Those days have the lightest mix of plan blocks and fixed commitments right now.`
+      ? `I’d look for open time around ${lightPlanningDayText} first. Those days have the lightest mix of time blocks and fixed commitments right now.`
       : focusPromptPattern.test(prompt) && topProject
       ? `I’d start with ${topProject.name}. It has the strongest priority signal right now, so I’d make the next action visible first and keep the rest of the plan lighter around it.`
       : projectUpdateSuggestion
@@ -2898,7 +2898,7 @@ export function createFallbackAssistantResponse(
       : balancePromptPattern.test(prompt)
       ? `I’d balance this by protecting fixed commitments first, then placing one or two high-priority project blocks on ${lightPlanningDayText}.`
       : overloadPromptPattern.test(prompt) && context.calendarConflicts.length > 0
-      ? "I found at least one timed plan block that may overlap your saved work hours. I won’t move anything automatically, but I’d review those conflicts first before adding more blocks."
+      ? "I found at least one scheduled time block that may overlap your saved work hours. I won’t move anything automatically, but I’d review those conflicts first before adding more blocks."
       : overloadPromptPattern.test(prompt)
       ? "I checked for pressure points first. The most useful move is to spot days where work plus project blocks are stacked too tightly, then shift one lower-priority block away."
       : planWeekPromptPattern.test(prompt) && workScheduleSummary

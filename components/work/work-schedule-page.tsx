@@ -995,11 +995,14 @@ export function WorkSchedulePage() {
                 Work Schedule
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Add work shifts and unavailable hours so Schedule Builder can
+                Block constraints for planning.
+              </p>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
+                Add work shifts and blocked hours so Schedule Builder can
                 plan around them.
               </p>
               <p className="mt-3 rounded-[22px] border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
-                Start by adding your regular work shifts. Schedule Builder will use them to avoid planning project blocks during unavailable time.
+                Start by adding your regular work shifts. Schedule Builder will use them to avoid planning time blocks during blocked time.
               </p>
             </div>
 
@@ -1007,7 +1010,7 @@ export function WorkSchedulePage() {
               <CardContent className="grid grid-cols-2 gap-3 p-4 sm:p-5">
                 <div className="rounded-[22px] bg-white/70 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-ink/42">
-                    Unavailable this week
+                    Blocked this week
                   </p>
                   <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-brand-ink">
                     {formatShiftHours(unavailableHours)}
@@ -1203,14 +1206,14 @@ export function WorkSchedulePage() {
                         <div className="space-y-3">
                           {status === "loading" ? (
                             <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
-                              Loading shifts...
+                              Loading blocked time...
                             </div>
                           ) : null}
 
                           {status !== "loading" && dayShifts.length === 0 ? (
                             <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4">
                               <p className="text-sm font-semibold text-brand-ink/70">
-                                No shifts yet
+                                No blocked time yet
                               </p>
                             </div>
                           ) : null}
@@ -1261,7 +1264,7 @@ export function WorkSchedulePage() {
 
         <ConfirmDialog
           confirmLabel="Remove shift"
-          description="This shift will be removed from your work schedule. Schedule Builder will stop treating this time as unavailable."
+          description="This shift will be removed from your work schedule. Schedule Builder will stop treating this time as blocked."
           destructive
           open={Boolean(pendingRemoveShift)}
           title="Remove work shift?"

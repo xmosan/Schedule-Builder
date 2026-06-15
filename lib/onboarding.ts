@@ -27,7 +27,7 @@ export const onboardingUseCases = [
     label: "Work schedule",
     plannerType: "Professional",
     description:
-      "Block unavailable hours, protect personal time, and plan around shifts or meetings.",
+      "Block fixed hours, protect personal time, and plan around shifts or meetings.",
     defaultGoals: ["Find open time", "Avoid conflicts", "Build weekly plans"],
   },
   {
@@ -184,7 +184,7 @@ const setupRecommendationsByPlannerType: Record<
       id: "connect-google",
       title: "Connect Google Calendar read-only",
       reason:
-        "Use existing classes, meetings, and commitments as unavailable time.",
+        "Use existing classes, meetings, and commitments as blocked time.",
       href: "/integrations",
       actionLabel: "Connect calendar",
     },
@@ -200,7 +200,7 @@ const setupRecommendationsByPlannerType: Record<
       id: "study-block",
       title: "Create study blocks",
       reason:
-        "Turn your top class or assignment into a realistic weekly work block.",
+        "Turn your top class or assignment into a realistic study time block.",
       href: "/plan",
       actionLabel: "Open Weekly Plan",
     },
@@ -208,7 +208,7 @@ const setupRecommendationsByPlannerType: Record<
       id: "assistant-study-time",
       title: "Ask for open study time",
       reason:
-        "The Assistant can compare work shifts, imported events, and plan blocks.",
+        "The Assistant can compare work shifts, imported events, and time blocks.",
       href: "/assistant",
       actionLabel: "Open Assistant",
     },
@@ -216,9 +216,9 @@ const setupRecommendationsByPlannerType: Record<
   Professional: [
     {
       id: "add-work-shifts",
-      title: "Add work shifts or unavailable hours",
+      title: "Add work shifts or blocked hours",
       reason:
-        "Schedule Builder can avoid planning project blocks during fixed work time.",
+        "Schedule Builder can avoid planning time blocks during fixed work time.",
       href: "/work",
       actionLabel: "Add shifts",
     },
@@ -248,7 +248,7 @@ const setupRecommendationsByPlannerType: Record<
     },
     {
       id: "create-weekly-blocks",
-      title: "Create weekly blocks",
+      title: "Create time blocks",
       reason:
         "Turn one priority into a scheduled block that fits around work.",
       href: "/plan",
@@ -308,7 +308,7 @@ const setupRecommendationsByPlannerType: Record<
     },
     {
       id: "plan-blocks",
-      title: "Build weekly work blocks",
+      title: "Build weekly time blocks",
       reason:
         "Turn creative or business goals into focused blocks you can actually do.",
       href: "/plan",
@@ -341,12 +341,12 @@ const setupRecommendationsByPlannerType: Record<
       actionLabel: "Open Projects",
     },
     {
-      id: "add-unavailable-time",
-      title: "Add recurring unavailable time",
+      id: "add-blocked-time",
+      title: "Add recurring blocked time",
       reason:
         "Protect fixed commitments so the plan fits your real week.",
       href: "/work",
-      actionLabel: "Add unavailable time",
+      actionLabel: "Add blocked time",
     },
     {
       id: "connect-google",
@@ -358,7 +358,7 @@ const setupRecommendationsByPlannerType: Record<
     },
     {
       id: "weekly-plan",
-      title: "Create a weekly plan block",
+      title: "Create a time block",
       reason:
         "Put one priority on the board and build from there.",
       href: "/plan",

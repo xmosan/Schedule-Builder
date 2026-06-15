@@ -1748,7 +1748,10 @@ export function AssistantPage() {
                   Planning Assistant
                 </h1>
                 <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-                  Ask for help planning your week, projects, work blocks, or priorities.
+                  Propose blocks; you approve.
+                </p>
+                <p className="mt-1 text-sm leading-6 text-brand-ink/60">
+                  Ask for help planning your week, projects, time blocks, or priorities.
                 </p>
                 <p className="mt-2 text-xs font-semibold text-brand-teal">
                   Nothing is added to your schedule unless you approve it.
@@ -1940,7 +1943,7 @@ export function AssistantPage() {
 
       <ConfirmDialog
         confirmLabel="Clear chat"
-        description="This clears the conversation from this screen. Your projects, plan blocks, work shifts, and calendar connections will stay as they are."
+        description="This clears the conversation from this screen. Your projects, time blocks, work shifts, and calendar connections will stay as they are."
         destructive
         open={isClearChatDialogOpen}
         title="Clear chat history?"

@@ -125,9 +125,10 @@ function isSameMonthDate(date: Date, monthDate: Date) {
 }
 
 function formatDateLabel(date: Date) {
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
+    year: "numeric",
   }).format(date);
 }
 
@@ -325,7 +326,7 @@ export function getWeekDates(
 }
 
 export function getMonthLabel(monthDate = getCurrentMonthStart()) {
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(undefined, {
     month: "long",
     year: "numeric",
   }).format(monthDate);
@@ -364,6 +365,30 @@ export function getWeekRangeLabel(weekDates: Pick<CalendarDaySchedule, "date">[]
 
   if (!firstDay || !lastDay) {
     return "This week";
+  }
+
+  const sameYear = firstDay.getFullYear() === lastDay.getFullYear();
+  const sameMonth = sameYear && firstDay.getMonth() === lastDay.getMonth();
+
+  if (sameMonth) {
+    const monthLabel = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+    }).format(firstDay);
+
+    return `${monthLabel} ${firstDay.getDate()} - ${lastDay.getDate()}, ${firstDay.getFullYear()}`;
+  }
+
+  if (sameYear) {
+    const firstLabel = new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+    }).format(firstDay);
+    const lastLabel = new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+    }).format(lastDay);
+
+    return `${firstLabel} - ${lastLabel}, ${firstDay.getFullYear()}`;
   }
 
   return `${formatDateLabel(firstDay)} - ${formatDateLabel(lastDay)}`;

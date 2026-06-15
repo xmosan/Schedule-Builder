@@ -513,7 +513,7 @@ export function findScheduledItemConflicts({
       conflicts.push({
         item,
         kind: "weekly_plan",
-        message: `This ${kindLabel} may overlap with a weekly plan block (${weeklyPlanBlock.projectName}, ${formatStartTime(
+        message: `This ${kindLabel} may overlap with a time block (${weeklyPlanBlock.projectName}, ${formatStartTime(
           weeklyPlanBlock.startTime,
         )}).`,
         sourceLabel: "Weekly plan",

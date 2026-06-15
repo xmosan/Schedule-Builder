@@ -570,7 +570,7 @@ function WorkShiftEvent({ shift }: { shift: WorkShift }) {
       meta={`${formatWorkShiftRange(shift)} • ${formatHours(
         getWorkShiftDurationHours(shift),
       )}`}
-      title="Unavailable"
+      title="Blocked time"
     >
       {shift.location ? (
         <p className="mt-2 text-sm font-medium leading-6 text-brand-ink/65">
@@ -1093,7 +1093,7 @@ function DayEventGroups({
 
       <CalendarEventGroupSection
         count={timedPlanBlocks.length}
-        label="Plan blocks"
+        label="Time blocks"
       >
         {timedPlanBlocks.map((block) => (
           <PlanBlockEvent
@@ -1261,13 +1261,13 @@ function MonthDayDetail({
             className="inline-flex h-9 items-center justify-center rounded-full bg-brand-ink px-3 text-xs font-semibold text-white transition hover:-translate-y-0.5 hover:bg-brand-teal"
             href={selectedWeekPlanHref}
           >
-            Sync this week in Plan
+            Review this week in Weekly Plan
           </Link>
           <Link
             className="inline-flex h-9 items-center justify-center rounded-full border border-brand-ink/10 bg-white/78 px-3 text-xs font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:bg-white"
             href={selectedWeekPlanHref}
           >
-            Add plan block
+            Add time block
           </Link>
           <button
             className="inline-flex h-9 items-center justify-center rounded-full border border-brand-teal/15 bg-brand-teal/8 px-3 text-xs font-semibold text-brand-teal transition hover:-translate-y-0.5 hover:bg-brand-teal/12"
@@ -1281,7 +1281,7 @@ function MonthDayDetail({
         <div className="mt-4">
           {status === "loading" ? (
             <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
-              Loading calendar...
+              Loading your calendar...
             </div>
           ) : null}
 
@@ -1291,14 +1291,14 @@ function MonthDayDetail({
                 Nothing scheduled here yet.
               </p>
               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                No work shifts, plan blocks, tasks, or external events.
+                No work shifts, time blocks, tasks, or external events.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <Link
                   className="inline-flex h-9 items-center justify-center rounded-full bg-brand-ink px-3 text-xs font-semibold text-white"
                   href={selectedWeekPlanHref}
                 >
-                  Add plan block
+                  Add time block
                 </Link>
                 <Link
                   className="inline-flex h-9 items-center justify-center rounded-full border border-brand-ink/10 bg-white/78 px-3 text-xs font-semibold text-brand-ink"
@@ -1870,7 +1870,7 @@ export function CalendarPage() {
             value: formatHours(weekSummary.workHours),
           },
           {
-            label: "Plan blocks",
+            label: "Time blocks",
             value: formatEstimatedHours(weekSummary.plannedProjectHours),
           },
           {
@@ -1896,7 +1896,7 @@ export function CalendarPage() {
             value: monthSummary.workShiftDays,
           },
           {
-            label: "Plan blocks",
+            label: "Time blocks",
             value: monthSummary.plannedBlocks,
           },
           {
@@ -1945,7 +1945,7 @@ export function CalendarPage() {
         ? "ICS events included"
         : scheduleBuilderExportCount > 0
           ? "Schedule Builder exports included"
-        : "External events ready";
+        : "External events can be added";
   const deadlinesNeedingExactDates = (
     view === "week"
       ? calendar.upcomingDeadlines
@@ -2196,7 +2196,10 @@ export function CalendarPage() {
                 Calendar
               </h1>
               <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                See work shifts, planned blocks, external events, and deadlines
+                Confirm your week.
+              </p>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
+                See work shifts, time blocks, external events, and deadlines
                 in one schedule.
               </p>
               <div className="mt-5 flex flex-wrap gap-2">
@@ -2222,10 +2225,15 @@ export function CalendarPage() {
             <Card className="rounded-[30px] border-white/70 bg-white/90 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
               <CardContent className="space-y-4 p-4 sm:p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:flex-col xl:items-stretch">
-                  <div className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/78 p-1 shadow-[0_12px_28px_rgba(18,32,47,0.06)]">
+                  <div
+                    aria-label="Calendar view"
+                    className="inline-flex w-fit rounded-full border border-brand-ink/8 bg-white/78 p-1 shadow-[0_12px_28px_rgba(18,32,47,0.06)]"
+                    role="group"
+                  >
                     {(["week", "month"] as const).map((nextView) => (
                       <button
                         key={nextView}
+                        aria-label={`Show ${nextView} view`}
                         aria-pressed={view === nextView}
                         className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
                           view === nextView
@@ -2355,7 +2363,7 @@ export function CalendarPage() {
                     href="/plan"
                   >
                     <PlusIcon className="h-3.5 w-3.5" />
-                    Add plan block
+                    Add time block
                   </Link>
                   <Link
                     className="inline-flex h-9 items-center gap-1.5 rounded-full border border-brand-ink/10 bg-white/80 px-4 text-xs font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:bg-white sm:text-sm"
@@ -2472,7 +2480,7 @@ export function CalendarPage() {
                         <div className="flex flex-1 flex-col gap-3">
                           {status === "loading" ? (
                             <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/60 p-4 text-sm text-brand-ink/52">
-                              Loading calendar...
+                              Loading your calendar...
                             </div>
                           ) : null}
 
@@ -2482,7 +2490,7 @@ export function CalendarPage() {
                                 Open day
                               </p>
                               <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                                No work shifts, plan blocks, tasks, or external events.
+                                No work shifts, time blocks, tasks, or external events.
                               </p>
                             </div>
                           ) : null}

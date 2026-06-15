@@ -357,10 +357,10 @@ function formatGoogleSyncDisplayTitle(title: string) {
 
   if (trimmedTitle.toLowerCase().startsWith(prefix.toLowerCase())) {
     const projectTitle = trimmedTitle.slice(prefix.length).trim();
-    return projectTitle || "Schedule Builder plan block";
+    return projectTitle || "Schedule Builder time block";
   }
 
-  return trimmedTitle || "Schedule Builder plan block";
+  return trimmedTitle || "Schedule Builder time block";
 }
 
 function getSyncStatusLabel(status: GoogleCalendarSyncStatusValue) {
@@ -703,7 +703,7 @@ export function WeeklyPlanSection({
     const accessToken = data.session?.access_token;
 
     if (!accessToken) {
-      throw new Error("Sign in before syncing Weekly Plan blocks.");
+      throw new Error("Sign in before syncing time blocks.");
     }
 
     return accessToken;
@@ -1012,7 +1012,7 @@ export function WeeklyPlanSection({
       planConflict
         ? {
             detail: planConflict.projectName,
-            label: "May overlap with another plan block",
+            label: "May overlap with another time block",
             tone: "warning",
           }
         : null,
@@ -1423,7 +1423,7 @@ export function WeeklyPlanSection({
     setExportMessage(null);
 
     if (planBlocks.length === 0) {
-      setExportError("Add at least one weekly plan block before exporting.");
+      setExportError("Add at least one time block before exporting.");
       return;
     }
 
@@ -1431,7 +1431,7 @@ export function WeeklyPlanSection({
 
     if (result.exportedCount === 0) {
       setExportError(
-        result.warnings[0] ?? "No valid weekly plan blocks were available to export.",
+        result.warnings[0] ?? "No valid time blocks were available to export.",
       );
       return;
     }
@@ -1504,7 +1504,7 @@ export function WeeklyPlanSection({
       const payload = (await response.json()) as GoogleCalendarSyncBlocksResponse;
 
       if (!response.ok || payload.error) {
-        throw new Error(payload.error ?? "Weekly Plan blocks could not be synced.");
+        throw new Error(payload.error ?? "Time blocks could not be synced.");
       }
 
       const results = payload.results ?? [];
@@ -2371,7 +2371,7 @@ export function WeeklyPlanSection({
             disabled={!canAddBlock}
           >
             <PlusIcon className="h-4 w-4" />
-            {isConfirmingDuplicate ? "Add anyway" : "Add block"}
+            {isConfirmingDuplicate ? "Add anyway" : "Add time block"}
           </Button>
         </div>
 
@@ -2406,7 +2406,7 @@ export function WeeklyPlanSection({
           </p>
         </div>
         <div className="metric-card">
-          <p className="text-sm text-brand-ink/55">Work blocks</p>
+          <p className="text-sm text-brand-ink/55">Time blocks</p>
           <p className="mt-2 text-2xl font-semibold text-brand-ink">
             {planBlocks.length}
           </p>
@@ -2458,10 +2458,10 @@ export function WeeklyPlanSection({
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-brand-ink sm:text-xl">
-                  Quick add block
+                  Quick add time block
                 </h2>
                 <p className="text-sm leading-6 text-brand-ink/60">
-                  Add a block quickly, or use a day card below.
+                  Add a time block quickly, or use a day card below.
                 </p>
               </div>
             </div>
@@ -2766,7 +2766,7 @@ export function WeeklyPlanSection({
 
           {isGoogleSyncLoading ? (
             <p className="mt-4 rounded-2xl border border-brand-teal/12 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
-              Loading Google sync status...
+              Checking Google Calendar sync status...
             </p>
           ) : null}
 
@@ -2775,10 +2775,10 @@ export function WeeklyPlanSection({
               {planBlocks.length === 0 ? (
               <div className="rounded-[24px] border border-dashed border-brand-ink/12 bg-white/55 p-4">
                 <p className="text-sm font-semibold text-brand-ink/70">
-                  Add timed blocks before syncing to Google Calendar.
+                  Add time blocks with start times before syncing to Google Calendar.
                 </p>
                 <p className="mt-1 text-sm leading-6 text-brand-ink/55">
-                  Start by adding one block to a day above.
+                  Start by adding one time block to a day above.
                 </p>
               </div>
               ) : null}
@@ -3356,8 +3356,8 @@ export function WeeklyPlanSection({
                       </p>
                       <p className="mt-1 text-sm leading-6 text-brand-ink/58">
                         This removes the event from your dedicated Schedule
-                        Builder Google Calendar. It will not change local Weekly
-                        Plan blocks.
+                        Builder Google Calendar. It will not change local time
+                        blocks.
                       </p>
                     </div>
                     <Badge className="bg-brand-coral/10 text-brand-coral" variant="subtle">

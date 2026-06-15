@@ -238,7 +238,7 @@ export function IntegrationsPage() {
     if (syncEnabled === "enabled") {
       setGoogleCalendarAuthorizationUrl(null);
       setGoogleCalendarMessage(
-        "Calendar sync enabled. Schedule Builder created or reused a dedicated Google Calendar. Weekly Plan blocks sync only when you select them on the Weekly Plan page.",
+        "Calendar sync enabled. Schedule Builder created or reused a dedicated Google Calendar. Time blocks sync only when you select them on the Weekly Plan page.",
       );
       setGoogleCalendarSyncEnabled(true);
     }
@@ -625,7 +625,7 @@ export function IntegrationsPage() {
           ) : null}
           <p className="mt-3 text-sm leading-6 text-brand-ink/62">
             Read-only events help Schedule Builder avoid conflicts. Calendar
-            sync only sends blocks you manually choose from Weekly Plan.
+            sync only sends time blocks you manually choose from Weekly Plan.
           </p>
         </div>
 
@@ -797,7 +797,7 @@ export function IntegrationsPage() {
                         Review first, then send when ready.
                       </span>{" "}
                       Google Calendar can read commitments now, and manual sync
-                      only writes approved Weekly Plan blocks to your dedicated
+                      only writes approved time blocks to your dedicated
                       Schedule Builder calendar.
                     </p>
                   </div>

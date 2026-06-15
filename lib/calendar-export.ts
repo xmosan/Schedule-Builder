@@ -104,11 +104,11 @@ function getWeeklyPlanEventTitle(block: WeeklyPlanBlock, projects: Project[]) {
   const title = block.projectName.trim();
 
   if (!isProjectWorkBlock(block, projects)) {
-    return title || "Schedule Builder plan block";
+    return title || "Schedule Builder time block";
   }
 
   if (!title || title.toLowerCase() === "schedule builder") {
-    return "Schedule Builder plan block";
+    return "Schedule Builder time block";
   }
 
   return `Schedule Builder: ${title}`;
@@ -239,7 +239,7 @@ export function generateWeeklyPlanIcs(
   });
 
   if (blocks.length > 0 && exportedCount === 0) {
-    warnings.push("No valid weekly plan blocks were available to export.");
+    warnings.push("No valid time blocks were available to export.");
   }
 
   const content = serializeIcsLines([

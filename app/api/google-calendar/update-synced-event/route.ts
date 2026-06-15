@@ -154,11 +154,11 @@ function getGoogleCalendarEventTitle(
   const projectName = block.projectName.trim();
 
   if (!isProjectWorkBlock(block, projects)) {
-    return projectName || "Schedule Builder plan block";
+    return projectName || "Schedule Builder time block";
   }
 
   if (!projectName || projectName.toLowerCase() === "schedule builder") {
-    return "Schedule Builder plan block";
+    return "Schedule Builder time block";
   }
 
   return `Schedule Builder: ${projectName}`;
@@ -180,7 +180,7 @@ export async function POST(request: NextRequest) {
 
     if (!blockId) {
       return NextResponse.json(
-        { error: "Choose the Weekly Plan block to update." },
+        { error: "Choose the time block to update." },
         { status: 400 },
       );
     }
@@ -253,7 +253,7 @@ export async function POST(request: NextRequest) {
 
     if (!blockResult.data) {
       return NextResponse.json(
-        { error: "This Weekly Plan block was not found." },
+        { error: "This time block was not found." },
         { status: 404 },
       );
     }

@@ -161,11 +161,11 @@ function getGoogleCalendarEventTitle(
   const projectName = block.projectName.trim();
 
   if (!isProjectWorkBlock(block, projects)) {
-    return projectName || "Schedule Builder plan block";
+    return projectName || "Schedule Builder time block";
   }
 
   if (!projectName || projectName.toLowerCase() === "schedule builder") {
-    return "Schedule Builder plan block";
+    return "Schedule Builder time block";
   }
 
   return `Schedule Builder: ${projectName}`;
@@ -243,7 +243,7 @@ export async function POST(request: NextRequest) {
 
     if (blockIds.length === 0) {
       return NextResponse.json(
-        { error: "Choose at least one timed Weekly Plan block to sync." },
+        { error: "Choose at least one time block with a start time to sync." },
         { status: 400 },
       );
     }
@@ -264,7 +264,7 @@ export async function POST(request: NextRequest) {
 
     if (!connectionData) {
       return NextResponse.json(
-        { error: "Connect Google Calendar before syncing Weekly Plan blocks." },
+        { error: "Connect Google Calendar before syncing time blocks." },
         { status: 409 },
       );
     }
@@ -275,7 +275,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "Enable Calendar Sync before syncing Weekly Plan blocks to Google Calendar.",
+            "Enable Calendar Sync before syncing time blocks to Google Calendar.",
         },
         { status: 409 },
       );
@@ -437,7 +437,7 @@ export async function POST(request: NextRequest) {
       if (!block) {
         results.push({
           blockId,
-          message: "This Weekly Plan block was not found.",
+          message: "This time block was not found.",
           status: "failed",
           warnings: [] as string[],
         });
