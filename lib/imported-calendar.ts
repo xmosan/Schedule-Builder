@@ -32,6 +32,28 @@ const schoolCalendarSources = new Set([
   "generic_school_ics",
 ]);
 
+export const manageableImportedCalendarSources = [
+  "canvas_ics",
+  "d2l_ics",
+  "brightspace_ics",
+  "ics",
+  "school_ics",
+  "generic_school_ics",
+] as const;
+
+export type ManageableImportedCalendarSource =
+  (typeof manageableImportedCalendarSources)[number];
+
+const manageableImportedCalendarSourceSet = new Set<string>(
+  manageableImportedCalendarSources,
+);
+
+export function isManageableImportedCalendarSource(
+  source: string,
+): source is ManageableImportedCalendarSource {
+  return manageableImportedCalendarSourceSet.has(source);
+}
+
 function getEventDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -89,6 +111,44 @@ export function formatImportedEventSource(
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+export function getImportedCalendarSourceRemovalCopy(
+  source: ManageableImportedCalendarSource,
+) {
+  if (source === "canvas_ics") {
+    return {
+      confirmLabel: "Remove events",
+      description:
+        "This will delete all Canvas events imported into Schedule Builder. It will not change anything in Canvas.",
+      emptyMessage: "No Canvas events were found to remove.",
+      removeLabel: "Remove Canvas import",
+      successMessage: "Canvas imported events removed.",
+      title: "Remove Canvas events?",
+    };
+  }
+
+  if (source === "d2l_ics" || source === "brightspace_ics") {
+    return {
+      confirmLabel: "Remove events",
+      description:
+        "This will delete all D2L / Brightspace events imported into Schedule Builder. It will not change anything in D2L / Brightspace.",
+      emptyMessage: "No D2L / Brightspace events were found to remove.",
+      removeLabel: "Remove D2L / Brightspace import",
+      successMessage: "D2L / Brightspace imported events removed.",
+      title: "Remove D2L / Brightspace events?",
+    };
+  }
+
+  return {
+    confirmLabel: "Remove events",
+    description:
+      "This will delete imported calendar events from Schedule Builder. It will not change the original calendar file or source calendar.",
+    emptyMessage: "No imported calendar events were found to remove.",
+    removeLabel: "Remove imported calendar events",
+    successMessage: "Imported calendar events removed.",
+    title: "Remove imported calendar events?",
+  };
 }
 
 export function isSchoolCalendarEvent(

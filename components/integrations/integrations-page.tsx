@@ -9,13 +9,23 @@ import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  formatImportedEventSource,
+  getImportedCalendarSourceRemovalCopy,
+  isManageableImportedCalendarSource,
+  type ImportedCalendarEvent,
+  type ManageableImportedCalendarSource,
+} from "@/lib/imported-calendar";
 import { integrations } from "@/lib/integrations";
 import {
   type DesiredIntegration,
   type PlannerType,
 } from "@/lib/onboarding";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
-import { fetchPlannerProfileForUser } from "@/lib/supabase/scheduler";
+import {
+  fetchImportedCalendarEventsForUser,
+  fetchPlannerProfileForUser,
+} from "@/lib/supabase/scheduler";
 
 type GoogleCalendarConnectionStatus =
   | "connected"
@@ -41,6 +51,22 @@ type GoogleCalendarSyncResponse = {
   error?: string;
   importedCount?: number;
   skippedDuplicates?: number;
+};
+
+type RemoveImportedCalendarSourceResponse = {
+  deletedCount?: number;
+  error?: string;
+  message?: string;
+  source?: string;
+};
+
+type ImportedCalendarSummary = {
+  count: number;
+  dateRangeLabel: string;
+  latestImportedAt: string | null;
+  latestImportedLabel: string;
+  source: ManageableImportedCalendarSource;
+  sourceLabel: string;
 };
 
 type SchoolImportSetupId = "canvas" | "d2l";
@@ -120,6 +146,91 @@ const schoolCalendarIntegrationIds = new Set([
   "d2l-brightspace-calendar",
   "canvas-calendar",
 ]);
+
+function formatImportedCalendarManagementSource(source: string) {
+  if (source === "ics") {
+    return "Imported calendar";
+  }
+
+  return formatImportedEventSource(source);
+}
+
+function formatImportedCalendarDate(value: string | null) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function getImportedCalendarSourceSummaries(
+  events: ImportedCalendarEvent[],
+): ImportedCalendarSummary[] {
+  const groups = events.reduce(
+    (current, event) => {
+      if (!isManageableImportedCalendarSource(event.source)) {
+        return current;
+      }
+
+      const group = current.get(event.source) ?? [];
+      group.push(event);
+      current.set(event.source, group);
+      return current;
+    },
+    new Map<ManageableImportedCalendarSource, ImportedCalendarEvent[]>(),
+  );
+
+  return [...groups.entries()]
+    .map(([source, sourceEvents]) => {
+      const importedTimes = sourceEvents
+        .map((event) => new Date(event.importedAt).getTime())
+        .filter((time) => !Number.isNaN(time));
+      const eventTimes = sourceEvents
+        .map((event) => new Date(event.startsAt).getTime())
+        .filter((time) => !Number.isNaN(time));
+      const latestImportedAt =
+        importedTimes.length > 0
+          ? new Date(Math.max(...importedTimes)).toISOString()
+          : null;
+      const firstEventDate =
+        eventTimes.length > 0
+          ? new Date(Math.min(...eventTimes)).toISOString()
+          : null;
+      const lastEventDate =
+        eventTimes.length > 0
+          ? new Date(Math.max(...eventTimes)).toISOString()
+          : null;
+      const firstEventLabel = formatImportedCalendarDate(firstEventDate);
+      const lastEventLabel = formatImportedCalendarDate(lastEventDate);
+
+      return {
+        count: sourceEvents.length,
+        dateRangeLabel:
+          firstEventLabel === lastEventLabel
+            ? firstEventLabel
+            : `${firstEventLabel} - ${lastEventLabel}`,
+        latestImportedAt,
+        latestImportedLabel: latestImportedAt
+          ? formatImportedCalendarDate(latestImportedAt)
+          : "Unknown",
+        source,
+        sourceLabel: formatImportedCalendarManagementSource(source),
+      };
+    })
+    .sort((first, second) =>
+      first.sourceLabel.localeCompare(second.sourceLabel),
+    );
+}
 
 const defaultRecommendationsByPlannerType: Record<
   PlannerType,
@@ -248,6 +359,19 @@ export function IntegrationsPage() {
   const [openSchoolSetup, setOpenSchoolSetup] =
     useState<SchoolImportSetupId | null>(null);
   const [isIcsImportOpen, setIsIcsImportOpen] = useState(false);
+  const [importedEvents, setImportedEvents] = useState<
+    ImportedCalendarEvent[]
+  >([]);
+  const [importedCalendarMessage, setImportedCalendarMessage] = useState<
+    string | null
+  >(null);
+  const [importedCalendarError, setImportedCalendarError] = useState<
+    string | null
+  >(null);
+  const [sourcePendingRemoval, setSourcePendingRemoval] =
+    useState<ManageableImportedCalendarSource | null>(null);
+  const [sourceBeingRemoved, setSourceBeingRemoved] =
+    useState<ManageableImportedCalendarSource | null>(null);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -301,6 +425,70 @@ export function IntegrationsPage() {
     }
 
     void loadPlannerProfile();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      return;
+    }
+
+    let isActive = true;
+
+    async function loadImportedCalendarEvents() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession();
+
+        if (!isActive) {
+          return;
+        }
+
+        if (sessionError) {
+          setImportedCalendarError(sessionError.message);
+          return;
+        }
+
+        const userId = sessionData.session?.user.id;
+
+        if (!userId) {
+          setImportedEvents([]);
+          return;
+        }
+
+        const result = await fetchImportedCalendarEventsForUser(
+          supabase,
+          userId,
+        );
+
+        if (!isActive) {
+          return;
+        }
+
+        if (result.error) {
+          setImportedCalendarError(
+            "Imported calendars could not be loaded. Refresh and try again.",
+          );
+          return;
+        }
+
+        setImportedEvents(result.data);
+      } catch {
+        if (!isActive) {
+          return;
+        }
+
+        setImportedCalendarError(
+          "Imported calendars could not be loaded. Refresh and try again.",
+        );
+      }
+    }
+
+    void loadImportedCalendarEvents();
 
     return () => {
       isActive = false;
@@ -556,6 +744,60 @@ export function IntegrationsPage() {
     }
   }
 
+  async function removeImportedCalendarSource(
+    source: ManageableImportedCalendarSource,
+  ) {
+    const copy = getImportedCalendarSourceRemovalCopy(source);
+
+    setSourceBeingRemoved(source);
+    setImportedCalendarError(null);
+    setImportedCalendarMessage(null);
+
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/imported-calendar/remove-source", {
+        body: JSON.stringify({ source }),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      const payload =
+        (await response.json()) as RemoveImportedCalendarSourceResponse;
+
+      if (!response.ok || payload.error) {
+        throw new Error(
+          payload.error ?? "Imported events could not be removed.",
+        );
+      }
+
+      setImportedEvents((currentEvents) =>
+        currentEvents.filter((event) => event.source !== source),
+      );
+      setImportedCalendarMessage(payload.message ?? copy.successMessage);
+      setSourcePendingRemoval(null);
+    } catch (error) {
+      setImportedCalendarError(
+        error instanceof Error
+          ? error.message
+          : "Imported events could not be removed. Refresh and try again.",
+      );
+    } finally {
+      setSourceBeingRemoved(null);
+    }
+  }
+
+  function handleImportedCalendarEvents(events: ImportedCalendarEvent[]) {
+    if (events.length === 0) {
+      return;
+    }
+
+    setImportedEvents((currentEvents) => [...currentEvents, ...events]);
+    setImportedCalendarError(null);
+    setImportedCalendarMessage(null);
+  }
+
   const selectedIntegrations = useMemo(() => {
     return new Set<DesiredIntegration>(desiredIntegrations);
   }, [desiredIntegrations]);
@@ -601,6 +843,13 @@ export function IntegrationsPage() {
   const comingSoonIntegrations = visibleIntegrations.filter(
     (integration) => integration.status === "coming_soon",
   );
+  const importedCalendarSummaries = useMemo(
+    () => getImportedCalendarSourceSummaries(importedEvents),
+    [importedEvents],
+  );
+  const pendingRemovalCopy = sourcePendingRemoval
+    ? getImportedCalendarSourceRemovalCopy(sourcePendingRemoval)
+    : null;
   const googleCalendarStatusLabel =
     googleCalendarStatus === "connected"
       ? "Connected"
@@ -852,6 +1101,133 @@ export function IntegrationsPage() {
     );
   }
 
+  function renderImportedCalendarsManagement() {
+    return (
+      <section className="panel overflow-hidden">
+        <div className="p-4 sm:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="max-w-2xl">
+              <div className="eyebrow-chip">
+                <CalendarIcon className="h-4 w-4" />
+                Imported calendars
+              </div>
+              <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-brand-ink sm:text-3xl">
+                Manage imported school and calendar events
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+                Remove imported event sets from Schedule Builder without
+                changing Canvas, Brightspace, Google Calendar, projects, time
+                blocks, or work shifts.
+              </p>
+            </div>
+            <Link
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-brand-ink/10 bg-white/80 px-5 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white"
+              href="/calendar"
+            >
+              View Calendar
+            </Link>
+          </div>
+
+          {importedCalendarMessage ? (
+            <p className="mt-4 rounded-2xl border border-brand-teal/15 bg-brand-teal/[0.07] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+              {importedCalendarMessage}
+            </p>
+          ) : null}
+
+          {importedCalendarError ? (
+            <p className="mt-4 rounded-2xl border border-brand-coral/18 bg-brand-coral/[0.08] px-4 py-3 text-sm font-medium leading-6 text-brand-coral">
+              {importedCalendarError}
+            </p>
+          ) : null}
+
+          {importedCalendarSummaries.length > 0 ? (
+            <div className="mt-5 grid gap-3 lg:grid-cols-2">
+              {importedCalendarSummaries.map((summary) => {
+                const copy = getImportedCalendarSourceRemovalCopy(
+                  summary.source,
+                );
+                const isRemoving = sourceBeingRemoved === summary.source;
+
+                return (
+                  <article
+                    className="rounded-[26px] border border-brand-ink/8 bg-white/76 p-4 shadow-[0_16px_36px_rgba(18,32,47,0.045)]"
+                    key={summary.source}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
+                          Imported
+                        </Badge>
+                        <h3 className="mt-3 text-xl font-semibold tracking-[-0.02em] text-brand-ink">
+                          {summary.sourceLabel}
+                        </h3>
+                      </div>
+                      <span className="rounded-full bg-brand-ink/[0.045] px-3 py-1 text-sm font-semibold text-brand-ink/58">
+                        {summary.count} event{summary.count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid gap-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-brand-ink/6 bg-white/70 px-3 py-2">
+                        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/42">
+                          Latest import
+                        </span>
+                        <span className="text-sm font-semibold text-brand-ink/66">
+                          {summary.latestImportedLabel}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-brand-ink/6 bg-white/70 px-3 py-2">
+                        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/42">
+                          Date range
+                        </span>
+                        <span className="text-sm font-semibold text-brand-ink/66">
+                          {summary.dateRangeLabel}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Link
+                        className="inline-flex h-10 flex-1 items-center justify-center rounded-xl border border-brand-ink/10 bg-white/80 px-4 text-sm font-semibold text-brand-ink transition-all hover:-translate-y-0.5 hover:bg-white sm:flex-none"
+                        href="/calendar"
+                      >
+                        Manage
+                      </Link>
+                      <button
+                        className="inline-flex h-10 flex-1 items-center justify-center rounded-xl border border-brand-coral/18 bg-brand-coral/[0.07] px-4 text-sm font-semibold text-brand-coral transition-all hover:-translate-y-0.5 hover:bg-brand-coral/10 disabled:cursor-not-allowed disabled:opacity-55 sm:flex-none"
+                        disabled={Boolean(sourceBeingRemoved)}
+                        type="button"
+                        onClick={() => setSourcePendingRemoval(summary.source)}
+                      >
+                        {isRemoving ? "Removing..." : copy.removeLabel}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="mt-5 rounded-[24px] border border-dashed border-brand-ink/12 bg-white/62 p-5">
+              <h3 className="text-lg font-semibold text-brand-ink">
+                No imported calendars yet
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-brand-ink/58">
+                Import Canvas, D2L / Brightspace, or a calendar file first.
+                Imported event management will appear here after events are
+                saved.
+              </p>
+            </div>
+          )}
+
+          <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink/36">
+            Current imports are managed by source. Removing one import type
+            removes all saved events from that source.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div className="px-3 pb-28 pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
       <div className="app-shell flex flex-col gap-5 sm:gap-6">
@@ -1010,6 +1386,7 @@ export function IntegrationsPage() {
                     compact
                     description={`Upload the .ics file from ${schoolImportSetups[openSchoolSetup].sourceLabel}. You will choose which school events to import before anything is saved.`}
                     emptyHelpText={schoolImportSetups[openSchoolSetup].emptyHelpText}
+                    onImported={handleImportedCalendarEvents}
                     source={schoolImportSetups[openSchoolSetup].source}
                     sourceLabel={schoolImportSetups[openSchoolSetup].sourceLabel}
                     title={schoolImportSetups[openSchoolSetup].panelTitle}
@@ -1074,10 +1451,15 @@ export function IntegrationsPage() {
             >
               <IcsImportPanel
                 description="Upload a calendar file from school, work, Apple Calendar, Google Calendar, Outlook, or another app. You will review events before anything is saved."
+                onImported={handleImportedCalendarEvents}
                 title="Import a calendar file"
               />
             </section>
           </div>
+        </div>
+
+        <div className="mt-6 lg:mt-8">
+          {renderImportedCalendarsManagement()}
         </div>
 
         <div className="mt-8 lg:mt-12">
@@ -1118,6 +1500,25 @@ export function IntegrationsPage() {
           title="Disconnect Google Calendar?"
           onCancel={() => setIsDisconnectDialogOpen(false)}
           onConfirm={() => void disconnectGoogleCalendar()}
+        />
+
+        <ConfirmDialog
+          confirmLabel={pendingRemovalCopy?.confirmLabel ?? "Remove events"}
+          description={pendingRemovalCopy?.description ?? ""}
+          destructive
+          loading={Boolean(sourceBeingRemoved)}
+          open={Boolean(sourcePendingRemoval)}
+          title={pendingRemovalCopy?.title ?? "Remove imported events?"}
+          onCancel={() => {
+            if (!sourceBeingRemoved) {
+              setSourcePendingRemoval(null);
+            }
+          }}
+          onConfirm={() => {
+            if (sourcePendingRemoval) {
+              void removeImportedCalendarSource(sourcePendingRemoval);
+            }
+          }}
         />
       </div>
     </div>
