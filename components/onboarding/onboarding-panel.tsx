@@ -66,6 +66,7 @@ const toolDescriptions: Partial<Record<string, string>> = {
   "Google Calendar": "bring in existing events",
   "ICS import/export": "move plans between calendar apps",
   "D2L / Brightspace": "import course events",
+  Canvas: "import Canvas course events",
   "Apple Calendar": "use calendar files today",
   "Outlook Calendar": "support planned later",
 };

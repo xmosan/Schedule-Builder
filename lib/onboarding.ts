@@ -14,7 +14,7 @@ export const onboardingUseCases = [
     label: "School / classes",
     plannerType: "Student",
     description:
-      "Plan around classes, assignments, exams, Brightspace events, and study time.",
+      "Plan around classes, assignments, exams, school calendar events, and study time.",
     defaultGoals: [
       "Find open time",
       "Avoid conflicts",
@@ -78,6 +78,7 @@ export const desiredIntegrationOptions = [
   "Apple Calendar",
   "Outlook Calendar",
   "D2L / Brightspace",
+  "Canvas",
   "ICS import/export",
   "Work schedule imports",
 ] as const;
@@ -160,7 +161,12 @@ type StarterProjectTemplate = {
 };
 
 const desiredIntegrationsByPlannerType: Record<PlannerType, DesiredIntegration[]> = {
-  Student: ["D2L / Brightspace", "Google Calendar", "ICS import/export"],
+  Student: [
+    "D2L / Brightspace",
+    "Canvas",
+    "Google Calendar",
+    "ICS import/export",
+  ],
   Professional: ["Google Calendar", "ICS import/export"],
   "Organization leader": ["Google Calendar", "ICS import/export"],
   "Creator / entrepreneur": ["Google Calendar", "ICS import/export"],
@@ -173,10 +179,10 @@ const setupRecommendationsByPlannerType: Record<
 > = {
   Student: [
     {
-      id: "import-d2l",
-      title: "Import D2L / Brightspace calendar",
+      id: "import-school-calendar",
+      title: "Import your school calendar",
       reason:
-        "Bring course due dates, quizzes, and school events into the Calendar hub.",
+        "Bring Canvas, Brightspace, or another course calendar into the Calendar hub.",
       href: "/integrations",
       actionLabel: "Open guided import",
     },
@@ -663,6 +669,7 @@ export function getRecommendedDesiredIntegrations(
 
   if (plannerType === "Student") {
     recommended.add("D2L / Brightspace");
+    recommended.add("Canvas");
   }
 
   return [...recommended];

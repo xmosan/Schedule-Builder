@@ -59,6 +59,21 @@ export const integrations: IntegrationCardData[] = [
     statusLabel: "Guided setup",
   },
   {
+    id: "canvas-calendar",
+    name: "Canvas Calendar",
+    onboardingName: "Canvas",
+    monogram: "CAN",
+    category: "Course calendar import",
+    description:
+      "Import assignments, quizzes, course events, and due dates by using your Canvas calendar export or calendar feed.",
+    whyItHelps:
+      "Turns Canvas calendar files into reviewable school events without asking for your Canvas login.",
+    accentClassName:
+      "bg-[#fff5f2] text-[#b33b24] ring-1 ring-inset ring-[#f5d3c9]",
+    status: "available",
+    statusLabel: "Guided setup",
+  },
+  {
     id: "google-calendar",
     name: "Google Calendar",
     onboardingName: "Google Calendar",

@@ -20,7 +20,10 @@ import {
   generateWeeklyPlanIcs,
   getCurrentWeekMondayInputValue,
 } from "@/lib/calendar-export";
-import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
+import {
+  formatImportedEventSource,
+  type ImportedCalendarEvent,
+} from "@/lib/imported-calendar";
 import type { Project } from "@/lib/projects";
 import {
   getWeeklyPlanImportedEventConflictForBlock,
@@ -441,7 +444,7 @@ function getExternalConflictLabel(event: ImportedCalendarEvent) {
     return "May overlap with ICS event";
   }
 
-  return "May overlap with external event";
+  return `May overlap with ${formatImportedEventSource(event)} event`;
 }
 
 export function WeeklyPlanSection({

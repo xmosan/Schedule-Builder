@@ -24,7 +24,13 @@ type ImportedCalendarEventSourceShape = Pick<
 const scheduleBuilderExportTitlePattern = /^schedule builder:/i;
 const scheduleBuilderExportDescriptionPattern = /exported from schedule builder/i;
 const scheduleBuilderExportUidPattern = /@schedule-builder$/i;
-const schoolCalendarSources = new Set(["d2l_ics", "brightspace_ics"]);
+const schoolCalendarSources = new Set([
+  "d2l_ics",
+  "brightspace_ics",
+  "canvas_ics",
+  "school_ics",
+  "generic_school_ics",
+]);
 
 function getEventDate(value: string) {
   const date = new Date(value);
@@ -67,6 +73,14 @@ export function formatImportedEventSource(
   }
 
   if (schoolCalendarSources.has(source)) {
+    if (source === "canvas_ics") {
+      return "Canvas";
+    }
+
+    if (source === "school_ics" || source === "generic_school_ics") {
+      return "School calendar";
+    }
+
     return "D2L / Brightspace";
   }
 

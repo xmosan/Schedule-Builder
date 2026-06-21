@@ -31,6 +31,20 @@ type IcsImportPanelProps = {
 
 type ImportStatus = "idle" | "parsing" | "ready" | "importing" | "done";
 
+const maxIcsFileSizeBytes = 5 * 1024 * 1024;
+
+function isLikelyIcsFile(file: File) {
+  return (
+    file.name.toLowerCase().endsWith(".ics") ||
+    file.type === "text/calendar" ||
+    file.type === "application/ics"
+  );
+}
+
+function isLikelyIcsContent(content: string) {
+  return /BEGIN:VCALENDAR/i.test(content);
+}
+
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message;
@@ -100,7 +114,26 @@ export function IcsImportPanel({
     setWarnings([]);
 
     try {
+      if (!isLikelyIcsFile(file)) {
+        throw new Error(
+          "Choose an .ics calendar file. If you are importing from Canvas or your school, download the calendar file again and upload that file here.",
+        );
+      }
+
+      if (file.size > maxIcsFileSizeBytes) {
+        throw new Error(
+          "This calendar file is too large to preview here. Try exporting a smaller date range, then upload the .ics file again.",
+        );
+      }
+
       const content = await file.text();
+
+      if (!isLikelyIcsContent(content)) {
+        throw new Error(
+          "This file does not appear to be a valid ICS calendar file. Try downloading the calendar again, then upload the .ics file here.",
+        );
+      }
+
       const result = parseIcsCalendar(content);
 
       setEvents(result.events);
@@ -167,15 +200,17 @@ export function IcsImportPanel({
 
       setStatus("done");
       setMessage(
-        `Imported ${result.data.length} event${
-          result.data.length === 1 ? "" : "s"
-        }${
-          result.skippedDuplicates > 0
-            ? `. Skipped ${result.skippedDuplicates} duplicate${
-                result.skippedDuplicates === 1 ? "" : "s"
-              }.`
-            : "."
-        }`,
+        result.data.length === 0 && result.skippedDuplicates > 0
+          ? "All events in this file have already been imported."
+          : `Imported ${result.data.length} event${
+              result.data.length === 1 ? "" : "s"
+            }${
+              result.skippedDuplicates > 0
+                ? `. Skipped ${result.skippedDuplicates} duplicate${
+                    result.skippedDuplicates === 1 ? "" : "s"
+                  }.`
+                : "."
+            }`,
       );
       setEvents([]);
       setSelectedIds(new Set());

@@ -43,11 +43,94 @@ type GoogleCalendarSyncResponse = {
   skippedDuplicates?: number;
 };
 
+type SchoolImportSetupId = "canvas" | "d2l";
+
+type SchoolImportSetup = {
+  accentClassName: string;
+  buttonLabel: string;
+  description: string;
+  emptyHelpText: string;
+  id: SchoolImportSetupId;
+  label: string;
+  panelTitle: string;
+  source: string;
+  sourceLabel: string;
+  steps: string[];
+  title: string;
+};
+
+const schoolImportSetups: Record<SchoolImportSetupId, SchoolImportSetup> = {
+  d2l: {
+    accentClassName: "border-[#a44824]/14 bg-[#fff2ea] text-[#a44824]",
+    buttonLabel: "Choose Brightspace ICS file",
+    description:
+      "Download your Brightspace calendar file, then upload it here to review assignments, quizzes, and course events before saving.",
+    emptyHelpText:
+      "No events found in this file. Download your Brightspace calendar file first, then upload it here.",
+    id: "d2l",
+    label: "D2L / Brightspace",
+    panelTitle: "Upload Brightspace calendar file",
+    source: "d2l_ics",
+    sourceLabel: "D2L / Brightspace",
+    steps: [
+      "Open D2L / Brightspace and go to Calendar.",
+      "Look for Export, Subscribe, iCal, or ICS options.",
+      "Download the .ics calendar file if your school offers one.",
+      "Upload it here and choose which events to import.",
+    ],
+    title: "Import your Brightspace calendar",
+  },
+  canvas: {
+    accentClassName: "border-[#b33b24]/14 bg-[#fff5f2] text-[#b33b24]",
+    buttonLabel: "Choose Canvas ICS file",
+    description:
+      "Use your Canvas calendar export or feed file to review assignments, quizzes, course events, and due dates before saving.",
+    emptyHelpText:
+      "No events found in this file. Download your Canvas calendar file first, then upload it here.",
+    id: "canvas",
+    label: "Canvas",
+    panelTitle: "Upload Canvas calendar file",
+    source: "canvas_ics",
+    sourceLabel: "Canvas",
+    steps: [
+      "Open Canvas and go to Calendar.",
+      "Find Calendar Feed, iCal, Export, or Subscribe.",
+      "Download or save the calendar file if your school offers one.",
+      "Upload it here and choose which events to import.",
+    ],
+    title: "Import your Canvas calendar",
+  },
+};
+
+function getSchoolSetupIdForIntegration(
+  integrationId: string,
+): SchoolImportSetupId | null {
+  if (integrationId === "d2l-brightspace-calendar") {
+    return "d2l";
+  }
+
+  if (integrationId === "canvas-calendar") {
+    return "canvas";
+  }
+
+  return null;
+}
+
+const schoolCalendarIntegrationIds = new Set([
+  "d2l-brightspace-calendar",
+  "canvas-calendar",
+]);
+
 const defaultRecommendationsByPlannerType: Record<
   PlannerType,
   DesiredIntegration[]
 > = {
-  Student: ["D2L / Brightspace", "Google Calendar", "ICS import/export"],
+  Student: [
+    "D2L / Brightspace",
+    "Canvas",
+    "Google Calendar",
+    "ICS import/export",
+  ],
   Professional: ["Google Calendar", "ICS import/export"],
   "Organization leader": ["Google Calendar", "ICS import/export"],
   "Creator / entrepreneur": ["Google Calendar", "ICS import/export"],
@@ -56,7 +139,7 @@ const defaultRecommendationsByPlannerType: Record<
 
 const recommendationReasons: Record<
   PlannerType,
-  Record<DesiredIntegration, string>
+  Partial<Record<DesiredIntegration, string>>
 > = {
   Student: {
     "Google Calendar":
@@ -67,6 +150,8 @@ const recommendationReasons: Record<
       "A good fit when school, work, or internship commitments live in Microsoft tools.",
     "D2L / Brightspace":
       "Most relevant for pulling course deadlines, quizzes, and assignment dates into planning.",
+    Canvas:
+      "Useful when Canvas holds your assignments, quizzes, course events, and due dates.",
     "ICS import/export":
       "A flexible fallback for importing course calendars or exported academic schedules.",
     "Work schedule imports":
@@ -160,7 +245,8 @@ export function IntegrationsPage() {
   ] = useState<string | null>(null);
   const [isGoogleCalendarBusy, setIsGoogleCalendarBusy] = useState(false);
   const [isDisconnectDialogOpen, setIsDisconnectDialogOpen] = useState(false);
-  const [isD2lSetupOpen, setIsD2lSetupOpen] = useState(false);
+  const [openSchoolSetup, setOpenSchoolSetup] =
+    useState<SchoolImportSetupId | null>(null);
   const [isIcsImportOpen, setIsIcsImportOpen] = useState(false);
 
   useEffect(() => {
@@ -503,8 +589,18 @@ export function IntegrationsPage() {
       ? "Recommended for you"
       : `Recommended for ${plannerType.toLowerCase()}`;
 
-  const availableIntegrations = visibleIntegrations.filter(i => i.status === "available");
-  const comingSoonIntegrations = visibleIntegrations.filter(i => i.status === "coming_soon");
+  const availableIntegrations = visibleIntegrations.filter(
+    (integration) => integration.status === "available",
+  );
+  const schoolCalendarIntegrations = availableIntegrations.filter((integration) =>
+    schoolCalendarIntegrationIds.has(integration.id),
+  );
+  const generalAvailableIntegrations = availableIntegrations.filter(
+    (integration) => !schoolCalendarIntegrationIds.has(integration.id),
+  );
+  const comingSoonIntegrations = visibleIntegrations.filter(
+    (integration) => integration.status === "coming_soon",
+  );
   const googleCalendarStatusLabel =
     googleCalendarStatus === "connected"
       ? "Connected"
@@ -555,15 +651,15 @@ export function IntegrationsPage() {
     },
   ];
 
-  function toggleD2lSetup() {
-    setIsD2lSetupOpen((current) => {
-      const next = !current;
+  function toggleSchoolSetup(setupId: SchoolImportSetupId) {
+    setOpenSchoolSetup((current) => {
+      const next = current === setupId ? null : setupId;
 
       if (next) {
         setIsIcsImportOpen(false);
         window.setTimeout(() => {
           document
-            .getElementById("d2l-brightspace-import")
+            .getElementById("school-calendar-import")
             ?.scrollIntoView({ behavior: "smooth", block: "start" });
         }, 0);
       }
@@ -577,7 +673,7 @@ export function IntegrationsPage() {
       const next = !current;
 
       if (next) {
-        setIsD2lSetupOpen(false);
+        setOpenSchoolSetup(null);
         window.setTimeout(() => {
           document
             .getElementById("import-ics")
@@ -701,7 +797,10 @@ export function IntegrationsPage() {
     );
   }
 
-  function renderD2lActions() {
+  function renderSchoolCalendarActions(setupId: SchoolImportSetupId) {
+    const setup = schoolImportSetups[setupId];
+    const isOpen = openSchoolSetup === setupId;
+
     return (
       <div className="w-full space-y-3">
         <div className="rounded-[18px] border border-[#a44824]/12 bg-[#fff2ea]/70 p-4">
@@ -721,11 +820,11 @@ export function IntegrationsPage() {
         <button
           className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-brand-ink px-6 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-ink/90 sm:w-auto"
           type="button"
-          onClick={toggleD2lSetup}
-          aria-expanded={isD2lSetupOpen}
-          aria-controls="d2l-brightspace-import"
+          onClick={() => toggleSchoolSetup(setupId)}
+          aria-expanded={isOpen}
+          aria-controls="school-calendar-import"
         >
-          {isD2lSetupOpen ? "Close guided setup" : "Open guided setup"}
+          {isOpen ? "Close guided setup" : `Open ${setup.label} setup`}
         </button>
       </div>
     );
@@ -777,6 +876,7 @@ export function IntegrationsPage() {
 
               <div className="mt-5 flex flex-wrap gap-2.5">
                 <Badge>{availableIntegrations.length} available now</Badge>
+                <Badge variant="subtle">School calendar pack</Badge>
                 <Badge variant="subtle">Guided setup</Badge>
                 <Badge variant="subtle">
                   {comingSoonIntegrations.length} coming soon
@@ -808,27 +908,32 @@ export function IntegrationsPage() {
         </section>
 
         <div className="mt-4">
-          <h2 className="mb-5 text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
-            Available now
-          </h2>
+          <div className="mb-5">
+            <h2 className="text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
+              School calendars
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-ink/60">
+              Import course events through calendar files without sharing school
+              credentials. Using Blackboard, Moodle, or another school platform?
+              If it provides an iCal or ICS export, use Calendar import/export
+              below.
+            </p>
+          </div>
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-6 xl:grid-cols-3">
-            {availableIntegrations.map((integration) => {
+            {schoolCalendarIntegrations.map((integration) => {
               const wasSelectedDuringSetup = selectedIntegrations.has(
                 integration.onboardingName,
               );
               const isRecommended = wasSelectedDuringSetup;
               const recommendationLabel = "Selected during setup";
+              const schoolSetupId = getSchoolSetupIdForIntegration(integration.id);
 
               return (
                 <IntegrationCard
                   actionSlot={
-                    integration.id === "google-calendar"
-                      ? renderGoogleCalendarActions()
-                      : integration.id === "d2l-brightspace-calendar"
-                        ? renderD2lActions()
-                        : integration.id === "ics-upload-import"
-                          ? renderIcsActions()
-                          : undefined
+                    schoolSetupId
+                      ? renderSchoolCalendarActions(schoolSetupId)
+                      : undefined
                   }
                   key={integration.id}
                   integration={integration}
@@ -847,71 +952,108 @@ export function IntegrationsPage() {
 
         <div
           className={`grid transition-all duration-300 ease-in-out ${
-            isD2lSetupOpen
+            openSchoolSetup
               ? "mt-0 grid-rows-[1fr] opacity-100"
               : "-mt-5 grid-rows-[0fr] opacity-0 sm:-mt-6"
           }`}
-          aria-hidden={!isD2lSetupOpen}
-          {...(!isD2lSetupOpen ? { inert: true } : {})}
+          aria-hidden={!openSchoolSetup}
+          {...(!openSchoolSetup ? { inert: true } : {})}
         >
           <div className="overflow-hidden">
             <section
-              id="d2l-brightspace-import"
+              id="school-calendar-import"
               className={`grid scroll-mt-6 gap-4 pb-2 pt-1 lg:grid-cols-[0.9fr_1.1fr] transition-transform duration-300 ease-in-out ${
-                isD2lSetupOpen ? "translate-y-0" : "-translate-y-2"
+                openSchoolSetup ? "translate-y-0" : "-translate-y-2"
               }`}
             >
-              <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
-                <CardContent className="p-4 sm:p-6">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-[#a44824]/14 bg-[#fff2ea] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#a44824]">
-                    D2L / Brightspace
-                  </div>
-                  <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
-                    Import your course calendar
-                  </h2>
-                  <p className="mt-2 text-sm leading-6 text-brand-ink/62">
-                    Download your Brightspace calendar file, then upload it here
-                    to review assignments, quizzes, and course events before
-                    saving.
-                  </p>
-
-                  <ol className="mt-5 grid gap-3">
-                    {[
-                      "Open D2L / Brightspace and go to Calendar.",
-                      "Look for Export, Subscribe, iCal, or ICS options.",
-                      "Download the .ics calendar file if your school offers one.",
-                      "Upload it here and choose which events to import.",
-                    ].map((step, index) => (
-                      <li
-                        className="flex gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-3 text-sm leading-6 text-brand-ink/68"
-                        key={step}
+              {openSchoolSetup ? (
+                <>
+                  <Card className="rounded-[30px] border-white/70 bg-white/88 shadow-[0_18px_45px_rgba(18,32,47,0.065)]">
+                    <CardContent className="p-4 sm:p-6">
+                      <div
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] ${schoolImportSetups[openSchoolSetup].accentClassName}`}
                       >
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#a44824]/10 text-xs font-bold text-[#a44824]">
-                          {index + 1}
-                        </span>
-                        <span>{step}</span>
-                      </li>
-                    ))}
-                  </ol>
+                        {schoolImportSetups[openSchoolSetup].label}
+                      </div>
+                      <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-brand-ink">
+                        {schoolImportSetups[openSchoolSetup].title}
+                      </h2>
+                      <p className="mt-2 text-sm leading-6 text-brand-ink/62">
+                        {schoolImportSetups[openSchoolSetup].description}
+                      </p>
 
-                  <p className="mt-4 rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
-                    No school login or password is needed. Imported events are
-                    always reviewed before saving.
-                  </p>
-                </CardContent>
-              </Card>
+                      <ol className="mt-5 grid gap-3">
+                        {schoolImportSetups[openSchoolSetup].steps.map(
+                          (step, index) => (
+                            <li
+                              className="flex gap-3 rounded-[20px] border border-brand-ink/8 bg-white/72 p-3 text-sm leading-6 text-brand-ink/68"
+                              key={step}
+                            >
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-teal/10 text-xs font-bold text-brand-teal">
+                                {index + 1}
+                              </span>
+                              <span>{step}</span>
+                            </li>
+                          ),
+                        )}
+                      </ol>
 
-              <IcsImportPanel
-                buttonLabel="Choose Brightspace ICS file"
-                compact
-                description="Upload the .ics file from D2L / Brightspace. You will choose which course events to import before anything is saved."
-                emptyHelpText="No events found in this file. Download your Brightspace calendar file first, then upload it here."
-                source="d2l_ics"
-                sourceLabel="D2L / Brightspace"
-                title="Upload Brightspace calendar file"
-              />
+                      <p className="mt-4 rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.06] px-4 py-3 text-sm font-medium leading-6 text-brand-teal">
+                        No school login or password is needed. Imported events
+                        are always reviewed before saving.
+                      </p>
+                    </CardContent>
+                  </Card>
+
+                  <IcsImportPanel
+                    buttonLabel={schoolImportSetups[openSchoolSetup].buttonLabel}
+                    compact
+                    description={`Upload the .ics file from ${schoolImportSetups[openSchoolSetup].sourceLabel}. You will choose which school events to import before anything is saved.`}
+                    emptyHelpText={schoolImportSetups[openSchoolSetup].emptyHelpText}
+                    source={schoolImportSetups[openSchoolSetup].source}
+                    sourceLabel={schoolImportSetups[openSchoolSetup].sourceLabel}
+                    title={schoolImportSetups[openSchoolSetup].panelTitle}
+                  />
+                </>
+              ) : null}
             </section>
           </div>
+        </div>
+
+        <div className="mt-6 lg:mt-8">
+          <h2 className="mb-5 text-lg font-semibold tracking-tight text-brand-ink sm:text-xl">
+            Calendar connections
+          </h2>
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-6 xl:grid-cols-3">
+            {generalAvailableIntegrations.map((integration) => {
+              const wasSelectedDuringSetup = selectedIntegrations.has(
+                integration.onboardingName,
+              );
+              const isRecommended = wasSelectedDuringSetup;
+              const recommendationLabel = "Selected during setup";
+
+              return (
+                <IntegrationCard
+                  actionSlot={
+                    integration.id === "google-calendar"
+                      ? renderGoogleCalendarActions()
+                      : integration.id === "ics-upload-import"
+                        ? renderIcsActions()
+                        : undefined
+                  }
+                  key={integration.id}
+                  integration={integration}
+                  isRecommended={isRecommended}
+                  recommendationLabel={recommendationLabel}
+                  recommendationReason={
+                    isRecommended
+                      ? recommendationReasons[plannerType][integration.onboardingName]
+                      : undefined
+                  }
+                />
+              );
+            })}
+          </section>
         </div>
 
         <div
