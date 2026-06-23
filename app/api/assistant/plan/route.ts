@@ -22,6 +22,10 @@ import {
 } from "@/lib/assistant";
 import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
 import {
+  createAssistantScheduleAnalysisSnapshot,
+  hasDeterministicScheduleQuestionIntent,
+} from "@/lib/assistant-schedule-analysis";
+import {
   fetchPlannerProfileForUser,
   fetchImportedCalendarEventsForUser,
   fetchProjectsForUser,
@@ -407,7 +411,7 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
     profile,
     warning:
       loadErrors.length > 0
-        ? `Some scheduler data could not load from Supabase, so suggestions may be limited. ${loadErrors
+        ? `Some calendar or schedule data did not load, so this answer may be incomplete. ${loadErrors
             .map(getErrorMessage)
             .join(" ")}`
         : null,
@@ -420,6 +424,14 @@ function createAiPrompt(
   profile: PlannerProfile | null,
   recentMessages: AssistantChatHistoryItem[] = [],
 ) {
+  const scheduleAnalysis = createAssistantScheduleAnalysisSnapshot({
+    importedCalendarEvents: context.importedCalendarEvents,
+    scheduledItems: context.scheduledItems,
+    weekStartDate: context.googleSync.currentWeekStart,
+    weeklyPlanBlocks: context.weeklyPlanBlocks,
+    workShifts: context.workShifts,
+  });
+
   return [
     "You are Schedule Builder's friendly planning assistant.",
     "Return JSON only matching the provided schema.",
@@ -623,6 +635,15 @@ function createAiPrompt(
       removedSyncedEvents: context.googleSync.removedSyncedEvents,
     }),
     "",
+    "Normalized schedule timeline for availability checks:",
+    JSON.stringify(scheduleAnalysis.normalizedCommitments),
+    "",
+    "Deterministic open windows this week:",
+    JSON.stringify(scheduleAnalysis.openWindows),
+    "",
+    "All-day schedule notes:",
+    JSON.stringify(scheduleAnalysis.allDayItems),
+    "",
     "Exact project deadlines:",
     JSON.stringify(context.deadlinesWithDates),
     "",
@@ -637,6 +658,14 @@ function createAssistantMessagePrompt(
   profile: PlannerProfile | null,
   recentMessages: AssistantChatHistoryItem[],
 ) {
+  const scheduleAnalysis = createAssistantScheduleAnalysisSnapshot({
+    importedCalendarEvents: context.importedCalendarEvents,
+    scheduledItems: context.scheduledItems,
+    weekStartDate: context.googleSync.currentWeekStart,
+    weeklyPlanBlocks: context.weeklyPlanBlocks,
+    workShifts: context.workShifts,
+  });
+
   return [
     "You are Schedule Builder's conversational planning assistant.",
     "Write only the assistant message text. Do not return JSON.",
@@ -749,6 +778,9 @@ function createAssistantMessagePrompt(
         importedEventTitle: conflict.event.title,
         importedEventTime: conflict.eventRangeLabel,
       })),
+      normalizedScheduleTimeline: scheduleAnalysis.normalizedCommitments,
+      deterministicOpenWindows: scheduleAnalysis.openWindows,
+      allDayScheduleNotes: scheduleAnalysis.allDayItems,
     }),
   ].join("\n");
 }
@@ -961,6 +993,8 @@ export async function POST(request: NextRequest) {
     if (
       isGreetingPrompt(prompt) ||
       isVaguePrompt(prompt) ||
+      (hasDeterministicScheduleQuestionIntent(prompt) &&
+        !shouldGenerateAssistantActionCards(prompt)) ||
       !process.env.OPENAI_API_KEY
     ) {
       await streamFallbackMessage(fallbackWithWarning.message, send);

@@ -1,4 +1,8 @@
 import type { PlannerType } from "@/lib/onboarding";
+import {
+  createDeterministicScheduleAnswer,
+  type AssistantScheduleAnalysisInput,
+} from "@/lib/assistant-schedule-analysis";
 import type { CalendarDeadline } from "@/lib/calendar";
 import {
   getExactProjectDeadlineDate,
@@ -850,6 +854,18 @@ function createAssistantResponseFromSuggestions({
     message,
     source,
     suggestions: filteredSuggestions,
+  };
+}
+
+function createScheduleAnalysisInput(
+  context: AssistantPlanningContext,
+): AssistantScheduleAnalysisInput {
+  return {
+    importedCalendarEvents: context.importedCalendarEvents,
+    scheduledItems: context.scheduledItems,
+    weekStartDate: context.googleSync.currentWeekStart,
+    weeklyPlanBlocks: context.weeklyPlanBlocks,
+    workShifts: context.workShifts,
   };
 }
 
@@ -2359,6 +2375,15 @@ function createGoogleSyncFallbackMessage(
 }
 
 function createOpenTimeFallbackMessage(context: AssistantPlanningContext) {
+  const deterministicMessage = createDeterministicScheduleAnswer({
+    input: createScheduleAnalysisInput(context),
+    prompt: "Find open time this week.",
+  });
+
+  if (deterministicMessage) {
+    return deterministicMessage;
+  }
+
   const windows = getOpenTimeWindows(context);
   const flexibleBlocks = context.weeklyPlanBlocks.filter(
     (block) => !block.startTime,
@@ -2570,6 +2595,23 @@ export function createFallbackAssistantResponse(
       activeProjects: sortProjectsForFocus(context.projects),
       context,
       message,
+      suggestions: [],
+    });
+  }
+
+  const deterministicScheduleMessage =
+    !shouldGenerateAssistantActionCards(prompt)
+      ? createDeterministicScheduleAnswer({
+          input: createScheduleAnalysisInput(context),
+          prompt,
+        })
+      : null;
+
+  if (deterministicScheduleMessage) {
+    return createAssistantResponseFromSuggestions({
+      activeProjects: sortProjectsForFocus(context.projects),
+      context,
+      message: deterministicScheduleMessage,
       suggestions: [],
     });
   }
