@@ -114,6 +114,7 @@ export type AssistantPlanningContext = AssistantContextSummary & {
   importedEventConflicts: WeeklyPlanImportedEventConflict[];
   projects: Project[];
   scheduledItems: ScheduledItem[];
+  timezone: string;
   weeklyPlanBlocks: WeeklyPlanBlock[];
   workScheduleSummary: string | null;
   workShifts: WorkShift[];
@@ -732,6 +733,7 @@ export function createAssistantPlanningContext(
     scheduledItems?: ScheduledItem[];
     syncCalendarName?: string | null;
     syncEnabled?: boolean;
+    timezone?: string;
     weekStartDate?: string;
   } = {},
 ): AssistantPlanningContext {
@@ -776,6 +778,7 @@ export function createAssistantPlanningContext(
     importedEventConflicts,
     projects,
     scheduledItems,
+    timezone: googleSyncOptions.timezone ?? "America/Detroit",
     weeklyPlanBlocks,
     workScheduleSummary: getWorkScheduleSummary(workShifts),
     workShifts,
@@ -863,6 +866,7 @@ function createScheduleAnalysisInput(
   return {
     importedCalendarEvents: context.importedCalendarEvents,
     scheduledItems: context.scheduledItems,
+    timezone: context.timezone,
     weekStartDate: context.googleSync.currentWeekStart,
     weeklyPlanBlocks: context.weeklyPlanBlocks,
     workShifts: context.workShifts,
@@ -1587,6 +1591,14 @@ function formatMinutesAsClock(totalMinutes: number) {
   const displayHour = hours % 12 === 0 ? 12 : hours % 12;
 
   return `${displayHour}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function formatMinutesAsInputTime(totalMinutes: number) {
+  const normalizedMinutes = ((Math.round(totalMinutes) % 1440) + 1440) % 1440;
+  const hours = Math.floor(normalizedMinutes / 60);
+  const minutes = normalizedMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function getWeekDateKeyForDay(day: WeekDay, weekStart = getCurrentWeekStart()) {
@@ -2374,6 +2386,169 @@ function createGoogleSyncFallbackMessage(
   )}.${reviewNote} ${manualSyncNote}`;
 }
 
+function isSimpleConfirmationPrompt(prompt: string) {
+  return /^(yes|yeah|yep|sure|please|do it|sounds good|ok|okay|alright|all right)(?:[\s,!.]*)?$/i.test(
+    prompt.trim(),
+  );
+}
+
+function parseDisplayClockToMinutes(value: string) {
+  const match = value.match(/^(\d{1,2}):([0-5]\d)\s*([AP]M)$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const period = match[3].toUpperCase();
+
+  if (!Number.isInteger(hour) || hour < 1 || hour > 12) {
+    return null;
+  }
+
+  if (period === "PM" && hour !== 12) {
+    hour += 12;
+  }
+
+  if (period === "AM" && hour === 12) {
+    hour = 0;
+  }
+
+  return hour * 60 + minute;
+}
+
+function getPurposeFromUserPrompt(prompt: string) {
+  if (/\bkhutba|sermon\b/i.test(prompt)) {
+    return {
+      task: "write the khutba speech",
+      title: "Khutba speech",
+    };
+  }
+
+  if (/\bspeech\b/i.test(prompt)) {
+    return {
+      task: "write the speech",
+      title: "Speech prep",
+    };
+  }
+
+  if (/\bstudy|exam\b/i.test(prompt)) {
+    return {
+      task: "study or prepare for the exam",
+      title: "Study block",
+    };
+  }
+
+  if (/\bpresentation|slides\b/i.test(prompt)) {
+    return {
+      task: "prepare the presentation",
+      title: "Presentation prep",
+    };
+  }
+
+  const fallbackTitle = inferStandaloneBlockTitle(prompt);
+
+  return {
+    task: prompt.trim() || fallbackTitle,
+    title: fallbackTitle,
+  };
+}
+
+function getLastOpenTimeAssistantMessage(
+  recentMessages: readonly AssistantHistoryItem[] = [],
+) {
+  return [...recentMessages]
+    .reverse()
+    .find(
+      (message) =>
+        message.role === "assistant" &&
+        /Want me to turn one of these into a time block\?/i.test(message.content) &&
+        /^-\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/im.test(
+          message.content,
+        ),
+    )?.content;
+}
+
+function getLastOpenTimeUserPrompt(
+  recentMessages: readonly AssistantHistoryItem[] = [],
+) {
+  return [...recentMessages]
+    .reverse()
+    .find(
+      (message) =>
+        message.role === "user" &&
+        /\b(open|free|available|availability|fit|khutba|speech|sermon|study|exam|presentation|slides)\b/i.test(
+          message.content,
+        ),
+    )?.content;
+}
+
+function createFollowUpTimeBlockSuggestion(
+  context: AssistantPlanningContext,
+  prompt: string,
+  recentMessages: readonly AssistantHistoryItem[] = [],
+) {
+  if (!isSimpleConfirmationPrompt(prompt)) {
+    return null;
+  }
+
+  const assistantMessage = getLastOpenTimeAssistantMessage(recentMessages);
+  const userPrompt = getLastOpenTimeUserPrompt(recentMessages);
+
+  if (!assistantMessage || !userPrompt) {
+    return null;
+  }
+
+  const windowMatch = assistantMessage.match(
+    /^-\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b[^:]*:\s*(?:after\s+)?(\d{1,2}:\d{2}\s+[AP]M)(?:-(\d{1,2}:\d{2}\s+[AP]M))?\s+-\s+(\d+(?:\.\d+)?)\s*hrs?/im,
+  );
+
+  if (!windowMatch) {
+    return null;
+  }
+
+  const day = windowMatch[1] as WeekDay;
+  const startMinutes = parseDisplayClockToMinutes(windowMatch[2]);
+  const windowHours = Number(windowMatch[4]);
+
+  if (startMinutes === null || !Number.isFinite(windowHours) || windowHours <= 0) {
+    return null;
+  }
+
+  const requestedHours = inferStandaloneBlockHours(userPrompt);
+  const estimatedHours = Math.max(0.25, Math.min(requestedHours, windowHours, 3));
+  const purpose = getPurposeFromUserPrompt(userPrompt);
+  const title = purpose.title;
+  const description = `Draft ${formatEstimatedHours(
+    estimatedHours,
+  )} on ${day} at ${formatMinutesAsClock(startMinutes)} for ${purpose.task}.`;
+
+  return createAssistantResponseFromSuggestions({
+    activeProjects: sortProjectsForFocus(context.projects),
+    context,
+    message: `I drafted the first open window as a reviewable time block. Nothing changes unless you apply it.`,
+    suggestions: [
+      {
+        confidence: 0.78,
+        day,
+        description,
+        estimatedHours,
+        id: "follow-up-open-window",
+        plannedTask: purpose.task,
+        projectName: title,
+        rationale:
+          "You confirmed the open-window suggestion, so this keeps the earlier date and time constraints instead of starting a new schedule search.",
+        severity: "important",
+        startTime: formatMinutesAsInputTime(startMinutes),
+        summary: description,
+        title: `Add ${title}`,
+        type: "suggested_weekly_block",
+      },
+    ],
+  });
+}
+
 function createOpenTimeFallbackMessage(context: AssistantPlanningContext) {
   const deterministicMessage = createDeterministicScheduleAnswer({
     input: createScheduleAnalysisInput(context),
@@ -2599,11 +2774,22 @@ export function createFallbackAssistantResponse(
     });
   }
 
+  const followUpTimeBlockResponse = createFollowUpTimeBlockSuggestion(
+    context,
+    prompt,
+    recentMessages,
+  );
+
+  if (followUpTimeBlockResponse) {
+    return followUpTimeBlockResponse;
+  }
+
   const deterministicScheduleMessage =
     !shouldGenerateAssistantActionCards(prompt)
       ? createDeterministicScheduleAnswer({
           input: createScheduleAnalysisInput(context),
           prompt,
+          recentMessages,
         })
       : null;
 

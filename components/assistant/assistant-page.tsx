@@ -139,6 +139,14 @@ function getErrorMessage(error: unknown) {
   return "Planning Assistant is unavailable right now.";
 }
 
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Detroit";
+  } catch {
+    return "America/Detroit";
+  }
+}
+
 function isActionableSuggestion(suggestion: AssistantSuggestion) {
   return (
     suggestion.type === "new_project" ||
@@ -1064,7 +1072,13 @@ export function AssistantPage() {
         Authorization: `Bearer ${accessToken}`,
         ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
       },
-      body: method === "POST" ? JSON.stringify({ prompt: nextPrompt }) : undefined,
+      body:
+        method === "POST"
+          ? JSON.stringify({
+              prompt: nextPrompt,
+              timezone: getBrowserTimeZone(),
+            })
+          : undefined,
       signal,
     });
 
@@ -1117,6 +1131,7 @@ export function AssistantPage() {
       body: JSON.stringify({
         prompt: nextPrompt,
         recentMessages,
+        timezone: getBrowserTimeZone(),
       }),
     });
 

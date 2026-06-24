@@ -31,6 +31,14 @@ const dayPatternByDay = new Map(
   weekDays.map((day) => [day, new RegExp(`\\b${day}\\b`, "i")]),
 );
 
+function getDefaultTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Detroit";
+  } catch {
+    return "America/Detroit";
+  }
+}
+
 export type NormalizedScheduleCommitment = {
   allDay: boolean;
   commitmentType:
@@ -69,6 +77,7 @@ export type AssistantOpenWindow = {
 export type AssistantScheduleAnalysisInput = {
   importedCalendarEvents: ImportedCalendarEvent[];
   scheduledItems: ScheduledItem[];
+  timezone?: string;
   weekStartDate?: string;
   weeklyPlanBlocks: WeeklyPlanBlock[];
   workShifts: WorkShift[];
@@ -77,13 +86,61 @@ export type AssistantScheduleAnalysisInput = {
 type DateScope = {
   date: string;
   day: WeekDay;
+  searchEndMinutes?: number;
+  searchStartMinutes?: number;
+};
+
+export type SchedulingQuery = {
+  ambiguityFlags: string[];
+  conversationConstraints: {
+    hardDeadline?: string;
+    inheritedDateRange?: {
+      end: string;
+      endInclusive: boolean;
+      start: string;
+      startInclusive: boolean;
+    };
+    inheritedDuration?: number;
+    inheritedPurpose?: string;
+  };
+  intent:
+    | "check_availability"
+    | "check_conflicts"
+    | "explain_blockers"
+    | "find_open_time"
+    | "general_question"
+    | "schedule_request"
+    | "summarize_week"
+    | "sync_question";
+  preferredDurationMinutes?: number;
+  requestedDays?: WeekDay[];
+  requestedRange?: {
+    end: string;
+    endInclusive: boolean;
+    start: string;
+    startInclusive: boolean;
+  };
+  requiredDurationMinutes?: number;
+  targetEvent?: {
+    deadline?: string;
+    startsAt?: string;
+    title?: string;
+  };
+  timeBoundary?: {
+    endTime?: string;
+    relation: "after" | "at" | "before" | "between" | "by" | "on" | "until";
+    startTime?: string;
+  };
+  timezone: string;
 };
 
 type ScheduleRequest = {
   durationMinutes: number | null;
   endMinutes: number;
+  hardDeadlineLabel: string | null;
   isPointCheck: boolean;
   minimumWindowMinutes: number;
+  query: SchedulingQuery;
   scopes: DateScope[];
   startMinutes: number;
   timeLabel: string;
@@ -94,8 +151,53 @@ type BlockingCommitment = NormalizedScheduleCommitment & {
   startMinutes: number;
 };
 
-function toLocalDate(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+type AssistantScheduleMessage = {
+  content: string;
+  role: "assistant" | "user";
+};
+
+function getDatePartsInTimeZone(date: Date, timezone = getDefaultTimeZone()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone: timezone,
+    year: "numeric",
+  }).formatToParts(date);
+  const getPart = (type: string) =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+
+  return {
+    day: getPart("day"),
+    hour: getPart("hour") % 24,
+    minute: getPart("minute"),
+    month: getPart("month"),
+    year: getPart("year"),
+  };
+}
+
+function toLocalDate(date: Date, timezone = getDefaultTimeZone()) {
+  const parts = getDatePartsInTimeZone(date, timezone);
+
+  return new Date(parts.year, parts.month - 1, parts.day);
+}
+
+function getMinutesInTimeZone(date: Date, timezone = getDefaultTimeZone()) {
+  const parts = getDatePartsInTimeZone(date, timezone);
+
+  return parts.hour * 60 + parts.minute;
+}
+
+function getIsoDateInTimeZone(date: Date, timezone = getDefaultTimeZone()) {
+  const parts = getDatePartsInTimeZone(date, timezone);
+
+  return [
+    String(parts.year).padStart(4, "0"),
+    String(parts.month).padStart(2, "0"),
+    String(parts.day).padStart(2, "0"),
+  ].join("-");
 }
 
 function addDays(date: Date, days: number) {
@@ -112,7 +214,7 @@ function toIsoDate(date: Date) {
   ].join("-");
 }
 
-function getWeekStart(weekStartDate?: string) {
+function getWeekStart(weekStartDate?: string, timezone = getDefaultTimeZone()) {
   if (weekStartDate) {
     const parsed = new Date(`${weekStartDate}T00:00:00`);
 
@@ -121,7 +223,7 @@ function getWeekStart(weekStartDate?: string) {
     }
   }
 
-  const today = toLocalDate(new Date());
+  const today = toLocalDate(new Date(), timezone);
   const day = today.getDay();
   const mondayOffset = day === 0 ? -6 : 1 - day;
 
@@ -213,6 +315,20 @@ function parseTimeMatch(match: RegExpMatchArray | null) {
 }
 
 function parseRequestedTime(prompt: string) {
+  if (/\bafter\s+noon\b/i.test(prompt)) {
+    return {
+      isPointCheck: false,
+      startMinutes: 12 * 60,
+    };
+  }
+
+  if (/\bat\s+noon\b/i.test(prompt)) {
+    return {
+      isPointCheck: true,
+      startMinutes: 12 * 60,
+    };
+  }
+
   const afterMatch = prompt.match(
     /\bafter\s+(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)?\b/i,
   );
@@ -287,11 +403,114 @@ function parseDurationMinutes(prompt: string) {
   return wordToHours[wordMatch[1].toLowerCase()] * 60;
 }
 
-function parseDateScopes(prompt: string, weekStart: Date) {
+function getWeekdayBoundary(prompt: string) {
+  const boundaryMatch = prompt.match(
+    /\b(before|after|on|by|until)\s+(?:(?:this|next)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+  );
+
+  if (!boundaryMatch) {
+    return null;
+  }
+
+  const day = weekDays.find(
+    (candidate) => candidate.toLowerCase() === boundaryMatch[2].toLowerCase(),
+  );
+
+  if (!day) {
+    return null;
+  }
+
+  return {
+    day,
+    relation: boundaryMatch[1].toLowerCase() as
+      | "after"
+      | "before"
+      | "by"
+      | "on"
+      | "until",
+  };
+}
+
+function parseExplicitBoundaryTime(prompt: string) {
+  if (/\b(?:at|by|before)\s+noon\b/i.test(prompt)) {
+    return 12 * 60;
+  }
+
+  if (/\b(?:at|by|before)\s+midnight\b/i.test(prompt)) {
+    return 0;
+  }
+
+  return parseTimeMatch(
+    prompt.match(
+      /\b(?:at|by|before)\s+(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)?\b/i,
+    ),
+  );
+}
+
+function makeDateRange(
+  scopes: DateScope[],
+  startInclusive = true,
+  endInclusive = true,
+) {
+  if (scopes.length === 0) {
+    return undefined;
+  }
+
+  return {
+    end: scopes[scopes.length - 1].date,
+    endInclusive,
+    start: scopes[0].date,
+    startInclusive,
+  };
+}
+
+function parseDateScopes(
+  prompt: string,
+  weekStart: Date,
+  timezone = getDefaultTimeZone(),
+) {
   const lowerPrompt = prompt.toLowerCase();
   const mentionedDays = weekDays.filter((day) =>
     dayPatternByDay.get(day)?.test(prompt),
   );
+  const boundary = getWeekdayBoundary(prompt);
+  const boundaryTime = parseExplicitBoundaryTime(prompt);
+
+  if (boundary) {
+    const boundaryIndex = weekDays.indexOf(boundary.day);
+
+    if (boundary.relation === "before") {
+      const daysBefore = weekDays.slice(0, boundaryIndex);
+
+      if (boundaryTime !== null) {
+        return [
+          ...daysBefore.map((day) => getDateScopeForDay(day, weekStart)),
+          {
+            ...getDateScopeForDay(boundary.day, weekStart),
+            searchEndMinutes: boundaryTime,
+          },
+        ];
+      }
+
+      return daysBefore.map((day) => getDateScopeForDay(day, weekStart));
+    }
+
+    if (boundary.relation === "after") {
+      return weekDays
+        .slice(boundaryIndex + 1)
+        .map((day) => getDateScopeForDay(day, weekStart));
+    }
+
+    if (boundary.relation === "on") {
+      return [getDateScopeForDay(boundary.day, weekStart)];
+    }
+
+    if (boundary.relation === "by" || boundary.relation === "until") {
+      return weekDays
+        .slice(0, boundaryIndex + 1)
+        .map((day) => getDateScopeForDay(day, weekStart));
+    }
+  }
   const rangeMatch = prompt.match(
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(?:through|thru|to|-)\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
   );
@@ -321,13 +540,13 @@ function parseDateScopes(prompt: string, weekStart: Date) {
   }
 
   if (/\btomorrow\b/i.test(prompt)) {
-    const date = addDays(toLocalDate(new Date()), 1);
+    const date = addDays(toLocalDate(new Date(), timezone), 1);
 
     return [{ date: toIsoDate(date), day: getDayFromDate(date) }];
   }
 
   if (/\btoday\b/i.test(prompt)) {
-    const date = toLocalDate(new Date());
+    const date = toLocalDate(new Date(), timezone);
 
     return [{ date: toIsoDate(date), day: getDayFromDate(date) }];
   }
@@ -343,8 +562,143 @@ function parseDateScopes(prompt: string, weekStart: Date) {
   return weekDays.map((day) => getDateScopeForDay(day, weekStart));
 }
 
-function createScheduleRequest(prompt: string, weekStartDate?: string): ScheduleRequest {
-  const weekStart = getWeekStart(weekStartDate);
+function getRecentSchedulingUserPrompt(
+  recentMessages: readonly AssistantScheduleMessage[] = [],
+) {
+  return [...recentMessages]
+    .reverse()
+    .find(
+      (message) =>
+        message.role === "user" &&
+        /\b(before|after|on|by|until|khutba|speech|prepare|open time|free|available|conflict|schedule|block|appointment|task)\b/i.test(
+          message.content,
+        ),
+    )?.content;
+}
+
+function createPromptForConstraintParsing(
+  prompt: string,
+  recentMessages: readonly AssistantScheduleMessage[] = [],
+) {
+  if (getWeekdayBoundary(prompt) || /\b(today|tomorrow|this week|next week)\b/i.test(prompt)) {
+    return prompt;
+  }
+
+  const recentSchedulingPrompt = getRecentSchedulingUserPrompt(recentMessages);
+
+  if (!recentSchedulingPrompt) {
+    return prompt;
+  }
+
+  return `${recentSchedulingPrompt} ${prompt}`;
+}
+
+function getPurposeFromText(text: string) {
+  if (/\bkhutba|speech|sermon\b/i.test(text)) {
+    return "write khutba speech";
+  }
+
+  if (/\bstudy|exam|assignment\b/i.test(text)) {
+    return "study or finish school work";
+  }
+
+  if (/\bslides|presentation\b/i.test(text)) {
+    return "prepare presentation";
+  }
+
+  return undefined;
+}
+
+function createSchedulingQuery({
+  prompt,
+  promptForConstraints,
+  recentMessages = [],
+  scopes,
+  timezone,
+}: {
+  prompt: string;
+  promptForConstraints: string;
+  recentMessages?: readonly AssistantScheduleMessage[];
+  scopes: DateScope[];
+  timezone: string;
+}): SchedulingQuery {
+  const durationMinutes = parseDurationMinutes(prompt);
+  const inheritedPrompt = getRecentSchedulingUserPrompt(recentMessages);
+  const purpose = getPurposeFromText(prompt) ?? (inheritedPrompt ? getPurposeFromText(inheritedPrompt) : undefined);
+  const boundary = getWeekdayBoundary(promptForConstraints);
+  const boundaryTime = parseExplicitBoundaryTime(promptForConstraints);
+  const deadlineScope = boundary
+    ? scopes.find((scope) => scope.day === boundary.day)
+    : undefined;
+  const ambiguityFlags: string[] = [];
+
+  if (boundary?.relation === "by" && boundaryTime === null) {
+    ambiguityFlags.push(
+      "The phrase 'by' can include the target day; clarify if that changes the recommendation.",
+    );
+  }
+
+  return {
+    ambiguityFlags,
+    conversationConstraints: {
+      inheritedDateRange:
+        inheritedPrompt && promptForConstraints !== prompt
+          ? makeDateRange(scopes, true, boundary?.relation !== "before")
+          : undefined,
+      inheritedDuration:
+        inheritedPrompt && durationMinutes ? durationMinutes : undefined,
+      inheritedPurpose: purpose,
+    },
+    intent: hasOpenTimeQuestionIntent(prompt)
+      ? "find_open_time"
+      : hasBlockingQuestionIntent(prompt)
+        ? "explain_blockers"
+        : hasAvailabilityQuestionIntent(prompt)
+          ? /\bconflicts?|overlap\b/i.test(prompt)
+            ? "check_conflicts"
+            : "check_availability"
+          : "general_question",
+    preferredDurationMinutes: durationMinutes ?? undefined,
+    requestedDays: scopes.map((scope) => scope.day),
+    requestedRange: makeDateRange(scopes, true, boundary?.relation !== "before"),
+    requiredDurationMinutes: durationMinutes ?? undefined,
+    targetEvent:
+      purpose || boundary
+        ? {
+            deadline:
+              deadlineScope && boundaryTime !== null
+                ? `${deadlineScope.date}T${String(
+                    Math.floor(boundaryTime / 60),
+                  ).padStart(2, "0")}:${String(boundaryTime % 60).padStart(
+                    2,
+                    "0",
+                  )}:00`
+                : undefined,
+            title: purpose,
+          }
+        : undefined,
+    timeBoundary: boundary
+      ? {
+          relation: boundary.relation === "until" ? "until" : boundary.relation,
+          startTime:
+            boundaryTime !== null ? formatMinutes(boundaryTime) : undefined,
+        }
+      : undefined,
+    timezone,
+  };
+}
+
+function createScheduleRequest(
+  prompt: string,
+  weekStartDate?: string,
+  recentMessages: readonly AssistantScheduleMessage[] = [],
+  timezone = getDefaultTimeZone(),
+): ScheduleRequest {
+  const weekStart = getWeekStart(weekStartDate, timezone);
+  const promptForConstraints = createPromptForConstraintParsing(
+    prompt,
+    recentMessages,
+  );
   const requestedTime = parseRequestedTime(prompt);
   const durationMinutes = parseDurationMinutes(prompt);
   const startMinutes = Math.max(
@@ -361,12 +715,30 @@ function createScheduleRequest(prompt: string, weekStartDate?: string): Schedule
       )
     : dayEndDefault;
 
+  const scopes = parseDateScopes(promptForConstraints, weekStart, timezone);
+  const query = createSchedulingQuery({
+    prompt,
+    promptForConstraints,
+    recentMessages,
+    scopes,
+    timezone,
+  });
+
   return {
     durationMinutes,
     endMinutes,
+    hardDeadlineLabel:
+      scopes.some((scope) => typeof scope.searchEndMinutes === "number")
+        ? formatScopeList(
+            scopes.filter(
+              (scope) => typeof scope.searchEndMinutes === "number",
+            ),
+          )
+        : null,
     isPointCheck,
     minimumWindowMinutes: durationMinutes ?? usefulWindowMinimumMinutes,
-    scopes: parseDateScopes(prompt, weekStart),
+    query,
+    scopes,
     startMinutes,
     timeLabel: isPointCheck
       ? `at ${formatMinutes(startMinutes)}`
@@ -436,7 +808,10 @@ function addCommitmentSegments({
   return commitments;
 }
 
-function addImportedEventSegments(event: ImportedCalendarEvent) {
+function addImportedEventSegments(
+  event: ImportedCalendarEvent,
+  timezone = getDefaultTimeZone(),
+) {
   if (isScheduleBuilderOwnedExternalEvent(event)) {
     return [] as NormalizedScheduleCommitment[];
   }
@@ -457,7 +832,7 @@ function addImportedEventSegments(event: ImportedCalendarEvent) {
           event.source === "google_calendar"
             ? "read_only_google_event"
             : "external_event",
-        date: toIsoDate(startsAt),
+        date: getIsoDateInTimeZone(startsAt, timezone),
         endMinutes: null,
         endsAt: event.endsAt,
         id: event.id,
@@ -478,19 +853,18 @@ function addImportedEventSegments(event: ImportedCalendarEvent) {
       ? endsAt
       : new Date(startsAt.getTime() + 30 * 60 * 1000);
   const commitments: NormalizedScheduleCommitment[] = [];
-  let dayCursor = toLocalDate(startsAt);
+  let dayCursor = toLocalDate(startsAt, timezone);
+  const endDate = toLocalDate(safeEnd, timezone);
 
-  while (dayCursor < safeEnd) {
+  while (dayCursor <= endDate) {
     const nextDay = addDays(dayCursor, 1);
-    const segmentStartDate =
-      startsAt > dayCursor ? startsAt : new Date(dayCursor);
-    const segmentEndDate = safeEnd < nextDay ? safeEnd : nextDay;
+    const dayIso = toIsoDate(dayCursor);
+    const startIso = getIsoDateInTimeZone(startsAt, timezone);
+    const endIso = getIsoDateInTimeZone(safeEnd, timezone);
     const startMinutes =
-      segmentStartDate.getHours() * 60 + segmentStartDate.getMinutes();
-    const endMinutes = segmentEndDate.getHours() * 60 + segmentEndDate.getMinutes();
-    const segmentEndMinutes = segmentEndDate.getTime() === nextDay.getTime()
-      ? 1440
-      : endMinutes;
+      dayIso === startIso ? getMinutesInTimeZone(startsAt, timezone) : 0;
+    const segmentEndMinutes =
+      dayIso === endIso ? getMinutesInTimeZone(safeEnd, timezone) : 1440;
 
     if (segmentEndMinutes > startMinutes) {
       commitments.push({
@@ -499,10 +873,10 @@ function addImportedEventSegments(event: ImportedCalendarEvent) {
           event.source === "google_calendar"
             ? "read_only_google_event"
             : "external_event",
-        date: toIsoDate(dayCursor),
+        date: dayIso,
         endMinutes: segmentEndMinutes,
         endsAt: event.endsAt,
-        id: `${event.id}:${toIsoDate(dayCursor)}:${startMinutes}`,
+        id: `${event.id}:${dayIso}:${startMinutes}`,
         source:
           event.source === "google_calendar" ? "google_event" : "imported_event",
         sourceLabel,
@@ -561,11 +935,12 @@ function getImportedSourceLabel(event: ImportedCalendarEvent) {
 export function buildNormalizedScheduleTimeline({
   importedCalendarEvents,
   scheduledItems,
+  timezone = getDefaultTimeZone(),
   weekStartDate,
   weeklyPlanBlocks,
   workShifts,
 }: AssistantScheduleAnalysisInput) {
-  const weekStart = getWeekStart(weekStartDate);
+  const weekStart = getWeekStart(weekStartDate, timezone);
   const commitments: NormalizedScheduleCommitment[] = [];
 
   workShifts.forEach((shift) => {
@@ -642,7 +1017,7 @@ export function buildNormalizedScheduleTimeline({
   });
 
   importedCalendarEvents.forEach((event) => {
-    commitments.push(...addImportedEventSegments(event));
+    commitments.push(...addImportedEventSegments(event, timezone));
   });
 
   return commitments.sort((first, second) => {
@@ -712,38 +1087,50 @@ export function calculateOpenWindows({
   const windows: AssistantOpenWindow[] = [];
 
   scopes.forEach((scope) => {
+    const scopedDayStart = Math.max(
+      dayStartDefault,
+      scope.searchStartMinutes ?? startMinutes,
+    );
+    const scopedDayEnd = Math.min(dayEndDefault, scope.searchEndMinutes ?? dayEndDefault);
     const mergedRanges = mergeBlockingRanges(
       getBlockingCommitments(commitments, scope.date),
     );
-    let cursor = Math.max(dayStartDefault, startMinutes);
+    let cursor = scopedDayStart;
 
     mergedRanges.forEach((range) => {
-      if (range.end <= cursor) {
+      const rangeStart = Math.max(range.start, scopedDayStart);
+      const rangeEnd = Math.min(range.end, scopedDayEnd);
+
+      if (rangeEnd <= scopedDayStart || rangeStart >= scopedDayEnd) {
         return;
       }
 
-      if (range.start - cursor >= minimumMinutes) {
+      if (rangeEnd <= cursor) {
+        return;
+      }
+
+      if (rangeStart - cursor >= minimumMinutes) {
         windows.push({
           date: scope.date,
           day: scope.day,
-          durationMinutes: range.start - cursor,
-          endLabel: formatMinutes(range.start),
-          endMinutes: range.start,
+          durationMinutes: rangeStart - cursor,
+          endLabel: formatMinutes(rangeStart),
+          endMinutes: rangeStart,
           startLabel: formatMinutes(cursor),
           startMinutes: cursor,
         });
       }
 
-      cursor = Math.max(cursor, range.end);
+      cursor = Math.max(cursor, rangeEnd);
     });
 
-    if (dayEndDefault - cursor >= minimumMinutes) {
+    if (scopedDayEnd - cursor >= minimumMinutes) {
       windows.push({
         date: scope.date,
         day: scope.day,
-        durationMinutes: dayEndDefault - cursor,
-        endLabel: formatMinutes(dayEndDefault),
-        endMinutes: dayEndDefault,
+        durationMinutes: scopedDayEnd - cursor,
+        endLabel: formatMinutes(scopedDayEnd),
+        endMinutes: scopedDayEnd,
         startLabel: formatMinutes(cursor),
         startMinutes: cursor,
       });
@@ -823,24 +1210,16 @@ function formatCommitmentList(commitments: BlockingCommitment[]) {
 }
 
 function formatOpenWindowList(windows: AssistantOpenWindow[]) {
-  const windowsByDate = new Map<string, AssistantOpenWindow[]>();
-
-  windows.forEach((window) => {
-    const existing = windowsByDate.get(window.date) ?? [];
-    existing.push(window);
-    windowsByDate.set(window.date, existing);
-  });
-
-  return [...windowsByDate.entries()]
-    .map(([date, dateWindows]) => {
+  return windows
+    .map((window) => {
       const scope = {
-        date,
-        day: dateWindows[0].day,
+        date: window.date,
+        day: window.day,
       };
 
-      return `- ${formatDateScope(scope)}: ${dateWindows
-        .map(formatWindowLabel)
-        .join(", ")}`;
+      return `- ${formatDateScope(scope)}: ${formatWindowLabel(
+        window,
+      )} - ${formatEstimatedHours(window.durationMinutes / 60)}`;
     })
     .join("\n");
 }
@@ -894,6 +1273,94 @@ function createMissingContextNote(loadWarning?: string | null) {
     : "";
 }
 
+function createClarificationForAmbiguousQuery(query: SchedulingQuery) {
+  if (
+    query.ambiguityFlags.length > 0 &&
+    query.timeBoundary?.relation === "by" &&
+    !query.timeBoundary.startTime
+  ) {
+    return "Should Friday itself count, or do you need this finished before Friday begins?";
+  }
+
+  return null;
+}
+
+function createConstraintNote(request: ScheduleRequest) {
+  const boundary = request.query.timeBoundary;
+
+  if (boundary?.relation === "before") {
+    if (boundary.startTime) {
+      return ` I treated ${boundary.startTime} as the cutoff on the target day.`;
+    }
+
+    return " I treated “before” as exclusive, so I excluded the target day.";
+  }
+
+  if (request.hardDeadlineLabel) {
+    return ` I capped the final day at ${request.hardDeadlineLabel}.`;
+  }
+
+  return "";
+}
+
+function createSubstantialWorkNote(request: ScheduleRequest) {
+  const purpose = request.query.conversationConstraints.inheritedPurpose;
+
+  if (request.durationMinutes || !purpose) {
+    return "";
+  }
+
+  if (!/\b(khutba|speech|sermon|study|school|presentation|slides|exam|assignment)\b/i.test(purpose)) {
+    return "";
+  }
+
+  return " Because that sounds like substantial work, I’d favor the longer openings and avoid relying on short gaps unless you only need a quick outline.";
+}
+
+function windowOverlapsCommitment(
+  window: AssistantOpenWindow,
+  commitment: BlockingCommitment,
+) {
+  return (
+    window.date === commitment.date &&
+    window.startMinutes < commitment.endMinutes &&
+    window.endMinutes > commitment.startMinutes
+  );
+}
+
+function validateOpenWindows(
+  windows: AssistantOpenWindow[],
+  request: ScheduleRequest,
+  commitments: NormalizedScheduleCommitment[],
+) {
+  const scopeByDate = new Map(request.scopes.map((scope) => [scope.date, scope]));
+  const blockers = request.scopes.flatMap((scope) =>
+    getBlockingCommitments(commitments, scope.date),
+  );
+
+  return windows.filter((window) => {
+    const scope = scopeByDate.get(window.date);
+
+    if (!scope || window.endMinutes <= window.startMinutes) {
+      return false;
+    }
+
+    if (window.durationMinutes < request.minimumWindowMinutes) {
+      return false;
+    }
+
+    if (window.startMinutes < (scope.searchStartMinutes ?? request.startMinutes)) {
+      return false;
+    }
+
+    if (window.endMinutes > (scope.searchEndMinutes ?? dayEndDefault)) {
+      return false;
+    }
+
+    return !blockers.some((blocker) => windowOverlapsCommitment(window, blocker));
+  });
+}
+
 function hasOpenTimeQuestionIntent(prompt: string) {
   return /\b(find|show|where|what)\b.*\b(open|free|available|availability|fit)\b/i.test(
     prompt,
@@ -926,7 +1393,8 @@ export function createAssistantScheduleAnalysisSnapshot(
   input: AssistantScheduleAnalysisInput,
 ) {
   const commitments = buildNormalizedScheduleTimeline(input);
-  const weekStart = getWeekStart(input.weekStartDate);
+  const timezone = input.timezone ?? getDefaultTimeZone();
+  const weekStart = getWeekStart(input.weekStartDate, timezone);
   const scopes = weekDays.map((day) => getDateScopeForDay(day, weekStart));
 
   return {
@@ -970,22 +1438,38 @@ function createOpenTimeAnswer({
   input,
   loadWarning,
   prompt,
+  recentMessages,
 }: {
   input: AssistantScheduleAnalysisInput;
   loadWarning?: string | null;
   prompt: string;
+  recentMessages?: readonly AssistantScheduleMessage[];
 }) {
-  const request = createScheduleRequest(prompt, input.weekStartDate);
+  const request = createScheduleRequest(
+    prompt,
+    input.weekStartDate,
+    recentMessages,
+    input.timezone,
+  );
+  const clarification = createClarificationForAmbiguousQuery(request.query);
+
+  if (clarification) {
+    return clarification;
+  }
+
   const commitments = buildNormalizedScheduleTimeline(input);
-  const windows = calculateOpenWindows({
+  const rawWindows = calculateOpenWindows({
     commitments,
     minimumMinutes: request.minimumWindowMinutes,
     scopes: request.scopes,
     startMinutes: request.startMinutes,
   });
+  const windows = validateOpenWindows(rawWindows, request, commitments);
   const allDayNote = createAllDayNote(getAllDayNotes(commitments, request.scopes));
+  const constraintNote = createConstraintNote(request);
   const missingContextNote = createMissingContextNote(loadWarning);
   const sourceSummary = getCheckedSourceSummary(input);
+  const substantialWorkNote = createSubstantialWorkNote(request);
   const durationNote = request.durationMinutes
     ? ` I only listed windows that can fit ${formatEstimatedHours(
         request.durationMinutes / 60,
@@ -997,7 +1481,7 @@ function createOpenTimeAnswer({
       dayStartDefault,
     )} and ${formatMinutes(dayEndDefault)} for ${formatScopeList(
       request.scopes,
-    )}.${durationNote}${allDayNote}${missingContextNote}`;
+    )}.${constraintNote}${durationNote}${substantialWorkNote}${allDayNote}${missingContextNote}`;
   }
 
   const countLabel = `${windows.length} useful opening${
@@ -1006,19 +1490,32 @@ function createOpenTimeAnswer({
 
   return `I found ${countLabel} after checking ${sourceSummary}:\n\n${formatOpenWindowList(
     windows,
-  )}${durationNote}${allDayNote}${missingContextNote}\n\nWant me to turn one of these into a time block?`;
+  )}${constraintNote}${durationNote}${substantialWorkNote}${allDayNote}${missingContextNote}\n\nWant me to turn one of these into a time block?`;
 }
 
 function createAvailabilityAnswer({
   input,
   loadWarning,
   prompt,
+  recentMessages,
 }: {
   input: AssistantScheduleAnalysisInput;
   loadWarning?: string | null;
   prompt: string;
+  recentMessages?: readonly AssistantScheduleMessage[];
 }) {
-  const request = createScheduleRequest(prompt, input.weekStartDate);
+  const request = createScheduleRequest(
+    prompt,
+    input.weekStartDate,
+    recentMessages,
+    input.timezone,
+  );
+  const clarification = createClarificationForAmbiguousQuery(request.query);
+
+  if (clarification) {
+    return clarification;
+  }
+
   const commitments = buildNormalizedScheduleTimeline(input);
   const blockedByScope = request.scopes.map((scope) => ({
     blockers: findBlockersForRange({
@@ -1033,6 +1530,7 @@ function createAvailabilityAnswer({
   const blockedScopes = blockedByScope.filter((item) => item.blockers.length > 0);
   const clearScopes = blockedByScope.filter((item) => item.blockers.length === 0);
   const missingContextNote = createMissingContextNote(loadWarning);
+  const constraintNote = createConstraintNote(request);
   const allDayNote = createAllDayNote(getAllDayNotes(commitments, request.scopes));
   const asksFree = /\b(am i free|am i available|free|available|clear)\b/i.test(prompt);
 
@@ -1041,7 +1539,7 @@ function createAvailabilityAnswer({
 
     return `${directAnswer} - ${formatScopeList(request.scopes)} ${
       request.timeLabel
-    } is clear based on the loaded schedule sources.${allDayNote}${missingContextNote}`;
+    } is clear based on the loaded schedule sources.${constraintNote}${allDayNote}${missingContextNote}`;
   }
 
   const blockerLines = blockedScopes
@@ -1056,26 +1554,39 @@ function createAvailabilityAnswer({
       clearScopes.map((item) => item.scope),
     )} ${request.timeLabel} is clear, but I found blockers on ${
       blockedScopes.length
-    } day${blockedScopes.length === 1 ? "" : "s"}:\n\n${blockerLines}${allDayNote}${missingContextNote}`;
+    } day${blockedScopes.length === 1 ? "" : "s"}:\n\n${blockerLines}${constraintNote}${allDayNote}${missingContextNote}`;
   }
 
   const directAnswer = asksFree ? "No" : "Yes";
 
   return `${directAnswer} - I found ${
     blockedScopes.length === 1 ? "a blocker" : "blockers"
-  } ${request.timeLabel}:\n\n${blockerLines}${allDayNote}${missingContextNote}`;
+  } ${request.timeLabel}:\n\n${blockerLines}${constraintNote}${allDayNote}${missingContextNote}`;
 }
 
 function createBlockingAnswer({
   input,
   loadWarning,
   prompt,
+  recentMessages,
 }: {
   input: AssistantScheduleAnalysisInput;
   loadWarning?: string | null;
   prompt: string;
+  recentMessages?: readonly AssistantScheduleMessage[];
 }) {
-  const request = createScheduleRequest(prompt, input.weekStartDate);
+  const request = createScheduleRequest(
+    prompt,
+    input.weekStartDate,
+    recentMessages,
+    input.timezone,
+  );
+  const clarification = createClarificationForAmbiguousQuery(request.query);
+
+  if (clarification) {
+    return clarification;
+  }
+
   const commitments = buildNormalizedScheduleTimeline(input);
   const blockers = request.scopes.flatMap((scope) =>
     findBlockersForRange({
@@ -1087,12 +1598,13 @@ function createBlockingAnswer({
     }).map((commitment) => ({ commitment, scope })),
   );
   const missingContextNote = createMissingContextNote(loadWarning);
+  const constraintNote = createConstraintNote(request);
   const allDayNote = createAllDayNote(getAllDayNotes(commitments, request.scopes));
 
   if (blockers.length === 0) {
     return `I do not see anything blocking ${formatScopeList(request.scopes)} ${
       request.timeLabel
-    } in the loaded schedule sources.${allDayNote}${missingContextNote}`;
+    } in the loaded schedule sources.${constraintNote}${allDayNote}${missingContextNote}`;
   }
 
   const lines = blockers
@@ -1106,29 +1618,31 @@ function createBlockingAnswer({
 
   return `Here is what is blocking ${formatScopeList(request.scopes)} ${
     request.timeLabel
-  }:\n\n${lines}${remainder}${allDayNote}${missingContextNote}`;
+  }:\n\n${lines}${remainder}${constraintNote}${allDayNote}${missingContextNote}`;
 }
 
 export function createDeterministicScheduleAnswer({
   input,
   loadWarning,
   prompt,
+  recentMessages,
 }: {
   input: AssistantScheduleAnalysisInput;
   loadWarning?: string | null;
   prompt: string;
+  recentMessages?: readonly AssistantScheduleMessage[];
 }) {
   if (!hasDeterministicScheduleQuestionIntent(prompt)) {
     return null;
   }
 
   if (hasOpenTimeQuestionIntent(prompt)) {
-    return createOpenTimeAnswer({ input, loadWarning, prompt });
+    return createOpenTimeAnswer({ input, loadWarning, prompt, recentMessages });
   }
 
   if (hasBlockingQuestionIntent(prompt)) {
-    return createBlockingAnswer({ input, loadWarning, prompt });
+    return createBlockingAnswer({ input, loadWarning, prompt, recentMessages });
   }
 
-  return createAvailabilityAnswer({ input, loadWarning, prompt });
+  return createAvailabilityAnswer({ input, loadWarning, prompt, recentMessages });
 }

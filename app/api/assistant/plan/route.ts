@@ -244,6 +244,25 @@ function normalizeRecentMessages(value: unknown): AssistantChatHistoryItem[] {
     .slice(-maxRecentMessages);
 }
 
+function normalizeTimezone(value: unknown) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const timezone = value.trim();
+
+  if (!timezone || timezone.length > 80 || /[^A-Za-z0-9_+\-/.]/.test(timezone)) {
+    return undefined;
+  }
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    return undefined;
+  }
+}
+
 function createNdjsonStream(
   executor: (send: (event: AssistantStreamEvent) => void) => Promise<void>,
 ) {
@@ -324,7 +343,11 @@ async function getAuthenticatedUser(
   }
 }
 
-async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
+async function loadPlanningContext(
+  supabase: SupabaseClient,
+  userId: string,
+  timezone?: string,
+) {
   const syncWeekStartDate = getAssistantCurrentWeekStartInput();
   const [
     profileResult,
@@ -405,6 +428,7 @@ async function loadPlanningContext(supabase: SupabaseClient, userId: string) {
             : false,
         scheduledItems:
           scheduledItemsResult.error == null ? scheduledItemsResult.data : [],
+        timezone,
         weekStartDate: syncWeekStartDate,
       },
     ),
@@ -427,6 +451,7 @@ function createAiPrompt(
   const scheduleAnalysis = createAssistantScheduleAnalysisSnapshot({
     importedCalendarEvents: context.importedCalendarEvents,
     scheduledItems: context.scheduledItems,
+    timezone: context.timezone,
     weekStartDate: context.googleSync.currentWeekStart,
     weeklyPlanBlocks: context.weeklyPlanBlocks,
     workShifts: context.workShifts,
@@ -495,6 +520,7 @@ function createAiPrompt(
     "",
     `User request: ${prompt}`,
     `Current server date: ${new Date().toISOString().slice(0, 10)}`,
+    `User timezone: ${context.timezone}`,
     "",
     "Onboarding profile:",
     JSON.stringify(
@@ -661,6 +687,7 @@ function createAssistantMessagePrompt(
   const scheduleAnalysis = createAssistantScheduleAnalysisSnapshot({
     importedCalendarEvents: context.importedCalendarEvents,
     scheduledItems: context.scheduledItems,
+    timezone: context.timezone,
     weekStartDate: context.googleSync.currentWeekStart,
     weeklyPlanBlocks: context.weeklyPlanBlocks,
     workShifts: context.workShifts,
@@ -704,6 +731,7 @@ function createAssistantMessagePrompt(
     "Schedule context:",
     JSON.stringify({
       plannerType: profile?.plannerType ?? context.plannerType,
+      timezone: context.timezone,
       activeProjectsCount: context.activeProjectsCount,
       plannedWeeklyHours: context.plannedWeeklyHours,
       weeklyBlocksCount: context.weeklyBlocksCount,
@@ -953,9 +981,11 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as {
     prompt?: unknown;
     recentMessages?: unknown;
+    timezone?: unknown;
   };
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const recentMessages = normalizeRecentMessages(body.recentMessages);
+  const timezone = normalizeTimezone(body.timezone);
 
   if (!prompt) {
     return NextResponse.json(
@@ -974,6 +1004,7 @@ export async function POST(request: NextRequest) {
   const { context, profile, warning } = await loadPlanningContext(
     authResult.supabase,
     authResult.userId,
+    timezone,
   );
   const fallbackResponse = createFallbackAssistantResponse(
     context,
@@ -993,6 +1024,8 @@ export async function POST(request: NextRequest) {
     if (
       isGreetingPrompt(prompt) ||
       isVaguePrompt(prompt) ||
+      (fallbackWithWarning.suggestions.length > 0 &&
+        !shouldGenerateAssistantActionCards(prompt)) ||
       (hasDeterministicScheduleQuestionIntent(prompt) &&
         !shouldGenerateAssistantActionCards(prompt)) ||
       !process.env.OPENAI_API_KEY

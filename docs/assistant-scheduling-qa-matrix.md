@@ -6,6 +6,10 @@ The Assistant should answer direct availability and conflict questions with text
 
 | Scenario | Prompt | Expected behavior |
 | --- | --- | --- |
+| Deadline boundary excludes target day | `I need to give 2 khutbas on Friday, find me an open time before Friday where I can write a speech` | Lists openings before Friday only. Friday is excluded unless the user gives an explicit Friday cutoff. Mentions that `before` was treated as exclusive. |
+| Deadline boundary with cutoff | `Find open time before Friday at noon` | Searches Monday through Thursday plus Friday before noon only. Does not list Friday afternoon/evening. |
+| Ambiguous by phrasing | `Find open time by Friday` | Asks whether Friday itself should count instead of silently guessing. |
+| Follow-up confirmation | Assistant offers open windows, then user says `Yes` | Drafts one reviewable weekly time block using the earlier constraints. Does not restart the search or auto-save. |
 | Clear evenings | `Are there any conflicts Monday through Wednesday after 5?` | Starts with `No` when no loaded timed commitments overlap those evenings. Lists no fake blockers. |
 | One blocked day | `Are there conflicts Monday through Wednesday after 5?` with only Tuesday blocked | Starts with `Partly`. Names Tuesday as blocked and Monday/Wednesday as clear. |
 | Short gap before a block | Work ends 5:00 PM and a time block starts 5:30 PM | `Find open time after 5` lists `5:00-5:30 PM` and the later opening separately. It must not say `open from 5 PM onward`. |
@@ -20,7 +24,7 @@ The Assistant should answer direct availability and conflict questions with text
 | Schedule Builder duplicate | Imported/exported Schedule Builder copy matches a time block | Does not create a self-conflict or block availability twice. |
 | Duration fit | `Where can I fit a two-hour study session?` | Only lists windows at least two hours long. |
 | Missing context | Google/imported/schedule data fails to load | Adds an uncertainty note instead of treating missing data as free time. |
+| Timezone-sensitive imported event | Imported/Google event crosses UTC date but is local evening | Blocks the local user date/time shown in the browser timezone, not the raw UTC date. |
 | Scheduling request | `Can you schedule this Friday after work?` | May draft reviewable cards. Does not save automatically. |
 | Sync request | `Sync my plan to Google Calendar.` | Explains manual sync only. Does not sync. |
 | Greeting | `Hello` | Short friendly reply, no report, no cards. |
-
