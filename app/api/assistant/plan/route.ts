@@ -22,8 +22,10 @@ import {
 } from "@/lib/assistant";
 import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
 import {
+  advanceAssistantSchedulingConversation,
   createAssistantScheduleAnalysisSnapshot,
   hasDeterministicScheduleQuestionIntent,
+  normalizeAssistantSchedulingContext,
 } from "@/lib/assistant-schedule-analysis";
 import {
   fetchPlannerProfileForUser,
@@ -979,13 +981,22 @@ export async function POST(request: NextRequest) {
   }
 
   const body = (await request.json().catch(() => ({}))) as {
+    activeSchedulingContext?: unknown;
     prompt?: unknown;
     recentMessages?: unknown;
+    threadId?: unknown;
     timezone?: unknown;
   };
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const recentMessages = normalizeRecentMessages(body.recentMessages);
   const timezone = normalizeTimezone(body.timezone);
+  const activeSchedulingContext = normalizeAssistantSchedulingContext(
+    body.activeSchedulingContext,
+  );
+  const threadId =
+    typeof body.threadId === "string" && body.threadId.length <= 80
+      ? body.threadId
+      : null;
 
   if (!prompt) {
     return NextResponse.json(
@@ -1019,6 +1030,88 @@ export async function POST(request: NextRequest) {
     assistantMessage: fallbackMessage,
     message: fallbackMessage,
   };
+
+  const scheduleInput = {
+    importedCalendarEvents: context.importedCalendarEvents,
+    scheduledItems: context.scheduledItems,
+    timezone: context.timezone,
+    weekStartDate: context.googleSync.currentWeekStart,
+    weeklyPlanBlocks: context.weeklyPlanBlocks,
+    workShifts: context.workShifts,
+  };
+  const schedulingTurn = advanceAssistantSchedulingConversation({
+    activeContext: activeSchedulingContext,
+    input: scheduleInput,
+    loadWarning: warning,
+    prompt,
+    recentMessages,
+  });
+
+  if (schedulingTurn) {
+    const proposal = schedulingTurn.proposal
+      ? { ...schedulingTurn.proposal, sourceConversationId: threadId }
+      : null;
+    const schedulingContext = proposal
+      ? { ...schedulingTurn.context, pendingProposal: proposal }
+      : schedulingTurn.context;
+    const selectedWindow = proposal
+      ? schedulingTurn.context.candidateWindows.find(
+          (window) =>
+            window.date === proposal.date &&
+            `${String(Math.floor(window.startMinutes / 60)).padStart(2, "0")}:${String(
+              window.startMinutes % 60,
+            ).padStart(2, "0")}` === proposal.startTime,
+        )
+      : null;
+    const suggestions =
+      proposal?.status === "ready_for_review" &&
+      proposal.durationMinutes &&
+      selectedWindow
+        ? [
+            {
+              id: `time-block-${proposal.date}-${proposal.startTime}`,
+              type: "suggested_weekly_block" as const,
+              title: proposal.title,
+              description: `${new Intl.DateTimeFormat("en-US", {
+                month: "long",
+                day: "numeric",
+                weekday: "long",
+                year: "numeric",
+              }).format(new Date(`${proposal.date}T00:00:00`))} from ${
+                selectedWindow.startLabel
+              } for ${proposal.durationMinutes / 60} hour${
+                proposal.durationMinutes === 60 ? "" : "s"
+              }.`,
+              confidence: 0.98,
+              summary: proposal.details,
+              rationale:
+                "This uses the exact opening and duration you confirmed in this conversation.",
+              severity: "important" as const,
+              projectName: proposal.title,
+              plannedTask: proposal.details,
+              day: selectedWindow.day,
+              itemDate: proposal.date,
+              startTime: proposal.startTime,
+              estimatedHours: proposal.durationMinutes / 60,
+              conflictWarnings: [] as string[],
+            },
+          ]
+        : [];
+    const response: AssistantPlanReviewResponse = {
+      actions: suggestions,
+      assistantMessage: schedulingTurn.message,
+      context: fallbackWithWarning.context,
+      message: schedulingTurn.message,
+      schedulingContext,
+      source: "fallback",
+      suggestions,
+    };
+
+    return createNdjsonStream(async (send) => {
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
+    });
+  }
 
   return createNdjsonStream(async (send) => {
     if (

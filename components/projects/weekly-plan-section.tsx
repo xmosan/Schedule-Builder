@@ -565,6 +565,27 @@ export function WeeklyPlanSection({
   }, []);
 
   useEffect(() => {
+    const highlightedBlockId = new URLSearchParams(window.location.search).get(
+      "highlight",
+    );
+
+    if (!highlightedBlockId || planBlocks.length === 0) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const element = document.getElementById(
+        `weekly-block-${highlightedBlockId}`,
+      );
+
+      element?.scrollIntoView({ behavior: "smooth", block: "center" });
+      element?.classList.add("ring-2", "ring-brand-teal/40");
+    }, 120);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [planBlocks]);
+
+  useEffect(() => {
     if (!exportWeekStart || !isSupabaseConfigured()) {
       return;
     }
@@ -2027,6 +2048,7 @@ export function WeeklyPlanSection({
     return (
       <div
         key={block.id}
+        id={`weekly-block-${block.id}`}
         className="weekly-block-shell"
         data-exiting={exitingBlockIds[block.id] ? "true" : "false"}
       >

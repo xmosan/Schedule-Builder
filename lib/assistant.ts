@@ -2,6 +2,7 @@ import type { PlannerType } from "@/lib/onboarding";
 import {
   createDeterministicScheduleAnswer,
   type AssistantScheduleAnalysisInput,
+  type AssistantSchedulingContext,
 } from "@/lib/assistant-schedule-analysis";
 import type { CalendarDeadline } from "@/lib/calendar";
 import {
@@ -153,11 +154,16 @@ export type AssistantPlanReviewResponse = {
   message: string;
   source: AssistantSource;
   suggestions: AssistantSuggestion[];
+  schedulingContext?: AssistantSchedulingContext | null;
 };
 
 export type AssistantApplyResultStatus = "applied" | "error" | "skipped";
 
 export type AssistantApplyResult = {
+  calendarHref?: string;
+  createdBlock?: WeeklyPlanBlock;
+  createdDate?: string;
+  planHref?: string;
   suggestionId: string;
   suggestionTitle: string;
   type: AssistantSuggestionType;

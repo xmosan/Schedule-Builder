@@ -1,7 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  clearLocalAssistantConversation,
+  createAssistantThreadId,
+  parseAssistantConversationSnapshot,
+  readLocalAssistantConversation,
+  writeLocalAssistantConversation,
+  type AssistantConversationSnapshot,
+} from "@/lib/assistant-conversation";
+import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
 import {
   FolderStackIcon,
   TargetIcon,
@@ -59,6 +69,7 @@ type AssistantStreamEvent =
 type ActionState = {
   editing: boolean;
   message?: string;
+  result?: AssistantApplyResponse["results"][number];
   status: ActionStatus;
 };
 
@@ -69,7 +80,6 @@ type AssistantNotice = {
 };
 
 const cardExitDelayMs = 300;
-const applySuccessExitDelayMs = 700;
 
 const examplePrompts = [
   "Plan my week",
@@ -145,6 +155,19 @@ function getBrowserTimeZone() {
   } catch {
     return "America/Detroit";
   }
+}
+
+function formatAssistantDate(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat(undefined, {
+        day: "numeric",
+        month: "short",
+        weekday: "short",
+        year: "numeric",
+      }).format(date);
 }
 
 function isActionableSuggestion(suggestion: AssistantSuggestion) {
@@ -459,7 +482,7 @@ function ActionCard({
             {suggestion.itemDate && (
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
                 <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Date</span>
-                <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.itemDate}</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">{formatAssistantDate(suggestion.itemDate)}</span>
               </div>
             )}
             {isScheduledItemSuggestion && (
@@ -500,9 +523,17 @@ function ActionCard({
                 <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.day}</span>
               </div>
             )}
+            {isWeeklyBlockSuggestion && suggestion.startTime && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Start</span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">
+                  {formatStartTime(suggestion.startTime)}
+                </span>
+              </div>
+            )}
             {suggestion.estimatedHours && (
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
-                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Time</span>
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Duration</span>
                 <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.estimatedHours}h</span>
               </div>
             )}
@@ -757,6 +788,28 @@ function ActionCard({
           </p>
         )}
 
+        {actionState.status === "applied" &&
+        (actionState.result?.planHref || actionState.result?.calendarHref) ? (
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {actionState.result.planHref ? (
+              <Link
+                className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 bg-white px-4 text-sm font-semibold text-brand-ink transition hover:border-brand-teal/30 hover:text-brand-teal"
+                href={actionState.result.planHref}
+              >
+                View in Weekly Plan
+              </Link>
+            ) : null}
+            {actionState.result.calendarHref ? (
+              <Link
+                className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 bg-white px-4 text-sm font-semibold text-brand-ink transition hover:border-brand-teal/30 hover:text-brand-teal"
+                href={actionState.result.calendarHref}
+              >
+                View in Calendar
+              </Link>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {isActionableSuggestion(suggestion) ? (
             <>
@@ -1006,6 +1059,7 @@ function ChatBubble({
 }
 
 export function AssistantPage() {
+  const router = useRouter();
   const [status, setStatus] = useState<AssistantStatus>(
     isSupabaseConfigured() ? "loading" : "signed_out",
   );
@@ -1017,7 +1071,13 @@ export function AssistantPage() {
   const [assistantNotices, setAssistantNotices] = useState<AssistantNotice[]>([]);
   const [isIntroHidden, setIsIntroHidden] = useState(false);
   const [isClearChatDialogOpen, setIsClearChatDialogOpen] = useState(false);
+  const [isClearChatLoading, setIsClearChatLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeSchedulingContext, setActiveSchedulingContext] =
+    useState<AssistantSchedulingContext | null>(null);
+  const [activeUserId, setActiveUserId] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState(() => createAssistantThreadId());
+  const [hasRestoredConversation, setHasRestoredConversation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1035,14 +1095,37 @@ export function AssistantPage() {
   const isBusy = isSubmitting || status === "loading";
   const showIntroCard = !hasMessages && !isIntroHidden;
 
-  function clearConversationHistory() {
-    setMessages([]);
-    setActionStates({});
-    setOpenReviewMessages({});
-    setAssistantNotices([]);
-    setError(null);
-    setIsIntroHidden(false);
-    setIsClearChatDialogOpen(false);
+  async function clearConversationHistory() {
+    setIsClearChatLoading(true);
+
+    try {
+      if (activeUserId) {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+
+        if (accessToken) {
+          await fetch("/api/assistant/conversation", {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+        }
+
+        clearLocalAssistantConversation(activeUserId);
+      }
+
+      setThreadId(createAssistantThreadId());
+      setActiveSchedulingContext(null);
+      setMessages([]);
+      setActionStates({});
+      setOpenReviewMessages({});
+      setAssistantNotices([]);
+      setError(null);
+      setIsIntroHidden(false);
+      setIsClearChatDialogOpen(false);
+    } finally {
+      setIsClearChatLoading(false);
+    }
   }
 
 
@@ -1076,6 +1159,8 @@ export function AssistantPage() {
         method === "POST"
           ? JSON.stringify({
               prompt: nextPrompt,
+              activeSchedulingContext,
+              threadId,
               timezone: getBrowserTimeZone(),
             })
           : undefined,
@@ -1130,6 +1215,8 @@ export function AssistantPage() {
       },
       body: JSON.stringify({
         prompt: nextPrompt,
+        activeSchedulingContext,
+        threadId,
         recentMessages,
         timezone: getBrowserTimeZone(),
       }),
@@ -1268,6 +1355,73 @@ export function AssistantPage() {
 
     async function loadContext() {
       try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession();
+
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        const userId = sessionData.session?.user.id ?? null;
+        const accessToken = sessionData.session?.access_token ?? null;
+
+        if (!userId || !accessToken) {
+          setStatus("signed_out");
+          setError(null);
+          setHasRestoredConversation(true);
+          return;
+        }
+
+        setActiveUserId(userId);
+        let restoredSnapshot = readLocalAssistantConversation(userId);
+
+        try {
+          const conversationResponse = await fetch(
+            "/api/assistant/conversation",
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+              signal: controller.signal,
+            },
+          );
+          const conversationPayload = (await conversationResponse
+            .json()
+            .catch(() => null)) as { snapshot?: unknown } | null;
+          const serverSnapshot = parseAssistantConversationSnapshot(
+            conversationPayload?.snapshot,
+          );
+
+          if (
+            serverSnapshot &&
+            (!restoredSnapshot ||
+              serverSnapshot.updatedAt >= restoredSnapshot.updatedAt)
+          ) {
+            restoredSnapshot = serverSnapshot;
+          }
+        } catch {
+          // The local snapshot keeps the conversation usable during outages.
+        }
+
+        if (restoredSnapshot && isActive) {
+          setThreadId(restoredSnapshot.threadId);
+          setMessages(restoredSnapshot.messages);
+          setActionStates(
+            Object.fromEntries(
+              Object.entries(restoredSnapshot.actionStates).map(([id, state]) => [
+                id,
+                state.status === "applying"
+                  ? { ...state, status: "pending" as const }
+                  : state,
+              ]),
+            ),
+          );
+          setOpenReviewMessages(restoredSnapshot.openReviewMessages);
+          setActiveSchedulingContext(
+            restoredSnapshot.activeSchedulingContext,
+          );
+          setIsIntroHidden(restoredSnapshot.messages.length > 0);
+        }
+
         const response = await requestPlanReview(
           "GET",
           undefined,
@@ -1279,6 +1433,7 @@ export function AssistantPage() {
         }
 
         setContext(response.context);
+        setHasRestoredConversation(true);
         setError(null);
         setStatus("ready");
       } catch (loadError) {
@@ -1297,6 +1452,7 @@ export function AssistantPage() {
 
         setStatus("error");
         setError(getErrorMessage(loadError));
+        setHasRestoredConversation(true);
       }
     }
 
@@ -1311,6 +1467,71 @@ export function AssistantPage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, isSubmitting]);
+
+  useEffect(() => {
+    if (!hasRestoredConversation || !activeUserId) {
+      return;
+    }
+
+    const snapshot: AssistantConversationSnapshot = {
+      actionStates,
+      activeSchedulingContext,
+      messages: messages
+        .filter((message) => !message.isStreaming)
+        .map((message) => ({
+          content: message.content,
+          id: message.id,
+          response: message.response,
+          role: message.role,
+        })),
+      openReviewMessages,
+      threadId,
+      updatedAt: new Date().toISOString(),
+      version: 1,
+    };
+    const timeoutId = window.setTimeout(async () => {
+      writeLocalAssistantConversation(activeUserId, snapshot);
+
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+
+        if (!accessToken) {
+          return;
+        }
+
+        const response = await fetch("/api/assistant/conversation", {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ snapshot }),
+        });
+        const payload = (await response.json().catch(() => null)) as {
+          snapshot?: unknown;
+        } | null;
+        const persisted = parseAssistantConversationSnapshot(payload?.snapshot);
+
+        if (persisted && persisted.threadId !== threadId) {
+          setThreadId(persisted.threadId);
+        }
+      } catch {
+        // The local copy remains authoritative until the server is reachable.
+      }
+    }, 650);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    actionStates,
+    activeSchedulingContext,
+    activeUserId,
+    hasRestoredConversation,
+    messages,
+    openReviewMessages,
+    threadId,
+  ]);
 
   function updateActionState(
     suggestionId: string,
@@ -1445,12 +1666,13 @@ export function AssistantPage() {
       updateActionState(suggestion.id, {
         editing: false,
         message: result?.message ?? response.message,
+        result,
         status: result?.status === "applied" ? "applied" : "error",
       });
 
       const content =
         result?.status === "applied"
-          ? `${result.message} Projects and Calendar will reflect the saved change from Supabase.`
+          ? result.message
           : result?.message ??
             "I could not apply that change. Open the review card and check the fields.";
 
@@ -1468,10 +1690,9 @@ export function AssistantPage() {
 
       if (result?.status === "applied") {
         addAssistantNotice(result.message || "Suggestion applied.");
-
-        window.setTimeout(() => {
-          removeSuggestionAfterAnimation(suggestion.id);
-        }, applySuccessExitDelayMs);
+        setActiveSchedulingContext(null);
+        window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+        router.refresh();
       }
     } catch (applyError) {
       const message = getErrorMessage(applyError);
@@ -1609,6 +1830,9 @@ export function AssistantPage() {
       const actions = getActions(chatResponse);
 
       setContext(chatResponse.context);
+      if (chatResponse.schedulingContext !== undefined) {
+        setActiveSchedulingContext(chatResponse.schedulingContext);
+      }
       setActionStates((current) => {
         const nextStates = { ...current };
 
@@ -1701,15 +1925,15 @@ export function AssistantPage() {
       updateActionState(suggestion.id, {
         editing: false,
         message: result?.message ?? response.message,
+        result,
         status: result?.status === "applied" ? "applied" : "error",
       });
 
       if (result?.status === "applied") {
         addAssistantNotice(result.message || "Suggestion applied.");
-
-        window.setTimeout(() => {
-          removeSuggestionAfterAnimation(suggestion.id);
-        }, applySuccessExitDelayMs);
+        setActiveSchedulingContext(null);
+        window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+        router.refresh();
         return;
       }
 
@@ -1957,13 +2181,14 @@ export function AssistantPage() {
       </main>
 
       <ConfirmDialog
-        confirmLabel="Clear chat"
-        description="This clears the conversation from this screen. Your projects, time blocks, work shifts, and calendar connections will stay as they are."
+        confirmLabel="Clear conversation"
+        description="This removes the Assistant messages and pending suggestions. Applied schedule items will remain."
         destructive
+        loading={isClearChatLoading}
         open={isClearChatDialogOpen}
-        title="Clear chat history?"
+        title="Clear this conversation?"
         onCancel={() => setIsClearChatDialogOpen(false)}
-        onConfirm={clearConversationHistory}
+        onConfirm={() => void clearConversationHistory()}
       />
     </div>
   );

@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
   createAssistantContextSummary,
+  getAssistantCurrentWeekStartInput,
   getRelevantImportedCalendarEvents,
   normalizeAssistantSuggestions,
   type AssistantApplyResponse,
@@ -23,9 +24,13 @@ import {
   fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
   createScheduledItemForUser,
+  createWeeklyPlanBlockForUser,
 } from "@/lib/supabase/scheduler";
 import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
-import { getWeeklyPlanImportedEventConflictForBlock } from "@/lib/schedule-conflicts";
+import {
+  getWeeklyPlanImportedEventConflictForBlock,
+  getWeeklyPlanWorkConflictForBlock,
+} from "@/lib/schedule-conflicts";
 import {
   isScheduledItemType,
   normalizeScheduledItemDate,
@@ -33,22 +38,18 @@ import {
   type ScheduledItem,
   type ScheduledItemDraft,
 } from "@/lib/scheduled-items";
-import type { WeekDay, WeeklyPlanBlock } from "@/lib/weekly-plan";
+import {
+  formatStartTime,
+  normalizeStartTime,
+  weekDays,
+  type WeekDay,
+  type WeeklyPlanBlock,
+} from "@/lib/weekly-plan";
 import { formatWorkShiftRange, type WorkShift } from "@/lib/work-schedule";
 
 export const dynamic = "force-dynamic";
 
 const maxApprovedSuggestions = 8;
-
-type WeeklyPlanBlockRow = {
-  user_id: string;
-  block_id: string;
-  sort_index: number;
-  day: WeekDay;
-  project_name: string;
-  planned_task: string;
-  estimated_hours: number;
-};
 
 type ProjectRow = {
   user_id: string;
@@ -157,6 +158,58 @@ function createResult(
     status,
     message,
   };
+}
+
+function getWeekStartForDate(dateValue: string) {
+  const date = new Date(`${dateValue}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const mondayOffset = date.getDay() === 0 ? -6 : 1 - date.getDay();
+  date.setDate(date.getDate() + mondayOffset);
+  return [
+    String(date.getFullYear()).padStart(4, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function getDateForWeekDay(weekStartDate: string, day: WeekDay) {
+  const date = new Date(`${weekStartDate}T00:00:00`);
+  date.setDate(date.getDate() + weekDays.indexOf(day));
+  return [
+    String(date.getFullYear()).padStart(4, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function formatAppliedBlockMessage(block: WeeklyPlanBlock, dateValue: string) {
+  const date = new Date(`${dateValue}T00:00:00`);
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  }).format(date);
+  const startMinutes = block.startTime
+    ? Number(block.startTime.slice(0, 2)) * 60 + Number(block.startTime.slice(3, 5))
+    : null;
+  const endMinutes =
+    startMinutes === null ? null : startMinutes + block.estimatedHours * 60;
+  const endTime =
+    endMinutes === null
+      ? null
+      : `${String(Math.floor((endMinutes % 1440) / 60)).padStart(2, "0")}:${String(
+          endMinutes % 60,
+        ).padStart(2, "0")}`;
+
+  return block.startTime && endTime
+    ? `Added “${block.projectName}” to ${dateLabel} from ${formatStartTime(
+        block.startTime,
+      )}–${formatStartTime(endTime)}.`
+    : `Added “${block.projectName}” to ${dateLabel} as an anytime time block. Add a start time before treating it as a timed Calendar commitment.`;
 }
 
 function normalizeProjectKey(projectName: string) {
@@ -291,7 +344,6 @@ async function applyScheduledItemSuggestion({
 async function applyWeeklyBlockSuggestion({
   appliedBlockCount,
   currentBlocks,
-  currentProjects,
   importedCalendarEvents,
   suggestion,
   supabase,
@@ -300,7 +352,6 @@ async function applyWeeklyBlockSuggestion({
 }: {
   appliedBlockCount: number;
   currentBlocks: WeeklyPlanBlock[];
-  currentProjects: Project[];
   importedCalendarEvents: ImportedCalendarEvent[];
   suggestion: AssistantSuggestion;
   supabase: SupabaseClient;
@@ -309,9 +360,6 @@ async function applyWeeklyBlockSuggestion({
 }) {
   const projectName = suggestion.projectName?.trim();
   const plannedTask = suggestion.plannedTask?.trim();
-  const matchingProject = projectName
-    ? findProjectByName(currentProjects, projectName)
-    : null;
 
   if (!projectName) {
     return createResult(suggestion, "error", "Weekly block title cannot be empty.");
@@ -337,40 +385,76 @@ async function applyWeeklyBlockSuggestion({
     );
   }
 
-  const row: WeeklyPlanBlockRow = {
-    user_id: userId,
-    block_id: createBlockId(suggestion.id),
-    sort_index: currentBlocks.length + appliedBlockCount,
+  const startTime = normalizeStartTime(suggestion.startTime ?? "");
+  const weekStartDate = suggestion.itemDate
+    ? getWeekStartForDate(suggestion.itemDate)
+    : getAssistantCurrentWeekStartInput();
+
+  if (!weekStartDate) {
+    return createResult(suggestion, "error", "The selected week is invalid.");
+  }
+
+  const createdDate = getDateForWeekDay(weekStartDate, suggestion.day);
+
+  if (suggestion.itemDate && suggestion.itemDate !== createdDate) {
+    return createResult(
+      suggestion,
+      "error",
+      "The selected date no longer matches the selected weekday. Review the proposal before applying it.",
+    );
+  }
+
+  const candidateBlock: WeeklyPlanBlock = {
+    id: createBlockId(suggestion.id),
     day: suggestion.day,
-    project_name: projectName,
-    planned_task: plannedTask,
-    estimated_hours: suggestion.estimatedHours,
+    projectName,
+    plannedTask,
+    estimatedHours: suggestion.estimatedHours,
+    ...(startTime ? { startTime } : {}),
   };
-  const { error } = await supabase.from("weekly_plan_blocks").insert(row);
+  const weekStart = new Date(`${weekStartDate}T00:00:00`);
+  const workConflict = getWeeklyPlanWorkConflictForBlock(
+    candidateBlock,
+    workShifts,
+  );
+  const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
+    candidateBlock,
+    importedCalendarEvents,
+    weekStart,
+  );
+
+  if (startTime && (workConflict || importedConflict)) {
+    const conflictLabel = workConflict
+      ? `your work shift (${workConflict.shiftRangeLabel})`
+      : `“${importedConflict?.event.title}” (${importedConflict?.eventRangeLabel})`;
+
+    return createResult(
+      suggestion,
+      "error",
+      `That ${suggestion.day} window now overlaps ${conflictLabel}. Review the conflict before applying.`,
+    );
+  }
+
+  const { error } = await createWeeklyPlanBlockForUser(
+    supabase,
+    userId,
+    candidateBlock,
+    currentBlocks.length + appliedBlockCount,
+  );
 
   if (error) {
     return createResult(suggestion, "error", error.message);
   }
 
-  const createdBlock: WeeklyPlanBlock = {
-    id: row.block_id,
-    day: row.day,
-    projectName: row.project_name,
-    plannedTask: row.planned_task,
-    estimatedHours: row.estimated_hours,
-  };
+  const createdBlock = candidateBlock;
 
   currentBlocks.push(createdBlock);
 
-  const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
-    createdBlock,
-    importedCalendarEvents,
-  );
   const workRanges = workShifts
-    .filter((shift) => shift.day === row.day)
+    .filter((shift) => shift.day === createdBlock.day)
     .map(formatWorkShiftRange);
   const followUpWarnings = [
-    workRanges.length > 0
+    !startTime && workRanges.length > 0
       ? `This day has work shifts (${workRanges.join(", ")}), so place the block outside those hours.`
       : null,
     importedConflict
@@ -378,13 +462,19 @@ async function applyWeeklyBlockSuggestion({
       : null,
   ].filter((message): message is string => Boolean(message));
 
-  return createResult(
-    suggestion,
-    "applied",
-    followUpWarnings.length > 0
-      ? `Created a ${matchingProject ? "project work" : "task / appointment"} block. ${followUpWarnings.join(" ")}`
-      : `Created a ${matchingProject ? "project work" : "task / appointment"} block.`,
-  );
+  return {
+    ...createResult(
+      suggestion,
+      "applied",
+      `${formatAppliedBlockMessage(createdBlock, createdDate)}${
+        followUpWarnings.length > 0 ? ` ${followUpWarnings.join(" ")}` : ""
+      }`,
+    ),
+    calendarHref: `/calendar?view=week&date=${encodeURIComponent(createdDate)}&highlight=${encodeURIComponent(createdBlock.id)}`,
+    createdBlock,
+    createdDate,
+    planHref: `/plan?week=${encodeURIComponent(weekStartDate)}&date=${encodeURIComponent(createdDate)}&highlight=${encodeURIComponent(createdBlock.id)}`,
+  };
 }
 
 async function applyNewProjectSuggestion({
@@ -766,7 +856,6 @@ export async function POST(request: NextRequest) {
       const result = await applyWeeklyBlockSuggestion({
         appliedBlockCount,
         currentBlocks,
-        currentProjects,
         importedCalendarEvents,
         suggestion: item.normalized,
         supabase: authResult.supabase,

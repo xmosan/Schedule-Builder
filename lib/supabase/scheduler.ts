@@ -637,6 +637,22 @@ export async function replaceWeeklyPlanBlocksForUser(
   return { error: deleteError, usedLegacyStartTimeFallback };
 }
 
+export async function createWeeklyPlanBlockForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  block: WeeklyPlanBlock,
+  sortIndex: number,
+) {
+  const result = await withSupabaseTimeout(
+    supabase.from("weekly_plan_blocks").insert(
+      mapWeeklyPlanBlockToRow(userId, block, sortIndex),
+    ),
+    "Saving weekly plan block to Supabase",
+  );
+
+  return { data: result.error ? null : block, error: result.error };
+}
+
 export async function deleteWeeklyPlanBlockForUser(
   supabase: SupabaseClient,
   userId: string,

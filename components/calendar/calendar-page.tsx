@@ -1543,6 +1543,32 @@ export function CalendarPage() {
     useState(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedDateValue = params.get("date");
+    const requestedView = params.get("view");
+
+    if (requestedView === "week" || requestedView === "month") {
+      setView(requestedView);
+    }
+
+    if (!requestedDateValue) {
+      return;
+    }
+
+    const requestedDate = new Date(`${requestedDateValue}T00:00:00`);
+
+    if (Number.isNaN(requestedDate.getTime())) {
+      return;
+    }
+
+    setWeekStartDate(
+      new Date(`${getWeekStartInputValueForDate(requestedDate)}T00:00:00`),
+    );
+    setMonthDate(requestedDate);
+    setSelectedMonthIso(requestedDateValue);
+  }, []);
+
+  useEffect(() => {
     if (!isSupabaseConfigured()) {
       setStatus("signed_out");
       setError("Supabase is not configured yet.");
