@@ -145,7 +145,8 @@ The `/assistant` page gives signed-in users a chat-style planning workspace. Use
 - The server routes load the signed-in user's projects, weekly plan blocks, work shifts, and onboarding profile from Supabase. The client never sends or controls `user_id`.
 - `OPENAI_API_KEY` is optional. If it is configured, `/api/assistant/plan` uses the OpenAI Responses API through the official `openai` JavaScript SDK.
 - If `OPENAI_API_KEY` is missing or OpenAI returns invalid output, the assistant returns deterministic rule-based fallback suggestions.
-- `AI_MODEL` is optional and defaults to `gpt-4o-mini`.
+- `OPENAI_ASSISTANT_MODEL` is optional and defaults to `gpt-4o-mini`. `AI_MODEL` remains a legacy fallback.
+- `OPENAI_ASSISTANT_EVAL_MODEL` is optional and is used only by the repeatable model-comparison harness.
 - Keep `OPENAI_API_KEY` server-side only in `.env.local` or Vercel environment variables. Do not prefix it with `NEXT_PUBLIC_`.
 - OpenAI suggestions are validated on the server and limited to non-destructive suggestion types: weekly blocks, next actions, workload warnings, missing deadlines, and unclear project warnings.
 

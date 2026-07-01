@@ -88,6 +88,35 @@ const examplePrompts = [
   "Create study blocks",
   "Suggest my Top 3",
 ];
+
+function getSchedulingQuickReplies(
+  context: AssistantSchedulingContext | null,
+) {
+  if (!context) {
+    return [];
+  }
+
+  if (
+    context.state === "awaiting_window_selection" ||
+    context.state === "needs_clarification"
+  ) {
+    return context.candidateWindows.slice(0, 6).map((window) => ({
+      label: window.label,
+      prompt: window.label,
+    }));
+  }
+
+  if (context.state === "awaiting_duration") {
+    return [
+      { label: "30 minutes", prompt: "30 minutes" },
+      { label: "1 hour", prompt: "one hour" },
+      { label: "2 hours", prompt: "two hours" },
+      { label: "Full opening", prompt: "Use the full opening" },
+    ];
+  }
+
+  return [];
+}
 const confirmationPromptPattern =
   /^(yes|yeah|yep|confirm|confirmed|apply|apply it|do it|save it|update it|make the change|alright|all right|ok|okay)(?:[\s,!.].*)?$/i;
 
@@ -1094,6 +1123,9 @@ export function AssistantPage() {
   const hasMessages = messages.length > 0;
   const isBusy = isSubmitting || status === "loading";
   const showIntroCard = !hasMessages && !isIntroHidden;
+  const schedulingQuickReplies = getSchedulingQuickReplies(
+    activeSchedulingContext,
+  );
 
   async function clearConversationHistory() {
     setIsClearChatLoading(true);
@@ -1741,7 +1773,12 @@ export function AssistantPage() {
     };
     const assistantMessageId = createId("assistant");
 
-    if (isConfirmationPrompt(trimmedPrompt)) {
+    const schedulingExpectsInput =
+      activeSchedulingContext?.state === "awaiting_window_selection" ||
+      activeSchedulingContext?.state === "awaiting_duration" ||
+      activeSchedulingContext?.state === "needs_clarification";
+
+    if (isConfirmationPrompt(trimmedPrompt) && !schedulingExpectsInput) {
       const pendingReview = getLatestPendingActionReview();
 
       if (pendingReview?.pendingActions.length === 1) {
@@ -1859,7 +1896,9 @@ export function AssistantPage() {
       );
       setOpenReviewMessages((current) => ({
         ...current,
-        [assistantMessageId]: false,
+        [assistantMessageId]:
+          actions.length > 0 &&
+          chatResponse.schedulingContext?.state === "awaiting_apply",
       }));
       setStatus("ready");
     } catch (submitError) {
@@ -2132,16 +2171,33 @@ export function AssistantPage() {
             ) : (
               <form onSubmit={handleSubmit} className="mx-auto max-w-3xl">
                 {hasMessages ? (
-                  <div className="-mx-4 mb-3 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:px-0">
-                    <div className="flex min-w-max gap-2 sm:min-w-0 sm:flex-wrap">
-                      {examplePrompts.map((example) => (
+                  <div className="mb-3 px-1">
+                    {schedulingQuickReplies.length > 0 ? (
+                      <p className="mb-2 text-xs font-semibold text-brand-ink/55">
+                        {activeSchedulingContext?.pendingQuestion ?? "Choose an option"}
+                      </p>
+                    ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      {(schedulingQuickReplies.length > 0
+                        ? schedulingQuickReplies
+                        : examplePrompts.map((example) => ({
+                            label: example,
+                            prompt: example,
+                          }))).map((choice) => (
                         <button
-                          key={example}
-                          className="whitespace-nowrap rounded-full border border-brand-ink/10 bg-white/80 px-3.5 py-2 text-xs font-semibold text-brand-ink/60 shadow-sm hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
+                          key={`${choice.label}-${choice.prompt}`}
+                          className="rounded-full border border-brand-ink/10 bg-white/80 px-3.5 py-2 text-xs font-semibold text-brand-ink/60 shadow-sm hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
                           type="button"
-                          onClick={() => setPrompt(example)}
+                          onClick={() => {
+                            if (schedulingQuickReplies.length > 0) {
+                              void sendPrompt(choice.prompt);
+                              return;
+                            }
+
+                            setPrompt(choice.prompt);
+                          }}
                         >
-                          {example}
+                          {choice.label}
                         </button>
                       ))}
                     </div>

@@ -70,9 +70,61 @@ export type AssistantOpenWindow = {
   durationMinutes: number;
   endLabel: string;
   endMinutes: number;
+  endsAt: string;
+  id: string;
+  label: string;
   startLabel: string;
   startMinutes: number;
+  startsAt: string;
 };
+
+function createAssistantOpenWindow({
+  date,
+  day,
+  endMinutes,
+  startMinutes,
+}: {
+  date: string;
+  day: WeekDay;
+  endMinutes: number;
+  startMinutes: number;
+}): AssistantOpenWindow {
+  const startTime = minutesToTimeInput(startMinutes);
+  const endTime = minutesToTimeInput(endMinutes);
+  const startsAt = `${date}T${startTime}:00`;
+  const endsAt = `${date}T${endTime}:00`;
+  const startLabel = formatMinutes(startMinutes);
+  const endLabel = formatMinutes(endMinutes);
+
+  return {
+    date,
+    day,
+    durationMinutes: endMinutes - startMinutes,
+    endLabel,
+    endMinutes,
+    endsAt,
+    id: `${startsAt}__${endsAt}`,
+    label:
+      endMinutes === dayEndDefault && startMinutes > dayStartDefault
+        ? `${day} after ${startLabel}`
+        : `${day}, ${startLabel}-${endLabel}`,
+    startLabel,
+    startMinutes,
+    startsAt,
+  };
+}
+
+export type AssistantWorkflowState =
+  | "idle"
+  | "calculating_availability"
+  | "awaiting_window_selection"
+  | "awaiting_duration"
+  | "awaiting_title"
+  | "proposal_ready"
+  | "awaiting_apply"
+  | "applied"
+  | "needs_clarification"
+  | "failed";
 
 export type AssistantPendingTimeBlockProposal = {
   actionType: "create_time_block";
@@ -94,12 +146,18 @@ export type AssistantSchedulingContext = {
     | "awaiting_duration"
     | "ready_for_review";
   originalDateBoundary?: SchedulingQuery["timeBoundary"];
+  intent: "create_time_block" | "find_open_time";
+  lastUpdatedAt: string;
+  maximumDurationMinutes: number | null;
+  pendingQuestion: string | null;
   pendingProposal: AssistantPendingTimeBlockProposal | null;
   purpose: string;
   requestedDurationMinutes: number | null;
   selectedDate: string | null;
+  selectedWindowId: string | null;
   selectedWindowEnd: string | null;
   selectedWindowStart: string | null;
+  state: AssistantWorkflowState;
 };
 
 export type AssistantSchedulingConversationTurn = {
@@ -122,6 +180,18 @@ export function normalizeAssistantSchedulingContext(
     "awaiting_duration",
     "ready_for_review",
   ];
+  const allowedStates: AssistantWorkflowState[] = [
+    "idle",
+    "calculating_availability",
+    "awaiting_window_selection",
+    "awaiting_duration",
+    "awaiting_title",
+    "proposal_ready",
+    "awaiting_apply",
+    "applied",
+    "needs_clarification",
+    "failed",
+  ];
 
   if (
     typeof candidate.purpose !== "string" ||
@@ -142,16 +212,49 @@ export function normalizeAssistantSchedulingContext(
       Number.isFinite(window.startMinutes) &&
       Number.isFinite(window.endMinutes) &&
       window.endMinutes > window.startMinutes,
+  ).map((window) =>
+    createAssistantOpenWindow({
+      date: window.date,
+      day: window.day,
+      endMinutes: window.endMinutes,
+      startMinutes: window.startMinutes,
+    }),
   );
 
-  if (candidateWindows.length === 0) {
+  if (candidateWindows.length === 0 && candidate.state !== "failed") {
     return null;
   }
+
+  const state =
+    candidate.state && allowedStates.includes(candidate.state)
+      ? candidate.state
+      : candidate.confirmationStatus === "awaiting_duration"
+        ? "awaiting_duration"
+        : candidate.confirmationStatus === "ready_for_review"
+          ? "awaiting_apply"
+          : "awaiting_window_selection";
 
   return {
     candidateWindows: candidateWindows.slice(0, 28),
     confirmationStatus: candidate.confirmationStatus,
+    intent:
+      candidate.intent === "find_open_time"
+        ? "find_open_time"
+        : "create_time_block",
+    lastUpdatedAt:
+      typeof candidate.lastUpdatedAt === "string"
+        ? candidate.lastUpdatedAt
+        : new Date().toISOString(),
+    maximumDurationMinutes:
+      typeof candidate.maximumDurationMinutes === "number" &&
+      candidate.maximumDurationMinutes > 0
+        ? candidate.maximumDurationMinutes
+        : null,
     originalDateBoundary: candidate.originalDateBoundary,
+    pendingQuestion:
+      typeof candidate.pendingQuestion === "string"
+        ? candidate.pendingQuestion
+        : null,
     pendingProposal:
       typeof candidate.pendingProposal === "object" &&
       candidate.pendingProposal !== null
@@ -165,6 +268,10 @@ export function normalizeAssistantSchedulingContext(
         : null,
     selectedDate:
       typeof candidate.selectedDate === "string" ? candidate.selectedDate : null,
+    selectedWindowId:
+      typeof candidate.selectedWindowId === "string"
+        ? candidate.selectedWindowId
+        : null,
     selectedWindowEnd:
       typeof candidate.selectedWindowEnd === "string"
         ? candidate.selectedWindowEnd
@@ -173,6 +280,7 @@ export function normalizeAssistantSchedulingContext(
       typeof candidate.selectedWindowStart === "string"
         ? candidate.selectedWindowStart
         : null,
+    state,
   };
 }
 
@@ -526,8 +634,9 @@ function minutesToTimeInput(totalMinutes: number) {
 
 function cleanPlanningPurpose(value: string) {
   return value
+    .split(/[.!?]/)[0]
     .replace(/[?.!]+$/g, "")
-    .replace(/^\s*(?:to\s+)?(?:plan|prepare|work)\s+(?:for|on)\s+/i, "")
+    .replace(/^\s*(?:to\s+)?(?:plan|planning|prepare|work)\s+(?:for|on\s+)?/i, "")
     .replace(/[’']s\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -546,13 +655,18 @@ function inferPlanningPurpose(
   ];
 
   for (const candidate of candidates) {
+    const timeForMatch = candidate.match(
+      /\b(?:make|find|reserve|block|need)\s+(?:me\s+)?(?:some\s+)?time\s+for\s+(.+?)(?:[.!?]|$)/i,
+    );
     const directMatch = candidate.match(
       /\b(?:find|show)\s+(?:me\s+)?(?:an?\s+)?(?:open|free|available)\s+(?:time|window|slot)\s+(?:to|for)\s+(.+)$/i,
     );
     const planningMatch = candidate.match(
       /\b(?:plan|schedule|create|add)\s+(?:time\s+)?(?:for|to)\s+(.+)$/i,
     );
-    const purpose = cleanPlanningPurpose(directMatch?.[1] ?? planningMatch?.[1] ?? "");
+    const purpose = cleanPlanningPurpose(
+      timeForMatch?.[1] ?? directMatch?.[1] ?? planningMatch?.[1] ?? "",
+    );
 
     if (purpose) {
       return purpose;
@@ -572,16 +686,52 @@ function createProposalTitle(purpose: string) {
   return `Plan ${normalized}`.slice(0, 120);
 }
 
-function findSelectedWindow(
+const weekdayAliases: Record<WeekDay, readonly string[]> = {
+  Monday: ["monday", "mon"],
+  Tuesday: ["tuesday", "tues", "tue"],
+  Wednesday: ["wednesday", "weds", "wed"],
+  Thursday: ["thursday", "thurs", "thur", "thu"],
+  Friday: ["friday", "fri"],
+  Saturday: ["saturday", "sat"],
+  Sunday: ["sunday", "sun"],
+};
+
+function getMentionedWeekday(prompt: string) {
+  return weekDays.find((day) =>
+    weekdayAliases[day].some((alias) =>
+      new RegExp(`\\b${alias}\\b`, "i").test(prompt),
+    ),
+  );
+}
+
+function findSelectedWindows(
   prompt: string,
   windows: readonly AssistantOpenWindow[],
 ) {
-  const selectedDay = weekDays.find((day) =>
-    new RegExp(`\\b${day}\\b`, "i").test(prompt),
-  );
+  const selectedById = windows.find((window) => prompt.includes(window.id));
+
+  if (selectedById) {
+    return [selectedById];
+  }
+
+  const selectedDay = getMentionedWeekday(prompt);
 
   if (selectedDay) {
-    return windows.find((window) => window.day === selectedDay) ?? null;
+    const dayWindows = windows.filter((window) => window.day === selectedDay);
+    const timeMatch = prompt.match(
+      /\b(?:at\s+)?(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)\b/i,
+    );
+    const selectedMinutes = timeMatch ? parseTimeMatch(timeMatch) : null;
+
+    if (selectedMinutes !== null) {
+      const exactWindow = dayWindows.find(
+        (window) => window.startMinutes === selectedMinutes,
+      );
+
+      return exactWindow ? [exactWindow] : [];
+    }
+
+    return dayWindows;
   }
 
   const ordinalMatch = prompt.match(/\b(first|second|third|fourth|1st|2nd|3rd|4th)\b/i);
@@ -597,14 +747,21 @@ function findSelectedWindow(
   };
 
   if (ordinalMatch) {
-    return windows[ordinalIndexes[ordinalMatch[1].toLowerCase()]] ?? null;
+    const selectedWindow = windows[ordinalIndexes[ordinalMatch[1].toLowerCase()]];
+    return selectedWindow ? [selectedWindow] : [];
   }
 
-  return null;
+  return [];
 }
 
 function isPositiveSchedulingConfirmation(prompt: string) {
   return /^(?:yes|yeah|yep|sure|please|yes please|sounds good|ok|okay|alright|all right)[\s,!.]*$/i.test(
+    prompt.trim(),
+  );
+}
+
+function isNegativeSchedulingReply(prompt: string) {
+  return /^(?:no|nope|not that one|choose another|another one)[\s,!.]*$/i.test(
     prompt.trim(),
   );
 }
@@ -1316,30 +1473,28 @@ export function calculateOpenWindows({
       }
 
       if (rangeStart - cursor >= minimumMinutes) {
-        windows.push({
-          date: scope.date,
-          day: scope.day,
-          durationMinutes: rangeStart - cursor,
-          endLabel: formatMinutes(rangeStart),
-          endMinutes: rangeStart,
-          startLabel: formatMinutes(cursor),
-          startMinutes: cursor,
-        });
+        windows.push(
+          createAssistantOpenWindow({
+            date: scope.date,
+            day: scope.day,
+            endMinutes: rangeStart,
+            startMinutes: cursor,
+          }),
+        );
       }
 
       cursor = Math.max(cursor, rangeEnd);
     });
 
     if (scopedDayEnd - cursor >= minimumMinutes) {
-      windows.push({
-        date: scope.date,
-        day: scope.day,
-        durationMinutes: scopedDayEnd - cursor,
-        endLabel: formatMinutes(scopedDayEnd),
-        endMinutes: scopedDayEnd,
-        startLabel: formatMinutes(cursor),
-        startMinutes: cursor,
-      });
+      windows.push(
+        createAssistantOpenWindow({
+          date: scope.date,
+          day: scope.day,
+          endMinutes: scopedDayEnd,
+          startMinutes: cursor,
+        }),
+      );
     }
   });
 
@@ -1571,6 +1726,17 @@ function hasOpenTimeQuestionIntent(prompt: string) {
   return /\b(find|show|where|what)\b.*\b(open|free|available|availability|fit)\b/i.test(
     prompt,
   ) || /\b(open time|open slots|free time|available time|availability)\b/i.test(prompt);
+}
+
+function hasSchedulingPlacementIntent(prompt: string) {
+  return (
+    /\b(?:plug|fit|put|add|schedule|reserve|block)\b.*\b(?:available|open|free|spot|slot|time)\b/i.test(
+      prompt,
+    ) ||
+    /\b(?:make|find|reserve|block|need)\s+(?:me\s+)?(?:some\s+)?time\s+for\b/i.test(
+      prompt,
+    )
+  );
 }
 
 function hasAvailabilityQuestionIntent(prompt: string) {
@@ -1866,8 +2032,13 @@ export function advanceAssistantSchedulingConversation({
   prompt: string;
   recentMessages?: readonly AssistantScheduleMessage[];
 }): AssistantSchedulingConversationTurn | null {
+  const now = new Date().toISOString();
+
   if (!activeContext) {
-    if (!hasOpenTimeQuestionIntent(prompt)) {
+    const isOpenTimeRequest = hasOpenTimeQuestionIntent(prompt);
+    const isPlacementRequest = hasSchedulingPlacementIntent(prompt);
+
+    if (!isOpenTimeRequest && !isPlacementRequest) {
       return null;
     }
 
@@ -1895,73 +2066,204 @@ export function advanceAssistantSchedulingConversation({
       recentMessages,
     });
 
+    const purpose = inferPlanningPurpose(prompt, recentMessages);
+
     if (windows.length === 0) {
-      return null;
+      const failedContext: AssistantSchedulingContext = {
+        candidateWindows: [],
+        confirmationStatus: "awaiting_window_selection",
+        intent: isPlacementRequest ? "create_time_block" : "find_open_time",
+        lastUpdatedAt: now,
+        maximumDurationMinutes: null,
+        originalDateBoundary: request.query.timeBoundary,
+        pendingProposal: null,
+        pendingQuestion: null,
+        purpose,
+        requestedDurationMinutes: request.durationMinutes,
+        selectedDate: null,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "failed",
+      };
+
+      return {
+        context: failedContext,
+        message:
+          "I couldn’t find an opening that fits the loaded schedule. Try a different day, a shorter duration, or ask me to list what is blocking the week.",
+        proposal: null,
+      };
     }
+
+    const pendingQuestion =
+      "Which opening should I use? Choose a day or one of the openings below.";
 
     return {
       context: {
         candidateWindows: windows,
-        confirmationStatus: "awaiting_window_confirmation",
+        confirmationStatus: "awaiting_window_selection",
+        intent: isPlacementRequest ? "create_time_block" : "find_open_time",
+        lastUpdatedAt: now,
+        maximumDurationMinutes: null,
         originalDateBoundary: request.query.timeBoundary,
         pendingProposal: null,
-        purpose: inferPlanningPurpose(prompt, recentMessages),
+        pendingQuestion,
+        purpose,
         requestedDurationMinutes: request.durationMinutes,
         selectedDate: null,
+        selectedWindowId: null,
         selectedWindowEnd: null,
         selectedWindowStart: null,
+        state: "awaiting_window_selection",
       },
-      message,
+      message: `${message}\n\n${pendingQuestion}`,
       proposal: null,
     };
   }
 
-  const selectedWindow = findSelectedWindow(prompt, activeContext.candidateWindows);
+  if (activeContext.state === "failed") {
+    return null;
+  }
 
-  if (
-    activeContext.confirmationStatus === "awaiting_window_confirmation" &&
-    isPositiveSchedulingConfirmation(prompt)
-  ) {
+  let selectedWindows = findSelectedWindows(
+    prompt,
+    activeContext.candidateWindows,
+  );
+
+  if (/\bthe other one\b/i.test(prompt)) {
+    selectedWindows = activeContext.candidateWindows.filter(
+      (window) => window.id !== activeContext.selectedWindowId,
+    );
+  }
+
+  if (isNegativeSchedulingReply(prompt)) {
+    const pendingQuestion =
+      "No problem. Which opening should I use instead? Choose a day or one of the openings below.";
+
     return {
       context: {
         ...activeContext,
         confirmationStatus: "awaiting_window_selection",
+        lastUpdatedAt: now,
+        maximumDurationMinutes: null,
+        pendingProposal: null,
+        pendingQuestion,
+        requestedDurationMinutes: null,
+        selectedDate: null,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "awaiting_window_selection",
       },
-      message: "Which opening would you like to use? You can name the day or say first, second, or third.",
+      message: pendingQuestion,
       proposal: null,
     };
   }
 
   if (
-    (activeContext.confirmationStatus === "awaiting_window_confirmation" ||
-      activeContext.confirmationStatus === "awaiting_window_selection") &&
-    selectedWindow
+    (activeContext.state === "awaiting_window_selection" ||
+      activeContext.state === "needs_clarification") &&
+    isPositiveSchedulingConfirmation(prompt)
   ) {
+    const pendingQuestion =
+      "Which opening should I use? Choose a day or one of the openings below.";
+
+    return {
+      context: {
+        ...activeContext,
+        confirmationStatus: "awaiting_window_selection",
+        lastUpdatedAt: now,
+        pendingQuestion,
+        state: "awaiting_window_selection",
+      },
+      message: pendingQuestion,
+      proposal: null,
+    };
+  }
+
+  if (selectedWindows.length > 1) {
+    const choices = selectedWindows
+      .slice(0, 4)
+      .map((window) => window.label)
+      .join(" or ");
+    const pendingQuestion = `I found more than one opening there. Did you mean ${choices}?`;
+
+    return {
+      context: {
+        ...activeContext,
+        confirmationStatus: "awaiting_window_selection",
+        lastUpdatedAt: now,
+        pendingQuestion,
+        state: "needs_clarification",
+      },
+      message: pendingQuestion,
+      proposal: null,
+    };
+  }
+
+  const selectedWindow = selectedWindows[0] ?? null;
+  const mentionedDay = getMentionedWeekday(prompt);
+
+  if (mentionedDay && !selectedWindow) {
+    const pendingQuestion = `I don’t see a usable opening on ${mentionedDay}. Choose another opening below, or ask me what is blocking that day.`;
+
+    return {
+      context: {
+        ...activeContext,
+        confirmationStatus: "awaiting_window_selection",
+        lastUpdatedAt: now,
+        pendingQuestion,
+        state: "needs_clarification",
+      },
+      message: pendingQuestion,
+      proposal: null,
+    };
+  }
+
+  if (selectedWindow) {
+    const maximumDurationMinutes = selectedWindow.durationMinutes;
+    const requestedDuration = activeContext.requestedDurationMinutes;
     const proposal: AssistantPendingTimeBlockProposal = {
       actionType: "create_time_block",
       date: selectedWindow.date,
       details: `Prepare and organize ${activeContext.purpose}.`,
-      durationMinutes: activeContext.requestedDurationMinutes,
+      durationMinutes:
+        requestedDuration && requestedDuration <= maximumDurationMinutes
+          ? requestedDuration
+          : null,
       selectedWindowEnd: minutesToTimeInput(selectedWindow.endMinutes),
       sourceConversationId: null,
       startTime: minutesToTimeInput(selectedWindow.startMinutes),
-      status: activeContext.requestedDurationMinutes
+      status:
+        requestedDuration && requestedDuration <= maximumDurationMinutes
         ? "ready_for_review"
         : "needs_duration",
       title: createProposalTitle(activeContext.purpose),
     };
     const nextContext: AssistantSchedulingContext = {
       ...activeContext,
-      confirmationStatus: activeContext.requestedDurationMinutes
+      confirmationStatus:
+        requestedDuration && requestedDuration <= maximumDurationMinutes
         ? "ready_for_review"
         : "awaiting_duration",
+      lastUpdatedAt: now,
+      maximumDurationMinutes,
       pendingProposal: proposal,
+      pendingQuestion:
+        requestedDuration && requestedDuration <= maximumDurationMinutes
+          ? null
+          : "How much time should I reserve?",
       selectedDate: selectedWindow.date,
       selectedWindowEnd: proposal.selectedWindowEnd,
+      selectedWindowId: selectedWindow.id,
       selectedWindowStart: proposal.startTime,
+      state:
+        requestedDuration && requestedDuration <= maximumDurationMinutes
+          ? "awaiting_apply"
+          : "awaiting_duration",
     };
 
-    if (activeContext.requestedDurationMinutes) {
+    if (requestedDuration && requestedDuration <= maximumDurationMinutes) {
       return {
         context: nextContext,
         message: `I kept ${selectedWindow.day} at ${selectedWindow.startLabel}. Review the exact block below before applying it.`,
@@ -1969,15 +2271,22 @@ export function advanceAssistantSchedulingConversation({
       };
     }
 
+    const durationNote =
+      requestedDuration && requestedDuration > maximumDurationMinutes
+        ? ` That opening only fits ${formatEstimatedHours(
+            maximumDurationMinutes / 60,
+          )}, so choose a shorter duration.`
+        : "";
+
     return {
       context: nextContext,
-      message: `${selectedWindow.day}'s opening starts at ${selectedWindow.startLabel}. How much time should I reserve? You can choose 30 minutes, 1 hour, 2 hours, or the full opening.`,
+      message: `${selectedWindow.day}'s opening starts at ${selectedWindow.startLabel}.${durationNote} How much time should I reserve? You can choose 30 minutes, 1 hour, 2 hours, or the full opening.`,
       proposal: null,
     };
   }
 
   if (
-    activeContext.confirmationStatus === "awaiting_duration" &&
+    activeContext.state === "awaiting_duration" &&
     activeContext.pendingProposal
   ) {
     const startMinutes = parseStartTimeToMinutes(
@@ -1999,16 +2308,27 @@ export function advanceAssistantSchedulingConversation({
       : parseDurationMinutes(prompt);
 
     if (!requestedDuration) {
+      const pendingQuestion =
+        "How much time should I reserve? Choose 30 minutes, 1 hour, 2 hours, or the full opening.";
+
       return {
-        context: activeContext,
-        message: "How much time should I reserve? Choose 30 minutes, 1 hour, 2 hours, or the full opening.",
+        context: {
+          ...activeContext,
+          lastUpdatedAt: now,
+          pendingQuestion,
+        },
+        message: pendingQuestion,
         proposal: null,
       };
     }
 
     if (maximumDurationMinutes !== null && requestedDuration > maximumDurationMinutes) {
       return {
-        context: activeContext,
+        context: {
+          ...activeContext,
+          lastUpdatedAt: now,
+          pendingQuestion: "Choose a shorter duration that fits this opening.",
+        },
         message: `That opening can fit up to ${formatEstimatedHours(
           maximumDurationMinutes / 60,
         )}. How much of it should I reserve?`,
@@ -2032,8 +2352,12 @@ export function advanceAssistantSchedulingConversation({
       context: {
         ...activeContext,
         confirmationStatus: "ready_for_review",
+        lastUpdatedAt: now,
+        maximumDurationMinutes,
         pendingProposal: proposal,
+        pendingQuestion: null,
         requestedDurationMinutes: requestedDuration,
+        state: "awaiting_apply",
       },
       message: `I kept ${day} at ${formatMinutes(
         startMinutes ?? 0,
@@ -2041,6 +2365,22 @@ export function advanceAssistantSchedulingConversation({
         requestedDuration / 60,
       )}. Review the exact block below before applying it.`,
       proposal,
+    };
+  }
+
+  if (
+    activeContext.state === "awaiting_apply" &&
+    isPositiveSchedulingConfirmation(prompt)
+  ) {
+    return {
+      context: {
+        ...activeContext,
+        lastUpdatedAt: now,
+        pendingQuestion: null,
+      },
+      message:
+        "The block is ready for review. Use Apply on the suggestion card to save it; nothing is added until you do.",
+      proposal: activeContext.pendingProposal,
     };
   }
 

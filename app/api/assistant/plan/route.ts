@@ -44,6 +44,14 @@ const maxRecentMessageLength = 1200;
 const defaultOpenAiModel = "gpt-4o-mini";
 let openAiClient: OpenAI | null = null;
 
+function getAssistantModel() {
+  return (
+    process.env.OPENAI_ASSISTANT_MODEL?.trim() ||
+    process.env.AI_MODEL?.trim() ||
+    defaultOpenAiModel
+  );
+}
+
 type AssistantChatHistoryItem = {
   role: "assistant" | "user";
   content: string;
@@ -154,8 +162,59 @@ const assistantResponseJsonSchema = {
         ],
       },
     },
+    turn: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        responseText: { type: "string" },
+        intent: {
+          type: "string",
+          enum: [
+            "question",
+            "analysis",
+            "planning_change",
+            "sync",
+            "open_time",
+            "greeting",
+            "vague",
+          ],
+        },
+        workflowTransition: {
+          type: "string",
+          enum: ["none", "ask_clarification", "propose_actions"],
+        },
+        extracted: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string" },
+            date: { type: "string" },
+            day: { type: "string" },
+            startTime: { type: "string" },
+            durationMinutes: { type: "number" },
+          },
+          required: ["title", "date", "day", "startTime", "durationMinutes"],
+        },
+        missingFields: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["title", "date", "day", "startTime", "duration"],
+          },
+        },
+        actionCardReady: { type: "boolean" },
+      },
+      required: [
+        "responseText",
+        "intent",
+        "workflowTransition",
+        "extracted",
+        "missingFields",
+        "actionCardReady",
+      ],
+    },
   },
-  required: ["message", "suggestions"],
+  required: ["message", "suggestions", "turn"],
 };
 
 function getErrorMessage(error: unknown) {
@@ -462,6 +521,10 @@ function createAiPrompt(
   return [
     "You are Schedule Builder's friendly planning assistant.",
     "Return JSON only matching the provided schema.",
+    "Classify the latest turn in turn.intent and report extracted scheduling fields, missingFields, and actionCardReady.",
+    "Set actionCardReady true only for a clear planning_change request with every required field needed by the proposed action.",
+    "Do not calculate availability, conflicts, or open windows. Use only the deterministic schedule data provided below.",
+    "If a required field is missing, use workflowTransition ask_clarification, list the missing field, set actionCardReady false, and return zero suggestions.",
     "Return a short, natural plain-language message first, then only the strongest reviewable planning suggestions.",
     "Sound like a helpful planning coach, not a system report.",
     "Do not repeat the same opening phrase every time.",
@@ -853,7 +916,7 @@ async function createOpenAiSuggestions(
 
   const client = getOpenAiClient(apiKey);
   const response = await client.responses.create({
-    model: process.env.AI_MODEL || defaultOpenAiModel,
+    model: getAssistantModel(),
     instructions:
       "You generate safe, structured planning suggestions for a project scheduling app. Output JSON only and never suggest destructive actions.",
     input: createAiPrompt(prompt, context, profile, recentMessages),
@@ -876,10 +939,15 @@ async function createOpenAiSuggestions(
   const parsed = JSON.parse(outputText) as {
     message?: unknown;
     suggestions?: unknown;
+    turn?: {
+      actionCardReady?: unknown;
+      responseText?: unknown;
+    };
   };
+  const actionCardReady = parsed.turn?.actionCardReady === true;
   const suggestions = addScheduledItemConflictWarningsToSuggestions(
     normalizeAssistantSuggestions(
-      parsed.suggestions,
+      actionCardReady ? parsed.suggestions : [],
       assistantPlanningSuggestionTypes as readonly AssistantSuggestionType[],
     ),
     context,
@@ -891,7 +959,10 @@ async function createOpenAiSuggestions(
 
   return {
     message:
-      typeof parsed.message === "string" && parsed.message.trim()
+      typeof parsed.turn?.responseText === "string" &&
+      parsed.turn.responseText.trim()
+        ? parsed.turn.responseText.trim()
+        : typeof parsed.message === "string" && parsed.message.trim()
         ? parsed.message.trim()
         : filteredSuggestions.length > 0
           ? "Here’s the focused version I’d start with. Review the suggestions and only apply the ones that fit."
@@ -921,7 +992,7 @@ async function streamOpenAiAssistantMessage({
 
   const client = getOpenAiClient(apiKey);
   const stream = await client.responses.create({
-    model: process.env.AI_MODEL || defaultOpenAiModel,
+    model: getAssistantModel(),
     instructions:
       "You are a friendly planning coach inside Schedule Builder. Stream plain conversational text only.",
     input: createAssistantMessagePrompt(prompt, context, profile, recentMessages),
