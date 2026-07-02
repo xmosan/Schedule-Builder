@@ -9,6 +9,10 @@ import {
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 import type { WorkShift } from "@/lib/work-schedule";
+import {
+  getEffectiveWorkShiftsForDate,
+  type ScheduleException,
+} from "@/lib/schedule-exceptions";
 
 export type CalendarDeadline = {
   deadlineText: string;
@@ -40,6 +44,7 @@ type BuildCalendarDaysOptions = {
   planBlocks: WeeklyPlanBlock[];
   projects: Project[];
   scheduledItems?: ScheduledItem[];
+  scheduleExceptions?: ScheduleException[];
   weekStart?: Date;
   workShifts: WorkShift[];
 };
@@ -399,6 +404,7 @@ export function buildCalendarDays({
   planBlocks,
   projects,
   scheduledItems = [],
+  scheduleExceptions = [],
   weekStart = getCurrentWeekStart(),
   workShifts,
 }: BuildCalendarDaysOptions) {
@@ -427,9 +433,12 @@ export function buildCalendarDays({
         return first.projectName.localeCompare(second.projectName);
       });
 
-    const dayWorkShifts = workShifts
-      .filter((shift) => shift.day === weekDate.day)
-      .sort((first, second) => first.startTime.localeCompare(second.startTime));
+    const dayWorkShifts = getEffectiveWorkShiftsForDate(
+      workShifts,
+      scheduleExceptions,
+      weekDate.isoDate,
+      weekDate.day,
+    );
     const dayImportedEvents = importedEvents
       .filter((event) => toIsoDate(new Date(event.startsAt)) === weekDate.isoDate)
       .sort(
@@ -488,6 +497,7 @@ export function buildCalendarMonth({
   planBlocks,
   projects,
   scheduledItems = [],
+  scheduleExceptions = [],
   weekStart = getCurrentWeekStart(),
   workShifts,
 }: BuildCalendarMonthOptions) {
@@ -528,9 +538,12 @@ export function buildCalendarMonth({
           })
       : [];
 
-    const dayWorkShifts = workShifts
-      .filter((shift) => shift.day === monthDay.day)
-      .sort((first, second) => first.startTime.localeCompare(second.startTime));
+    const dayWorkShifts = getEffectiveWorkShiftsForDate(
+      workShifts,
+      scheduleExceptions,
+      monthDay.isoDate,
+      monthDay.day,
+    );
     const dayImportedEvents = importedEvents
       .filter((event) => toIsoDate(new Date(event.startsAt)) === monthDay.isoDate)
       .sort(

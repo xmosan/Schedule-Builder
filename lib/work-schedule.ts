@@ -8,6 +8,10 @@ export type WorkShift = {
   location: string;
   notes: string;
   recurring: boolean;
+  exceptionDate?: string;
+  exceptionId?: string;
+  exceptionType?: "modify_shift" | "extra_shift" | "blocked_time";
+  isException?: boolean;
 };
 
 export type WorkShiftDraft = {

@@ -12,6 +12,11 @@ import {
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 import { type WorkShift } from "@/lib/work-schedule";
+import {
+  getEffectiveWorkShiftsForDate,
+  type ScheduleException,
+} from "@/lib/schedule-exceptions";
+import type { Project } from "@/lib/projects";
 
 const dayStartDefault = 8 * 60;
 const dayEndDefault = 22 * 60;
@@ -138,6 +143,17 @@ export type AssistantPendingTimeBlockProposal = {
   title: string;
 };
 
+export type AssistantPendingWorkExceptionProposal = {
+  date: string;
+  exceptionType: "modify_shift";
+  originalEndTime: string;
+  originalStartTime: string;
+  overrideEndTime: string;
+  overrideStartTime: string;
+  relatedWorkShiftId: string;
+  title: string;
+};
+
 export type AssistantSchedulingContext = {
   candidateWindows: AssistantOpenWindow[];
   confirmationStatus:
@@ -151,6 +167,7 @@ export type AssistantSchedulingContext = {
   maximumDurationMinutes: number | null;
   pendingQuestion: string | null;
   pendingProposal: AssistantPendingTimeBlockProposal | null;
+  pendingWorkException: AssistantPendingWorkExceptionProposal | null;
   purpose: string;
   requestedDurationMinutes: number | null;
   selectedDate: string | null;
@@ -260,6 +277,11 @@ export function normalizeAssistantSchedulingContext(
       candidate.pendingProposal !== null
         ? candidate.pendingProposal
         : null,
+    pendingWorkException:
+      typeof candidate.pendingWorkException === "object" &&
+      candidate.pendingWorkException !== null
+        ? candidate.pendingWorkException
+        : null,
     purpose: candidate.purpose.trim().slice(0, 180),
     requestedDurationMinutes:
       typeof candidate.requestedDurationMinutes === "number" &&
@@ -286,6 +308,8 @@ export function normalizeAssistantSchedulingContext(
 
 export type AssistantScheduleAnalysisInput = {
   importedCalendarEvents: ImportedCalendarEvent[];
+  projects?: Project[];
+  scheduleExceptions?: ScheduleException[];
   scheduledItems: ScheduledItem[];
   timezone?: string;
   weekStartDate?: string;
@@ -1302,11 +1326,21 @@ export function buildNormalizedScheduleTimeline({
   weekStartDate,
   weeklyPlanBlocks,
   workShifts,
+  scheduleExceptions = [],
 }: AssistantScheduleAnalysisInput) {
   const weekStart = getWeekStart(weekStartDate, timezone);
   const commitments: NormalizedScheduleCommitment[] = [];
 
-  workShifts.forEach((shift) => {
+  weekDays.forEach((day) => {
+    const date = getDateScopeForDay(day, weekStart).date;
+    const effectiveShifts = getEffectiveWorkShiftsForDate(
+      workShifts,
+      scheduleExceptions,
+      date,
+      day,
+    );
+
+    effectiveShifts.forEach((shift) => {
     const startMinutes = parseStartTimeToMinutes(shift.startTime);
     const rawEndMinutes = parseStartTimeToMinutes(shift.endTime);
 
@@ -1316,8 +1350,6 @@ export function buildNormalizedScheduleTimeline({
 
     const endMinutes =
       rawEndMinutes <= startMinutes ? rawEndMinutes + 1440 : rawEndMinutes;
-    const date = getDateScopeForDay(shift.day, weekStart).date;
-
     commitments.push(
       ...addCommitmentSegments({
         baseDate: date,
@@ -1325,12 +1357,13 @@ export function buildNormalizedScheduleTimeline({
         commitmentType: "work_shift",
         endMinutes,
         source: "work_shift",
-        sourceLabel: "Work shift",
+        sourceLabel: shift.isException ? "Work shift · updated for this date" : "Work shift",
         startMinutes,
         timed: true,
         title: shift.location ? `Work shift at ${shift.location}` : "Work shift",
       }),
     );
+    });
   });
 
   weeklyPlanBlocks.forEach((block) => {
@@ -2019,6 +2052,241 @@ export function createDeterministicScheduleAnswer({
   return createAvailabilityAnswer({ input, loadWarning, prompt, recentMessages });
 }
 
+function parseClockTimesFromPrompt(prompt: string) {
+  return [...prompt.matchAll(/\b(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)?\b/gi)]
+    .map((match) => parseTimeMatch(match))
+    .filter((minutes): minutes is number => minutes !== null);
+}
+
+function hasEarlyDepartureSchedulingIntent(prompt: string) {
+  return (
+    /\b(?:leav(?:e|ing)|head(?:ing)?)\s+work\s+early\b/i.test(prompt) &&
+    /\btoday\b/i.test(prompt) &&
+    /\b(?:add|schedule|put|block|plug)\b/i.test(prompt)
+  );
+}
+
+function getMsaPlanningDetails(projects: Project[] = []) {
+  const matches = projects.filter((project) => {
+    const searchable = `${project.name} ${project.nextAction}`.toLowerCase();
+    return !project.completed && /\bmsa\b/i.test(searchable);
+  });
+
+  if (matches.length === 1) {
+    return {
+      details: matches[0].nextAction || "Work on the current MSA priority.",
+      title: matches[0].name,
+    };
+  }
+
+  return {
+    details: "Work on the current MSA priority.",
+    title: "MSA work",
+  };
+}
+
+function createEarlyDepartureSchedulingTurn({
+  input,
+  prompt,
+}: {
+  input: AssistantScheduleAnalysisInput;
+  prompt: string;
+}): AssistantSchedulingConversationTurn | null {
+  if (!hasEarlyDepartureSchedulingIntent(prompt)) {
+    return null;
+  }
+
+  const timezone = input.timezone ?? getDefaultTimeZone();
+  const today = getIsoDateInTimeZone(new Date(), timezone);
+  const todayDate = parseIsoDate(today);
+  const todayDay = todayDate ? getDayFromDate(todayDate) : null;
+  const times = parseClockTimesFromPrompt(prompt);
+  const earlyEndMinutes = times[0] ?? null;
+  const requestedStartMinutes = times[1] ?? null;
+
+  if (!todayDay || earlyEndMinutes === null || requestedStartMinutes === null) {
+    return null;
+  }
+
+  const relatedShift = input.workShifts.find((shift) => {
+    const shiftStart = parseStartTimeToMinutes(shift.startTime);
+    const shiftEnd = parseStartTimeToMinutes(shift.endTime);
+    return (
+      shift.day === todayDay &&
+      shiftStart !== null &&
+      shiftEnd !== null &&
+      shiftStart < earlyEndMinutes &&
+      shiftEnd > earlyEndMinutes
+    );
+  });
+
+  if (!relatedShift) {
+    return {
+      context: {
+        candidateWindows: [],
+        confirmationStatus: "awaiting_window_selection",
+        intent: "create_time_block",
+        lastUpdatedAt: new Date().toISOString(),
+        maximumDurationMinutes: null,
+        pendingProposal: null,
+        pendingQuestion: null,
+        pendingWorkException: null,
+        purpose: "MSA work",
+        requestedDurationMinutes: null,
+        selectedDate: today,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "failed",
+      },
+      message:
+        "I couldn’t find a recurring work shift for today to shorten. Check Work Schedule, then try this request again.",
+      proposal: null,
+    };
+  }
+
+  const temporaryException: ScheduleException = {
+    id: "pending-early-departure",
+    date: today,
+    exceptionType: "modify_shift",
+    relatedWorkShiftId: relatedShift.id,
+    originalStartTime: relatedShift.startTime,
+    originalEndTime: relatedShift.endTime,
+    overrideStartTime: relatedShift.startTime,
+    overrideEndTime: minutesToTimeInput(earlyEndMinutes),
+    title: "Leave work early",
+    notes: "Drafted by the Assistant for review.",
+    createdBy: "assistant_approved",
+  };
+  const commitments = buildNormalizedScheduleTimeline({
+    ...input,
+    scheduleExceptions: [
+      ...(input.scheduleExceptions ?? []),
+      temporaryException,
+    ],
+  });
+  const directBlocker = findBlockersForRange({
+    commitments,
+    date: today,
+    endMinutes: requestedStartMinutes + 1,
+    isPointCheck: true,
+    startMinutes: requestedStartMinutes,
+  }).find((commitment) => commitment.source !== "work_shift");
+
+  if (directBlocker) {
+    return {
+      context: {
+        candidateWindows: [],
+        confirmationStatus: "awaiting_window_selection",
+        intent: "create_time_block",
+        lastUpdatedAt: new Date().toISOString(),
+        maximumDurationMinutes: null,
+        pendingProposal: null,
+        pendingQuestion: null,
+        pendingWorkException: {
+          date: temporaryException.date,
+          exceptionType: "modify_shift",
+          originalEndTime: temporaryException.originalEndTime ?? relatedShift.endTime,
+          originalStartTime:
+            temporaryException.originalStartTime ?? relatedShift.startTime,
+          overrideEndTime: temporaryException.overrideEndTime ?? relatedShift.endTime,
+          overrideStartTime:
+            temporaryException.overrideStartTime ?? relatedShift.startTime,
+          relatedWorkShiftId: relatedShift.id,
+          title: temporaryException.title,
+        },
+        purpose: "MSA work",
+        requestedDurationMinutes: null,
+        selectedDate: today,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: minutesToTimeInput(requestedStartMinutes),
+        state: "failed",
+      },
+      message: `Leaving work early would free the afternoon, but ${formatCommitment(
+        directBlocker,
+      )} already covers ${formatMinutes(requestedStartMinutes)}. Choose another time and I’ll keep the one-day work change in the draft.`,
+      proposal: null,
+    };
+  }
+
+  const nextCommitmentStart = commitments
+    .filter(
+      (commitment) =>
+        commitment.date === today &&
+        commitment.startMinutes !== null &&
+        commitment.startMinutes > requestedStartMinutes,
+    )
+    .map((commitment) => commitment.startMinutes as number)
+    .sort((first, second) => first - second)[0];
+  const endMinutes = Math.min(nextCommitmentStart ?? dayEndDefault, dayEndDefault);
+  const candidateWindow = createAssistantOpenWindow({
+    date: today,
+    day: todayDay,
+    endMinutes,
+    startMinutes: requestedStartMinutes,
+  });
+  const planningDetails = getMsaPlanningDetails(input.projects);
+  const requestedDurationMinutes = parseDurationMinutes(prompt);
+  const durationFits =
+    requestedDurationMinutes !== null &&
+    requestedDurationMinutes <= candidateWindow.durationMinutes;
+  const proposal: AssistantPendingTimeBlockProposal = {
+    actionType: "create_time_block",
+    date: today,
+    details: planningDetails.details,
+    durationMinutes: durationFits ? requestedDurationMinutes : null,
+    selectedWindowEnd: minutesToTimeInput(endMinutes),
+    sourceConversationId: null,
+    startTime: minutesToTimeInput(requestedStartMinutes),
+    status: durationFits ? "ready_for_review" : "needs_duration",
+    title: planningDetails.title,
+  };
+  const pendingWorkException: AssistantPendingWorkExceptionProposal = {
+    date: today,
+    exceptionType: "modify_shift",
+    originalEndTime: relatedShift.endTime,
+    originalStartTime: relatedShift.startTime,
+    overrideEndTime: minutesToTimeInput(earlyEndMinutes),
+    overrideStartTime: relatedShift.startTime,
+    relatedWorkShiftId: relatedShift.id,
+    title: "Leave work early",
+  };
+  const context: AssistantSchedulingContext = {
+    candidateWindows: [candidateWindow],
+    confirmationStatus: durationFits ? "ready_for_review" : "awaiting_duration",
+    intent: "create_time_block",
+    lastUpdatedAt: new Date().toISOString(),
+    maximumDurationMinutes: candidateWindow.durationMinutes,
+    pendingProposal: proposal,
+    pendingQuestion: durationFits ? null : "How much time should I reserve?",
+    pendingWorkException,
+    purpose: planningDetails.title,
+    requestedDurationMinutes: durationFits ? requestedDurationMinutes : null,
+    selectedDate: today,
+    selectedWindowEnd: proposal.selectedWindowEnd,
+    selectedWindowId: candidateWindow.id,
+    selectedWindowStart: proposal.startTime,
+    state: durationFits ? "awaiting_apply" : "awaiting_duration",
+  };
+
+  return {
+    context,
+    message: durationFits
+      ? `I drafted two linked changes for today: shorten your work shift to ${formatMinutes(
+          earlyEndMinutes,
+        )}, then place ${planningDetails.title} at ${formatMinutes(
+          requestedStartMinutes,
+        )}. Review both before applying.`
+      : `Since you’re leaving work at ${formatMinutes(
+          earlyEndMinutes,
+        )} today, I can draft a one-day work exception and place ${planningDetails.title} at ${formatMinutes(
+          requestedStartMinutes,
+        )}. How much time should I reserve?`,
+    proposal: durationFits ? proposal : null,
+  };
+}
+
 export function advanceAssistantSchedulingConversation({
   activeContext,
   input,
@@ -2035,6 +2303,15 @@ export function advanceAssistantSchedulingConversation({
   const now = new Date().toISOString();
 
   if (!activeContext) {
+    const earlyDepartureTurn = createEarlyDepartureSchedulingTurn({
+      input,
+      prompt,
+    });
+
+    if (earlyDepartureTurn) {
+      return earlyDepartureTurn;
+    }
+
     const isOpenTimeRequest = hasOpenTimeQuestionIntent(prompt);
     const isPlacementRequest = hasSchedulingPlacementIntent(prompt);
 
@@ -2077,6 +2354,7 @@ export function advanceAssistantSchedulingConversation({
         maximumDurationMinutes: null,
         originalDateBoundary: request.query.timeBoundary,
         pendingProposal: null,
+        pendingWorkException: null,
         pendingQuestion: null,
         purpose,
         requestedDurationMinutes: request.durationMinutes,
@@ -2107,6 +2385,7 @@ export function advanceAssistantSchedulingConversation({
         maximumDurationMinutes: null,
         originalDateBoundary: request.query.timeBoundary,
         pendingProposal: null,
+        pendingWorkException: null,
         pendingQuestion,
         purpose,
         requestedDurationMinutes: request.durationMinutes,
@@ -2147,6 +2426,7 @@ export function advanceAssistantSchedulingConversation({
         lastUpdatedAt: now,
         maximumDurationMinutes: null,
         pendingProposal: null,
+        pendingWorkException: null,
         pendingQuestion,
         requestedDurationMinutes: null,
         selectedDate: null,

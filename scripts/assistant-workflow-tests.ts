@@ -6,6 +6,16 @@ import {
   type AssistantScheduleAnalysisInput,
   type AssistantSchedulingConversationTurn,
 } from "../lib/assistant-schedule-analysis";
+import { getCurrentWeekStart } from "../lib/calendar";
+import { weekDays } from "../lib/weekly-plan";
+
+function toIsoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
 
 const emptyWeek: AssistantScheduleAnalysisInput = {
   importedCalendarEvents: [],
@@ -111,8 +121,62 @@ function runUnavailableAndBoundaryCases() {
   assert.doesNotMatch(boundaryAnswer, /Friday:/i);
 }
 
+function runEarlyDepartureWorkflow() {
+  const now = new Date();
+  const today = toIsoDate(now);
+  const day = weekDays[now.getDay() === 0 ? 6 : now.getDay() - 1];
+  const input: AssistantScheduleAnalysisInput = {
+    ...emptyWeek,
+    projects: [
+      {
+        id: 42,
+        name: "MSA",
+        category: "Growth",
+        priority: "High",
+        deadline: "",
+        nextAction: "Prepare the next MSA deliverable",
+        weeklyHours: 2,
+        completed: false,
+      },
+    ],
+    weekStartDate: toIsoDate(getCurrentWeekStart(now)),
+    workShifts: [
+      {
+        id: "today-work",
+        day,
+        startTime: "08:00",
+        endTime: "18:00",
+        location: "",
+        notes: "",
+        recurring: true,
+      },
+    ],
+  };
+  const initial = advance(
+    "I am leaving work early today, around 1:30. Can you add to my schedule the work I need to do for MSA at around 2:30?",
+    null,
+    input,
+  );
+
+  assert.equal(initial.context.state, "awaiting_duration");
+  assert.equal(initial.context.pendingWorkException?.date, today);
+  assert.equal(initial.context.pendingWorkException?.overrideEndTime, "13:30");
+  assert.equal(initial.context.pendingProposal?.startTime, "14:30");
+  assert.match(initial.message, /How much time/i);
+
+  const stillMissing = advance("sure", initial, input);
+  assert.equal(stillMissing.context.state, "awaiting_duration");
+
+  const ready = advance("one hour", stillMissing, input);
+  assert.equal(ready.context.state, "awaiting_apply");
+  assert.equal(ready.context.pendingWorkException?.relatedWorkShiftId, "today-work");
+  assert.equal(ready.proposal?.title, "MSA");
+  assert.equal(ready.proposal?.durationMinutes, 60);
+}
+
 runExactMsaWorkflow();
 runCorrectionAndValidationCases();
 runUnavailableAndBoundaryCases();
+runEarlyDepartureWorkflow();
 
-console.log("Assistant workflow tests passed (3 suites, 18 assertions).\n");
+console.log("Assistant workflow tests passed (4 suites, 28 assertions).\n");

@@ -2,7 +2,7 @@
 
 import type { Session, SupabaseClient, User } from "@supabase/supabase-js";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AuthPanel } from "@/components/auth/auth-panel";
 import { OnboardingPanel } from "@/components/onboarding/onboarding-panel";
@@ -1647,6 +1647,7 @@ function SettingsQuickLinksCard({
 
 export function ProjectDashboard() {
   const pathname = usePathname();
+  const router = useRouter();
   const currentSection = getSchedulerSection(pathname);
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
@@ -1679,6 +1680,23 @@ export function ProjectDashboard() {
     useState<GoogleDashboardStatus | null>(null);
   const [googleSyncStatus, setGoogleSyncStatus] =
     useState<GoogleSyncDashboardStatus | null>(null);
+
+  useEffect(() => {
+    if (
+      currentSection === "dashboard" &&
+      authStatus === "signed_in" &&
+      hasLoadedRemoteData &&
+      onboardingStatus === "completed"
+    ) {
+      router.replace("/assistant");
+    }
+  }, [
+    authStatus,
+    currentSection,
+    hasLoadedRemoteData,
+    onboardingStatus,
+    router,
+  ]);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {

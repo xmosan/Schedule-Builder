@@ -32,13 +32,14 @@ import {
   fetchImportedCalendarEventsForUser,
   fetchProjectsForUser,
   fetchScheduledItemsForUser,
+  fetchScheduleExceptionsForUser,
   fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
 } from "@/lib/supabase/scheduler";
 
 export const dynamic = "force-dynamic";
 
-const maxPromptLength = 2000;
+const maxPromptLength = 12000;
 const maxRecentMessages = 8;
 const maxRecentMessageLength = 1200;
 const defaultOpenAiModel = "gpt-4o-mini";
@@ -132,8 +133,25 @@ const assistantResponseJsonSchema = {
             ],
           },
           estimatedHours: { type: "number" },
+          exceptionDate: { type: "string" },
+          exceptionType: {
+            type: "string",
+            enum: [
+              "modify_shift",
+              "cancel_shift",
+              "extra_shift",
+              "blocked_time",
+              "available_override",
+              "",
+            ],
+          },
+          originalEndTime: { type: "string" },
+          originalStartTime: { type: "string" },
+          overrideEndTime: { type: "string" },
+          overrideStartTime: { type: "string" },
           plannedTask: { type: "string" },
           proposedNextAction: { type: "string" },
+          relatedWorkShiftId: { type: "string" },
           weeklyHours: { type: "number" },
         },
         required: [
@@ -156,8 +174,15 @@ const assistantResponseJsonSchema = {
           "conflictWarnings",
           "day",
           "estimatedHours",
+          "exceptionDate",
+          "exceptionType",
+          "originalEndTime",
+          "originalStartTime",
+          "overrideEndTime",
+          "overrideStartTime",
           "plannedTask",
           "proposedNextAction",
+          "relatedWorkShiftId",
           "weeklyHours",
         ],
       },
@@ -417,6 +442,7 @@ async function loadPlanningContext(
     workShiftsResult,
     importedEventsResult,
     scheduledItemsResult,
+    scheduleExceptionsResult,
     googleSyncConnectionResult,
     googleSyncRowsResult,
   ] = await Promise.all([
@@ -426,6 +452,7 @@ async function loadPlanningContext(
     fetchWorkShiftsForUser(supabase, userId),
     fetchImportedCalendarEventsForUser(supabase, userId),
     fetchScheduledItemsForUser(supabase, userId),
+    fetchScheduleExceptionsForUser(supabase, userId),
     supabase
       .from("google_calendar_connections")
       .select("sync_enabled, sync_calendar_name")
@@ -446,6 +473,7 @@ async function loadPlanningContext(
     workShiftsResult.error,
     importedEventsResult.error,
     scheduledItemsResult.error,
+    scheduleExceptionsResult.error,
     googleSyncConnectionResult.error,
     googleSyncRowsResult.error,
   ].filter(Boolean);
@@ -489,6 +517,10 @@ async function loadPlanningContext(
             : false,
         scheduledItems:
           scheduledItemsResult.error == null ? scheduledItemsResult.data : [],
+        scheduleExceptions:
+          scheduleExceptionsResult.error == null
+            ? scheduleExceptionsResult.data
+            : [],
         timezone,
         weekStartDate: syncWeekStartDate,
       },
@@ -511,6 +543,7 @@ function createAiPrompt(
 ) {
   const scheduleAnalysis = createAssistantScheduleAnalysisSnapshot({
     importedCalendarEvents: context.importedCalendarEvents,
+    scheduleExceptions: context.scheduleExceptions,
     scheduledItems: context.scheduledItems,
     timezone: context.timezone,
     weekStartDate: context.googleSync.currentWeekStart,
@@ -542,6 +575,7 @@ function createAiPrompt(
     "Do not claim anything was saved.",
     "The app can create new projects, update project next actions, and create weekly blocks only after the user applies a reviewed action card.",
     "The app can also create exact-date standalone tasks and appointments only after the user applies a reviewed action card.",
+    "The app can create date-specific work-schedule exceptions only after the user applies a reviewed action card. Never edit the recurring shift for a one-day change.",
     "The app can also update existing project fields after review: name, category, priority, deadline, next action, and weekly hours.",
     "If the user asks you to create, add, draft, or save a project, return a new_project suggestion card. Do not say you cannot create or save it; say you drafted it for review and the user can apply it.",
     "Do not create a new_project card unless the user explicitly asks for a project, goal, initiative, class, course, or work project.",
@@ -571,7 +605,7 @@ function createAiPrompt(
     "When suggesting new weekly blocks, prefer evenings, Friday, Saturday, Sunday, or flexible blocks when weekday work shifts make daytime unavailable.",
     "If the user asks to plan the week, find open time, or balance work and school, mention saved work shifts and imported calendar commitments naturally when they exist.",
     "Exact-dated deadlines can be placed on the calendar. Vague deadlines need exact dates and should not be placed on a month grid.",
-    "Allowed suggestion types only: new_project, update_project, suggested_scheduled_item, suggested_weekly_block, suggested_next_action, workload_warning, missing_deadline_warning, unclear_project_warning.",
+    "Allowed suggestion types only: new_project, update_project, suggested_scheduled_item, suggested_weekly_block, suggested_next_action, schedule_exception, workload_warning, missing_deadline_warning, unclear_project_warning.",
     "Every suggestion must include id, type, title, description, confidence, rationale, and severity.",
     "For optional fields that do not apply, return an empty string, 0, or an empty array for conflictWarnings.",
     "For new_project cards, include projectName, category, priority, deadline, proposedNextAction, and weeklyHours.",
@@ -579,6 +613,7 @@ function createAiPrompt(
     "For suggested_scheduled_item cards, include itemType, title, plannedTask, itemDate, startTime, estimatedHours, location, and conflictWarnings.",
     "For suggested_weekly_block cards, include projectName, day, estimatedHours, and plannedTask. projectName may be an existing project name or a standalone task/appointment title.",
     "For suggested_next_action cards, include projectName and proposedNextAction.",
+    "For schedule_exception cards, include exceptionType, exceptionDate, relatedWorkShiftId, originalStartTime, originalEndTime, overrideStartTime, and overrideEndTime.",
     "",
     "Recent conversation:",
     JSON.stringify(recentMessages),
@@ -751,6 +786,7 @@ function createAssistantMessagePrompt(
 ) {
   const scheduleAnalysis = createAssistantScheduleAnalysisSnapshot({
     importedCalendarEvents: context.importedCalendarEvents,
+    scheduleExceptions: context.scheduleExceptions,
     scheduledItems: context.scheduledItems,
     timezone: context.timezone,
     weekStartDate: context.googleSync.currentWeekStart,
@@ -1104,6 +1140,8 @@ export async function POST(request: NextRequest) {
 
   const scheduleInput = {
     importedCalendarEvents: context.importedCalendarEvents,
+    projects: context.projects,
+    scheduleExceptions: context.scheduleExceptions,
     scheduledItems: context.scheduledItems,
     timezone: context.timezone,
     weekStartDate: context.googleSync.currentWeekStart,
@@ -1134,7 +1172,7 @@ export async function POST(request: NextRequest) {
             ).padStart(2, "0")}` === proposal.startTime,
         )
       : null;
-    const suggestions =
+    const timeBlockSuggestions =
       proposal?.status === "ready_for_review" &&
       proposal.durationMinutes &&
       selectedWindow
@@ -1168,6 +1206,33 @@ export async function POST(request: NextRequest) {
             },
           ]
         : [];
+    const workException = schedulingContext.pendingWorkException;
+    const suggestions = [
+      ...(workException && timeBlockSuggestions.length > 0
+        ? [
+            {
+              id: `schedule-exception-${workException.date}-${workException.relatedWorkShiftId}`,
+              type: "schedule_exception" as const,
+              title: "Update today’s work shift",
+              description: `End work at ${workException.overrideEndTime} on ${workException.date}. This applies to this date only.`,
+              confidence: 1,
+              summary: "Create a one-day exception without changing the recurring shift.",
+              rationale:
+                "The later time block depends on today’s work shift ending early.",
+              severity: "important" as const,
+              exceptionDate: workException.date,
+              exceptionType: workException.exceptionType,
+              originalEndTime: workException.originalEndTime,
+              originalStartTime: workException.originalStartTime,
+              overrideEndTime: workException.overrideEndTime,
+              overrideStartTime: workException.overrideStartTime,
+              relatedWorkShiftId: workException.relatedWorkShiftId,
+              conflictWarnings: [] as string[],
+            },
+          ]
+        : []),
+      ...timeBlockSuggestions,
+    ];
     const response: AssistantPlanReviewResponse = {
       actions: suggestions,
       assistantMessage: schedulingTurn.message,

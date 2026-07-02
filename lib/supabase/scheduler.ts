@@ -29,6 +29,11 @@ import {
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 import type { WorkShift, WorkShiftDraft } from "@/lib/work-schedule";
+import type {
+  ScheduleException,
+  ScheduleExceptionDraft,
+  ScheduleExceptionType,
+} from "@/lib/schedule-exceptions";
 
 type SchedulerSyncError = Error | PostgrestError;
 
@@ -76,6 +81,23 @@ type WorkShiftRow = {
   location: string | null;
   notes: string | null;
   recurring: boolean;
+};
+
+type ScheduleExceptionRow = {
+  id: string;
+  user_id: string;
+  date: string;
+  exception_type: ScheduleExceptionType;
+  related_work_shift_id: string | null;
+  original_start_time: string | null;
+  original_end_time: string | null;
+  override_start_time: string | null;
+  override_end_time: string | null;
+  title: string | null;
+  notes: string | null;
+  created_by: "user" | "assistant_approved";
+  inserted_at: string;
+  updated_at: string;
 };
 
 type ImportedCalendarEventRow = {
@@ -164,6 +186,47 @@ function mapProjectRowToProject(row: ProjectRow): Project {
     nextAction: row.next_action,
     weeklyHours: row.weekly_hours,
     completed: row.completed,
+  };
+}
+
+function normalizeDatabaseTime(value: string | null) {
+  return value ? normalizeStartTime(value) : null;
+}
+
+function mapScheduleExceptionRow(row: ScheduleExceptionRow): ScheduleException {
+  return {
+    id: row.id,
+    date: row.date,
+    exceptionType: row.exception_type,
+    relatedWorkShiftId: row.related_work_shift_id,
+    originalStartTime: normalizeDatabaseTime(row.original_start_time),
+    originalEndTime: normalizeDatabaseTime(row.original_end_time),
+    overrideStartTime: normalizeDatabaseTime(row.override_start_time),
+    overrideEndTime: normalizeDatabaseTime(row.override_end_time),
+    title: row.title ?? "",
+    notes: row.notes ?? "",
+    createdBy: row.created_by,
+    insertedAt: row.inserted_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapScheduleExceptionDraftToRow(
+  userId: string,
+  draft: ScheduleExceptionDraft,
+) {
+  return {
+    user_id: userId,
+    date: draft.date,
+    exception_type: draft.exceptionType,
+    related_work_shift_id: draft.relatedWorkShiftId,
+    original_start_time: draft.originalStartTime || null,
+    original_end_time: draft.originalEndTime || null,
+    override_start_time: draft.overrideStartTime || null,
+    override_end_time: draft.overrideEndTime || null,
+    title: draft.title,
+    notes: draft.notes,
+    created_by: draft.createdBy,
   };
 }
 
@@ -777,6 +840,81 @@ export async function deleteWorkShiftForUser(
       .eq("user_id", userId)
       .eq("id", shiftId),
     "Removing work shift from Supabase",
+  );
+
+  return { error: result.error };
+}
+
+const scheduleExceptionSelect =
+  "id, user_id, date, exception_type, related_work_shift_id, original_start_time, original_end_time, override_start_time, override_end_time, title, notes, created_by, inserted_at, updated_at";
+
+export async function fetchScheduleExceptionsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  options: { endDate?: string; startDate?: string } = {},
+) {
+  let query = supabase
+    .from("schedule_exceptions")
+    .select(scheduleExceptionSelect)
+    .eq("user_id", userId)
+    .order("date", { ascending: true });
+
+  if (options.startDate) {
+    query = query.gte("date", options.startDate);
+  }
+
+  if (options.endDate) {
+    query = query.lte("date", options.endDate);
+  }
+
+  const result = await withSupabaseTimeout(
+    query,
+    "Loading schedule exceptions from Supabase",
+  );
+
+  return {
+    data:
+      result.data?.map((row) =>
+        mapScheduleExceptionRow(row as ScheduleExceptionRow),
+      ) ?? [],
+    error: result.error,
+  };
+}
+
+export async function createScheduleExceptionForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  draft: ScheduleExceptionDraft,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("schedule_exceptions")
+      .insert(mapScheduleExceptionDraftToRow(userId, draft))
+      .select(scheduleExceptionSelect)
+      .single(),
+    "Saving schedule exception to Supabase",
+  );
+
+  return {
+    data: result.data
+      ? mapScheduleExceptionRow(result.data as ScheduleExceptionRow)
+      : null,
+    error: result.error,
+  };
+}
+
+export async function deleteScheduleExceptionForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  exceptionId: string,
+) {
+  const result = await withSupabaseTimeout(
+    supabase
+      .from("schedule_exceptions")
+      .delete()
+      .eq("user_id", userId)
+      .eq("id", exceptionId),
+    "Removing schedule exception from Supabase",
   );
 
   return { error: result.error };

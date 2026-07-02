@@ -59,6 +59,11 @@ import {
   getWorkShiftDurationHours,
   type WorkShift,
 } from "@/lib/work-schedule";
+import {
+  isScheduleExceptionType,
+  type ScheduleException,
+  type ScheduleExceptionType,
+} from "@/lib/schedule-exceptions";
 
 export const assistantSuggestionTypes = [
   "new_project",
@@ -66,6 +71,7 @@ export const assistantSuggestionTypes = [
   "suggested_scheduled_item",
   "suggested_weekly_block",
   "suggested_next_action",
+  "schedule_exception",
   "workload_warning",
   "missing_deadline_warning",
   "unclear_project_warning",
@@ -77,6 +83,7 @@ export const assistantPlanningSuggestionTypes = [
   "suggested_scheduled_item",
   "suggested_weekly_block",
   "suggested_next_action",
+  "schedule_exception",
   "workload_warning",
   "missing_deadline_warning",
   "unclear_project_warning",
@@ -114,6 +121,7 @@ export type AssistantPlanningContext = AssistantContextSummary & {
   importedCalendarEvents: ImportedCalendarEvent[];
   importedEventConflicts: WeeklyPlanImportedEventConflict[];
   projects: Project[];
+  scheduleExceptions: ScheduleException[];
   scheduledItems: ScheduledItem[];
   timezone: string;
   weeklyPlanBlocks: WeeklyPlanBlock[];
@@ -141,8 +149,15 @@ export type AssistantSuggestion = {
   priority?: ProjectPriority;
   day?: WeekDay;
   estimatedHours?: number;
+  exceptionDate?: string;
+  exceptionType?: ScheduleExceptionType;
+  originalEndTime?: string;
+  originalStartTime?: string;
+  overrideEndTime?: string;
+  overrideStartTime?: string;
   plannedTask?: string;
   proposedNextAction?: string;
+  relatedWorkShiftId?: string;
   startTime?: string;
   weeklyHours?: number;
 };
@@ -657,6 +672,29 @@ function normalizeSuggestion(
       candidate.estimatedHours > 0
         ? Math.min(candidate.estimatedHours, 8)
         : undefined,
+    exceptionDate:
+      typeof candidate.exceptionDate === "string"
+        ? normalizeScheduledItemDate(candidate.exceptionDate) ?? undefined
+        : undefined,
+    exceptionType: isScheduleExceptionType(candidate.exceptionType)
+      ? candidate.exceptionType
+      : undefined,
+    originalEndTime:
+      typeof candidate.originalEndTime === "string"
+        ? normalizeStartTime(candidate.originalEndTime) ?? undefined
+        : undefined,
+    originalStartTime:
+      typeof candidate.originalStartTime === "string"
+        ? normalizeStartTime(candidate.originalStartTime) ?? undefined
+        : undefined,
+    overrideEndTime:
+      typeof candidate.overrideEndTime === "string"
+        ? normalizeStartTime(candidate.overrideEndTime) ?? undefined
+        : undefined,
+    overrideStartTime:
+      typeof candidate.overrideStartTime === "string"
+        ? normalizeStartTime(candidate.overrideStartTime) ?? undefined
+        : undefined,
     plannedTask:
       typeof candidate.plannedTask === "string"
         ? candidate.plannedTask.trim().slice(0, 220)
@@ -664,6 +702,10 @@ function normalizeSuggestion(
     proposedNextAction:
       typeof candidate.proposedNextAction === "string"
         ? candidate.proposedNextAction.trim().slice(0, 220)
+        : undefined,
+    relatedWorkShiftId:
+      typeof candidate.relatedWorkShiftId === "string"
+        ? candidate.relatedWorkShiftId.trim().slice(0, 80)
         : undefined,
     startTime:
       typeof candidate.startTime === "string"
@@ -736,6 +778,7 @@ export function createAssistantPlanningContext(
   importedCalendarEvents: ImportedCalendarEvent[] = [],
   googleSyncRows: AssistantGoogleSyncRow[] = [],
   googleSyncOptions: {
+    scheduleExceptions?: ScheduleException[];
     scheduledItems?: ScheduledItem[];
     syncCalendarName?: string | null;
     syncEnabled?: boolean;
@@ -756,6 +799,7 @@ export function createAssistantPlanningContext(
   );
   const deadlineBuckets = getProjectDeadlineBuckets(projects);
   const scheduledItems = googleSyncOptions.scheduledItems ?? [];
+  const scheduleExceptions = googleSyncOptions.scheduleExceptions ?? [];
   const googleSync = createAssistantGoogleSyncContext({
     importedCalendarEvents: externalImportedEvents,
     syncCalendarName: googleSyncOptions.syncCalendarName ?? null,
@@ -783,6 +827,7 @@ export function createAssistantPlanningContext(
     importedCalendarEvents: externalImportedEvents,
     importedEventConflicts,
     projects,
+    scheduleExceptions,
     scheduledItems,
     timezone: googleSyncOptions.timezone ?? "America/Detroit",
     weeklyPlanBlocks,

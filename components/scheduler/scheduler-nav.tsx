@@ -13,9 +13,9 @@ type SchedulerNavItem = {
 
 const desktopNavItems: SchedulerNavItem[] = [
   {
-    href: "/",
-    label: "Dashboard",
-    mobileLabel: "Home",
+    href: "/assistant",
+    label: "Assistant",
+    mobileLabel: "Assistant",
   },
   {
     href: "/projects",
@@ -36,11 +36,6 @@ const desktopNavItems: SchedulerNavItem[] = [
     href: "/work",
     label: "Work Schedule",
     mobileLabel: "Work",
-  },
-  {
-    href: "/assistant",
-    label: "Assistant",
-    mobileLabel: "Assistant",
   },
   {
     href: "/integrations",
@@ -56,9 +51,9 @@ const desktopNavItems: SchedulerNavItem[] = [
 
 const mobileNavItems: SchedulerNavItem[] = [
   {
-    href: "/",
-    label: "Dashboard",
-    mobileLabel: "Home",
+    href: "/assistant",
+    label: "Assistant",
+    mobileLabel: "Assistant",
   },
   {
     href: "/projects",
@@ -81,9 +76,9 @@ const mobileNavItems: SchedulerNavItem[] = [
     mobileLabel: "Work",
   },
   {
-    href: "/assistant",
-    label: "Assistant",
-    mobileLabel: "Assistant",
+    href: "/integrations",
+    label: "Integrations",
+    mobileLabel: "Links",
   },
 ];
 
@@ -102,7 +97,7 @@ export function SchedulerNav() {
     <>
       <div className="panel flex flex-col gap-4 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-5 md:py-4">
         <Link
-          href="/"
+          href="/assistant"
           className="flex min-w-0 items-center gap-3 rounded-[22px] text-brand-ink"
         >
           <div className="rounded-2xl bg-brand-teal/10 p-2.5 text-brand-teal">
@@ -113,7 +108,7 @@ export function SchedulerNav() {
               Schedule Builder
             </p>
             <p className="truncate text-sm font-semibold text-brand-ink sm:text-base">
-              Projects, weekly planning, assistant, and integrations
+              Tell us what you need. Review the plan before anything changes.
             </p>
           </div>
         </Link>

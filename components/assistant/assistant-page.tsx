@@ -126,6 +126,7 @@ const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
   suggested_scheduled_item: "Task / appointment",
   suggested_weekly_block: "Schedule idea",
   suggested_next_action: "Next action",
+  schedule_exception: "One-day work change",
   workload_warning: "Workload note",
   missing_deadline_warning: "Deadline note",
   unclear_project_warning: "Clarity note",
@@ -137,6 +138,7 @@ const suggestionTypeStyles: Record<AssistantSuggestionType, string> = {
   suggested_scheduled_item: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   suggested_weekly_block: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   suggested_next_action: "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
+  schedule_exception: "border-brand-teal/20 bg-brand-teal/10 text-brand-teal",
   workload_warning: "border-[#e7c783] bg-[#fff8e6] text-[#8a5d0a]",
   missing_deadline_warning: "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
   unclear_project_warning: "border-brand-ink/10 bg-brand-ink/5 text-brand-ink/70",
@@ -148,6 +150,7 @@ const suggestionMarkerStyles: Record<AssistantSuggestionType, string> = {
   suggested_scheduled_item: "bg-brand-teal",
   suggested_weekly_block: "bg-brand-teal",
   suggested_next_action: "bg-brand-ocean",
+  schedule_exception: "bg-brand-teal",
   workload_warning: "bg-[#c99725]",
   missing_deadline_warning: "bg-brand-coral",
   unclear_project_warning: "bg-brand-ink/50",
@@ -205,7 +208,8 @@ function isActionableSuggestion(suggestion: AssistantSuggestion) {
     suggestion.type === "update_project" ||
     suggestion.type === "suggested_scheduled_item" ||
     suggestion.type === "suggested_weekly_block" ||
-    suggestion.type === "suggested_next_action"
+    suggestion.type === "suggested_next_action" ||
+    suggestion.type === "schedule_exception"
   );
 }
 
@@ -330,19 +334,57 @@ function getTypingDelay(chunk: string) {
   return Math.max(22, Math.min(42, chunk.length * 4));
 }
 
-function AssistantContextDetails({
+function AssistantWorkspaceContext({
   context,
+  pendingReviewCount,
 }: {
   context?: AssistantContextSummary;
+  pendingReviewCount: number;
 }) {
-  if (!context) return null;
+  if (!context) {
+    return null;
+  }
+
+  const items = [
+    {
+      label: "Work schedule",
+      value:
+        context.workShiftsCount > 0
+          ? `${context.workShiftsCount} shift${context.workShiftsCount === 1 ? "" : "s"} loaded`
+          : "Not added",
+    },
+    {
+      label: "Calendar context",
+      value:
+        context.importedEventsCount > 0
+          ? `${context.importedEventsCount} external event${context.importedEventsCount === 1 ? "" : "s"}`
+          : "No external events",
+    },
+    {
+      label: "This week",
+      value: `${context.weeklyBlocksCount} time block${context.weeklyBlocksCount === 1 ? "" : "s"}`,
+    },
+    {
+      label: "Awaiting review",
+      value: `${pendingReviewCount} change${pendingReviewCount === 1 ? "" : "s"}`,
+    },
+  ];
 
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-brand-ink/5 bg-brand-ink/5 px-3 py-1.5 text-[11px] font-semibold text-brand-ink/60 sm:text-xs">
-      <FolderStackIcon className="h-3.5 w-3.5 text-brand-teal/70 shrink-0" />
-      <span className="truncate">
-        Using your schedule context: {context.activeProjectsCount} projects • {context.plannedWeeklyHours}h planned • {context.weeklyBlocksCount} blocks
-      </span>
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Planning context">
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className="rounded-[18px] border border-brand-ink/7 bg-white/70 px-3 py-2.5"
+        >
+          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+            {item.label}
+          </p>
+          <p className="mt-1 text-xs font-semibold text-brand-ink/72">
+            {item.value}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -402,6 +444,12 @@ function ActionCard({
       ? { label: isWeeklyBlockSuggestion || isScheduledItemSuggestion ? "Details" : "Task", value: suggestion.plannedTask }
       : null,
     suggestion.itemDate ? { label: "Date", value: suggestion.itemDate } : null,
+    suggestion.exceptionDate
+      ? { label: "Applies on", value: formatAssistantDate(suggestion.exceptionDate) }
+      : null,
+    suggestion.overrideEndTime
+      ? { label: "Updated end", value: formatStartTime(suggestion.overrideEndTime) }
+      : null,
     isScheduledItemSuggestion
       ? {
           label: "Time",
@@ -479,6 +527,7 @@ function ActionCard({
         {(suggestion.projectName ||
           suggestion.itemType ||
           suggestion.itemDate ||
+          suggestion.exceptionDate ||
           suggestion.startTime ||
           suggestion.location ||
           suggestion.day ||
@@ -512,6 +561,26 @@ function ActionCard({
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
                 <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Date</span>
                 <span className="mt-0.5 block font-semibold text-brand-ink">{formatAssistantDate(suggestion.itemDate)}</span>
+              </div>
+            )}
+            {suggestion.exceptionDate && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+                  Applies on
+                </span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">
+                  {formatAssistantDate(suggestion.exceptionDate)}
+                </span>
+              </div>
+            )}
+            {suggestion.overrideEndTime && (
+              <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+                  Work ends
+                </span>
+                <span className="mt-0.5 block font-semibold text-brand-ink">
+                  {formatStartTime(suggestion.overrideEndTime)}
+                </span>
               </div>
             )}
             {isScheduledItemSuggestion && (
@@ -858,6 +927,8 @@ function ActionCard({
                       ? suggestion.itemType === "appointment"
                         ? "Add appointment"
                         : "Add task"
+                    : suggestion.type === "schedule_exception"
+                      ? "Apply one-day change"
                     : "Apply"}
               </Button>
               {isEditableSuggestion(suggestion) && (
@@ -914,6 +985,7 @@ function ChatBubble({
   isReviewOpen,
   message,
   onApply,
+  onApplyAll,
   onIgnore,
   onOpenReview,
   onToggleEdit,
@@ -923,6 +995,7 @@ function ChatBubble({
   isReviewOpen: boolean;
   message: ChatMessage;
   onApply: (suggestion: AssistantSuggestion) => void;
+  onApplyAll: (suggestions: AssistantSuggestion[]) => void;
   onIgnore: (suggestionId: string) => void;
   onOpenReview: (messageId: string) => void;
   onToggleEdit: (suggestionId: string) => void;
@@ -1015,13 +1088,25 @@ function ChatBubble({
 
             {isReviewOpen && actionableActions.length > 0 ? (
               <section>
-                <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
-                  <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
-                    Suggested next steps
-                  </h4>
-                  <span className="text-xs text-brand-ink/40">
-                    {actionableActions.length} remaining
-                  </span>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
+                      Suggested next steps
+                    </h4>
+                    <span className="text-xs text-brand-ink/40">
+                      {actionableActions.length} remaining
+                    </span>
+                  </div>
+                  {actionableActions.length > 1 ? (
+                    <Button
+                      className="h-9 rounded-full px-4 text-xs font-semibold"
+                      size="sm"
+                      type="button"
+                      onClick={() => onApplyAll(actionableActions)}
+                    >
+                      Apply all
+                    </Button>
+                  ) : null}
                 </div>
                 <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
                   {actionableActions.map((suggestion, index) => (
@@ -1126,6 +1211,9 @@ export function AssistantPage() {
   const schedulingQuickReplies = getSchedulingQuickReplies(
     activeSchedulingContext,
   );
+  const pendingReviewCount = Object.values(actionStates).filter(
+    (state) => state.status === "pending" || state.status === "error",
+  ).length;
 
   async function clearConversationHistory() {
     setIsClearChatLoading(true);
@@ -1332,7 +1420,7 @@ export function AssistantPage() {
     return finalResponse;
   }
 
-  async function requestApplyAction(suggestion: AssistantSuggestion) {
+  async function requestApplyActions(suggestions: AssistantSuggestion[]) {
     const supabase = getSupabaseBrowserClient();
     const { data, error: sessionError } = await supabase.auth.getSession();
 
@@ -1355,7 +1443,7 @@ export function AssistantPage() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        approvedSuggestions: [suggestion],
+        approvedSuggestions: suggestions,
       }),
     });
 
@@ -1373,6 +1461,10 @@ export function AssistantPage() {
     }
 
     return payload as AssistantApplyResponse;
+  }
+
+  async function requestApplyAction(suggestion: AssistantSuggestion) {
+    return requestApplyActions([suggestion]);
   }
 
   useEffect(() => {
@@ -1991,6 +2083,59 @@ export function AssistantPage() {
     }
   }
 
+  async function applyAllSuggestions(suggestions: AssistantSuggestion[]) {
+    const actionable = suggestions.filter(isActionableSuggestion);
+
+    if (actionable.length === 0) {
+      return;
+    }
+
+    actionable.forEach((suggestion) => {
+      updateActionState(suggestion.id, {
+        message: undefined,
+        status: "applying",
+      });
+    });
+    setIsSubmitting(true);
+
+    try {
+      const response = await requestApplyActions(actionable);
+      setContext(response.context);
+
+      response.results.forEach((result) => {
+        updateActionState(result.suggestionId, {
+          editing: false,
+          message: result.message,
+          result,
+          status: result.status === "applied" ? "applied" : "error",
+        });
+      });
+
+      const appliedCount = response.results.filter(
+        (result) => result.status === "applied",
+      ).length;
+
+      if (appliedCount > 0) {
+        addAssistantNotice(
+          `Applied ${appliedCount} approved ${appliedCount === 1 ? "change" : "changes"}.`,
+        );
+        setActiveSchedulingContext(null);
+        window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+        router.refresh();
+      }
+    } catch (applyError) {
+      const message = getErrorMessage(applyError);
+      actionable.forEach((suggestion) => {
+        updateActionState(suggestion.id, {
+          message,
+          status: "error",
+        });
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   function ignoreSuggestion(suggestionId: string) {
     removeSuggestionAfterAnimation(suggestionId);
   }
@@ -2023,13 +2168,10 @@ export function AssistantPage() {
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink sm:text-2xl">
-                  Planning Assistant
+                  What do you need to get done?
                 </h1>
                 <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-                  Propose blocks; you approve.
-                </p>
-                <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-                  Ask for help planning your week, projects, time blocks, or priorities.
+                  Describe tasks, paste a plan, or ask Schedule Builder to organize your week.
                 </p>
                 <p className="mt-2 text-xs font-semibold text-brand-teal">
                   Nothing is added to your schedule unless you approve it.
@@ -2045,7 +2187,10 @@ export function AssistantPage() {
               </button>
             </div>
             <div className="mt-4">
-              <AssistantContextDetails context={context} />
+              <AssistantWorkspaceContext
+                context={context}
+                pendingReviewCount={pendingReviewCount}
+              />
             </div>
           </section>
         ) : (
@@ -2082,10 +2227,10 @@ export function AssistantPage() {
                     <TargetIcon className="h-6 w-6 text-brand-teal" />
                   </div>
                   <h2 className="mb-2 text-xl font-semibold text-brand-ink sm:text-2xl">
-                    What would you like to plan?
+                    Start with whatever is on your mind.
                   </h2>
                   <p className="mb-8 max-w-md text-sm text-brand-ink/60">
-                    Ask Schedule Builder to organize your week, balance work and projects, or turn goals into time blocks.
+                    Add an assignment, task, workout, meeting, deadline, or paste an existing plan. Nothing changes until you approve it.
                   </p>
                   <div className="flex max-w-lg flex-wrap justify-center gap-2.5">
                     {examplePrompts.map((example) => (
@@ -2111,6 +2256,9 @@ export function AssistantPage() {
                   isReviewOpen={openReviewMessages[message.id] ?? false}
                   message={message}
                   onApply={(suggestion) => void applySuggestion(suggestion)}
+                  onApplyAll={(suggestions) =>
+                    void applyAllSuggestions(suggestions)
+                  }
                   onIgnore={ignoreSuggestion}
                   onOpenReview={(messageId) =>
                     setOpenReviewMessages((current) => ({
@@ -2209,8 +2357,8 @@ export function AssistantPage() {
                       ref={textareaRef}
                       className="min-h-[44px] w-full resize-none bg-transparent px-4 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/40 focus:outline-none sm:min-h-[48px] sm:text-base max-h-[160px] overflow-y-auto"
                       disabled={isBusy}
-                      maxLength={2000}
-                      placeholder="Ask me to plan your week..."
+                      maxLength={12000}
+                      placeholder="Add a task, deadline, meeting, or paste a plan…"
                       rows={1}
                       value={prompt}
                       onChange={(event) => setPrompt(event.target.value)}

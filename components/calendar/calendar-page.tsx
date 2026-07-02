@@ -62,10 +62,12 @@ import {
   createScheduledItemForUser,
   deleteScheduledItemForUser,
   fetchScheduledItemsForUser,
+  fetchScheduleExceptionsForUser,
   fetchWeeklyPlanBlocksForUser,
   fetchWorkShiftsForUser,
   updateScheduledItemForUser,
 } from "@/lib/supabase/scheduler";
+import type { ScheduleException } from "@/lib/schedule-exceptions";
 import { formatEstimatedHours, type WeeklyPlanBlock } from "@/lib/weekly-plan";
 import {
   formatWorkShiftRange,
@@ -563,9 +565,16 @@ function WorkShiftEvent({ shift }: { shift: WorkShift }) {
     <EventCardShell
       accent="work"
       badges={
-        <Badge className="bg-brand-ocean/10 text-brand-ocean" variant="subtle">
-          Work shift
-        </Badge>
+        <>
+          <Badge className="bg-brand-ocean/10 text-brand-ocean" variant="subtle">
+            Work shift
+          </Badge>
+          {shift.isException ? (
+            <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
+              Updated for this date
+            </Badge>
+          ) : null}
+        </>
       }
       meta={`${formatWorkShiftRange(shift)} • ${formatHours(
         getWorkShiftDurationHours(shift),
@@ -1518,6 +1527,9 @@ export function CalendarPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [planBlocks, setPlanBlocks] = useState<WeeklyPlanBlock[]>([]);
   const [scheduledItems, setScheduledItems] = useState<ScheduledItem[]>([]);
+  const [scheduleExceptions, setScheduleExceptions] = useState<
+    ScheduleException[]
+  >([]);
   const [workShifts, setWorkShifts] = useState<WorkShift[]>([]);
   const [importedEvents, setImportedEvents] = useState<ImportedCalendarEvent[]>([]);
   const [filters, setFilters] = useState<CalendarFilters>(defaultFilters);
@@ -1604,12 +1616,14 @@ export function CalendarPage() {
           projectsResult,
           planResult,
           scheduledItemsResult,
+          scheduleExceptionsResult,
           workResult,
           importedEventsResult,
         ] = await Promise.all([
             fetchProjectsForUser(supabase, userId),
             fetchWeeklyPlanBlocksForUser(supabase, userId),
             fetchScheduledItemsForUser(supabase, userId),
+            fetchScheduleExceptionsForUser(supabase, userId),
             fetchWorkShiftsForUser(supabase, userId),
             fetchImportedCalendarEventsForUser(supabase, userId),
           ]);
@@ -1621,6 +1635,7 @@ export function CalendarPage() {
         setProjects(projectsResult.data);
         setPlanBlocks(planResult.data);
         setScheduledItems(scheduledItemsResult.data);
+        setScheduleExceptions(scheduleExceptionsResult.data);
         setWorkShifts(workResult.data);
         setImportedEvents(importedEventsResult.data);
         setStatus("ready");
@@ -1629,6 +1644,7 @@ export function CalendarPage() {
           projectsResult.error,
           planResult.error,
           scheduledItemsResult.error,
+          scheduleExceptionsResult.error,
           workResult.error,
           importedEventsResult.error,
         ].filter(Boolean);
@@ -1725,6 +1741,7 @@ export function CalendarPage() {
         planBlocks,
         projects,
         scheduledItems,
+        scheduleExceptions,
         weekStart: weekStartDate,
         workShifts,
       }),
@@ -1733,6 +1750,7 @@ export function CalendarPage() {
       planBlocks,
       projects,
       scheduledItems,
+      scheduleExceptions,
       weekStartDate,
       workShifts,
     ],
@@ -1746,14 +1764,28 @@ export function CalendarPage() {
         planBlocks,
         projects,
         scheduledItems,
+        scheduleExceptions,
         workShifts,
       }),
-    [importedEvents, monthDate, planBlocks, projects, scheduledItems, workShifts],
+    [
+      importedEvents,
+      monthDate,
+      planBlocks,
+      projects,
+      scheduledItems,
+      scheduleExceptions,
+      workShifts,
+    ],
+  );
+
+  const effectiveWeekShifts = useMemo(
+    () => calendar.days.flatMap((day) => day.workShifts),
+    [calendar.days],
   );
 
   const planWorkConflicts = useMemo(
-    () => findWeeklyPlanWorkConflicts(planBlocks, workShifts),
-    [planBlocks, workShifts],
+    () => findWeeklyPlanWorkConflicts(planBlocks, effectiveWeekShifts),
+    [effectiveWeekShifts, planBlocks],
   );
   const planImportedEventConflicts = useMemo(
     () =>
@@ -1791,12 +1823,18 @@ export function CalendarPage() {
         planBlocks,
         scheduledItems,
         weekStart: weekStartDate,
-        workShifts,
+        workShifts: effectiveWeekShifts,
       }),
     ] as const);
 
     return new Map(entries.filter(([, conflicts]) => conflicts.length > 0));
-  }, [importedEvents, planBlocks, scheduledItems, weekStartDate, workShifts]);
+  }, [
+    effectiveWeekShifts,
+    importedEvents,
+    planBlocks,
+    scheduledItems,
+    weekStartDate,
+  ]);
 
   const weekSummary = useMemo(() => {
     const workHours = workShifts.reduce(

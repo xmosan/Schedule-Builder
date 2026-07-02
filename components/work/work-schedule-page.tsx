@@ -30,9 +30,11 @@ import {
 import {
   createWorkShiftsForUser,
   deleteWorkShiftForUser,
+  fetchScheduleExceptionsForUser,
   fetchWorkShiftsForUser,
   updateWorkShiftForUser,
 } from "@/lib/supabase/scheduler";
+import type { ScheduleException } from "@/lib/schedule-exceptions";
 import { weekDays, type WeekDay } from "@/lib/weekly-plan";
 import {
   defaultWorkShiftDraft,
@@ -254,6 +256,9 @@ export function WorkSchedulePage() {
   );
   const [userId, setUserId] = useState<string | null>(null);
   const [shifts, setShifts] = useState<WorkShift[]>([]);
+  const [scheduleExceptions, setScheduleExceptions] = useState<
+    ScheduleException[]
+  >([]);
   const [draft, setDraft] = useState<AddWorkShiftDraft>(
     getAddDraftForDay("Monday"),
   );
@@ -310,7 +315,10 @@ export function WorkSchedulePage() {
           return;
         }
 
-        const result = await fetchWorkShiftsForUser(supabase, nextUserId);
+        const [result, exceptionsResult] = await Promise.all([
+          fetchWorkShiftsForUser(supabase, nextUserId),
+          fetchScheduleExceptionsForUser(supabase, nextUserId),
+        ]);
 
         if (!isActive) {
           return;
@@ -325,8 +333,13 @@ export function WorkSchedulePage() {
         }
 
         setShifts(sortWorkShifts(result.data));
+        setScheduleExceptions(exceptionsResult.data);
         setStatus("ready");
-        setError(null);
+        setError(
+          exceptionsResult.error
+            ? "Date-specific exceptions are unavailable until supabase/schedule-exceptions.sql is applied."
+            : null,
+        );
       } catch (loadError) {
         if (!isActive) {
           return;
@@ -789,7 +802,7 @@ export function WorkSchedulePage() {
         </div>
 
         <p className="rounded-[18px] border border-brand-ink/8 bg-white/66 px-4 py-3 text-xs font-medium leading-5 text-brand-ink/52 lg:col-span-2">
-          Shifts repeat weekly. Date-specific work shifts are not enabled yet.
+          Shifts repeat weekly. One-day changes approved through the Assistant appear separately below.
         </p>
 
         {shouldShowError ? (
@@ -1066,6 +1079,58 @@ export function WorkSchedulePage() {
 
         {status !== "signed_out" ? (
           <>
+            {scheduleExceptions.length > 0 ? (
+              <Card className="rounded-[24px] border-brand-teal/15 bg-brand-teal/[0.055] sm:rounded-[28px]">
+                <CardContent className="p-4 sm:p-5">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-teal">
+                        One-day changes
+                      </p>
+                      <h2 className="mt-2 text-xl font-semibold text-brand-ink">
+                        Schedule exceptions
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-brand-ink/60">
+                        These affect only the listed date. Your recurring shifts stay unchanged.
+                      </p>
+                    </div>
+                    <Badge variant="subtle">{scheduleExceptions.length}</Badge>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {scheduleExceptions.map((exception) => (
+                      <div
+                        key={exception.id}
+                        className="rounded-[20px] border border-white/80 bg-white/80 p-4"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge className="bg-brand-teal/10 text-brand-teal" variant="subtle">
+                            Updated for this date
+                          </Badge>
+                          <span className="text-xs font-semibold text-brand-ink/48">
+                            {new Intl.DateTimeFormat(undefined, {
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            }).format(new Date(`${exception.date}T00:00:00`))}
+                          </span>
+                        </div>
+                        <p className="mt-3 font-semibold text-brand-ink">
+                          {exception.title || "Work schedule change"}
+                        </p>
+                        {exception.overrideStartTime && exception.overrideEndTime ? (
+                          <p className="mt-1 text-sm text-brand-ink/65">
+                            {formatWorkShiftRange({
+                              startTime: exception.overrideStartTime,
+                              endTime: exception.overrideEndTime,
+                            })}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
             <Card className="rounded-[24px] border-white/70 bg-white/78 sm:rounded-[28px]">
               <CardContent className="p-4 sm:p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

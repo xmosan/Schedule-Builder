@@ -21,9 +21,11 @@ import {
   fetchPlannerProfileForUser,
   fetchProjectsForUser,
   fetchScheduledItemsForUser,
+  fetchScheduleExceptionsForUser,
   fetchWorkShiftsForUser,
   fetchWeeklyPlanBlocksForUser,
   createScheduledItemForUser,
+  createScheduleExceptionForUser,
   createWeeklyPlanBlockForUser,
 } from "@/lib/supabase/scheduler";
 import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
@@ -46,6 +48,12 @@ import {
   type WeeklyPlanBlock,
 } from "@/lib/weekly-plan";
 import { formatWorkShiftRange, type WorkShift } from "@/lib/work-schedule";
+import {
+  getEffectiveWorkShiftsForDate,
+  validateScheduleExceptionDraft,
+  type ScheduleException,
+  type ScheduleExceptionDraft,
+} from "@/lib/schedule-exceptions";
 
 export const dynamic = "force-dynamic";
 
@@ -260,12 +268,109 @@ function validateActionableSuggestion(suggestion: AssistantSuggestion) {
     suggestion.type !== "update_project" &&
     suggestion.type !== "suggested_scheduled_item" &&
     suggestion.type !== "suggested_weekly_block" &&
-    suggestion.type !== "suggested_next_action"
+    suggestion.type !== "suggested_next_action" &&
+    suggestion.type !== "schedule_exception"
   ) {
     return "This suggestion is informational and cannot be applied automatically.";
   }
 
   return null;
+}
+
+async function applyScheduleExceptionSuggestion({
+  currentExceptions,
+  currentWorkShifts,
+  suggestion,
+  supabase,
+  userId,
+}: {
+  currentExceptions: ScheduleException[];
+  currentWorkShifts: WorkShift[];
+  suggestion: AssistantSuggestion;
+  supabase: SupabaseClient;
+  userId: string;
+}) {
+  if (
+    suggestion.type !== "schedule_exception" ||
+    suggestion.exceptionType !== "modify_shift" ||
+    !suggestion.exceptionDate ||
+    !suggestion.relatedWorkShiftId
+  ) {
+    return createResult(
+      suggestion,
+      "error",
+      "The one-day work change is missing required details.",
+    );
+  }
+
+  const relatedShift = currentWorkShifts.find(
+    (shift) => shift.id === suggestion.relatedWorkShiftId,
+  );
+
+  if (!relatedShift) {
+    return createResult(
+      suggestion,
+      "error",
+      "The recurring work shift no longer exists. Review Work Schedule before applying this change.",
+    );
+  }
+
+  const duplicate = currentExceptions.find(
+    (exception) =>
+      exception.date === suggestion.exceptionDate &&
+      exception.relatedWorkShiftId === relatedShift.id &&
+      exception.exceptionType === "modify_shift",
+  );
+
+  if (duplicate) {
+    return createResult(
+      suggestion,
+      "skipped",
+      "A one-day change already exists for this work shift.",
+    );
+  }
+
+  const draft: ScheduleExceptionDraft = {
+    date: suggestion.exceptionDate,
+    exceptionType: "modify_shift",
+    relatedWorkShiftId: relatedShift.id,
+    originalStartTime: relatedShift.startTime,
+    originalEndTime: relatedShift.endTime,
+    overrideStartTime: suggestion.overrideStartTime ?? relatedShift.startTime,
+    overrideEndTime: suggestion.overrideEndTime ?? null,
+    title: suggestion.title || "Leave work early",
+    notes: suggestion.plannedTask ?? "Approved through Planning Assistant.",
+    createdBy: "assistant_approved",
+  };
+  const validationMessage = validateScheduleExceptionDraft(draft);
+
+  if (validationMessage) {
+    return createResult(suggestion, "error", validationMessage);
+  }
+
+  const result = await createScheduleExceptionForUser(supabase, userId, draft);
+
+  if (result.error || !result.data) {
+    const message = result.error?.message ?? "";
+    return createResult(
+      suggestion,
+      "error",
+      message.includes("schedule_exceptions")
+        ? "One-day work changes need the schedule exceptions migration. Run supabase/schedule-exceptions.sql, then apply this review again."
+        : message || "The one-day work change could not be saved.",
+    );
+  }
+
+  currentExceptions.push(result.data);
+
+  return {
+    ...createResult(
+      suggestion,
+      "applied",
+      "Updated today’s work shift. Future recurring shifts were not changed.",
+    ),
+    calendarHref: `/calendar?date=${suggestion.exceptionDate}&view=week`,
+  };
 }
 
 async function applyScheduledItemSuggestion({
@@ -349,6 +454,7 @@ async function applyWeeklyBlockSuggestion({
   supabase,
   userId,
   workShifts,
+  scheduleExceptions,
 }: {
   appliedBlockCount: number;
   currentBlocks: WeeklyPlanBlock[];
@@ -357,6 +463,7 @@ async function applyWeeklyBlockSuggestion({
   supabase: SupabaseClient;
   userId: string;
   workShifts: WorkShift[];
+  scheduleExceptions: ScheduleException[];
 }) {
   const projectName = suggestion.projectName?.trim();
   const plannedTask = suggestion.plannedTask?.trim();
@@ -395,6 +502,12 @@ async function applyWeeklyBlockSuggestion({
   }
 
   const createdDate = getDateForWeekDay(weekStartDate, suggestion.day);
+  const effectiveWorkShifts = getEffectiveWorkShiftsForDate(
+    workShifts,
+    scheduleExceptions,
+    createdDate,
+    suggestion.day,
+  );
 
   if (suggestion.itemDate && suggestion.itemDate !== createdDate) {
     return createResult(
@@ -415,7 +528,7 @@ async function applyWeeklyBlockSuggestion({
   const weekStart = new Date(`${weekStartDate}T00:00:00`);
   const workConflict = getWeeklyPlanWorkConflictForBlock(
     candidateBlock,
-    workShifts,
+    effectiveWorkShifts,
   );
   const importedConflict = getWeeklyPlanImportedEventConflictForBlock(
     candidateBlock,
@@ -450,7 +563,7 @@ async function applyWeeklyBlockSuggestion({
 
   currentBlocks.push(createdBlock);
 
-  const workRanges = workShifts
+  const workRanges = effectiveWorkShifts
     .filter((shift) => shift.day === createdBlock.day)
     .map(formatWorkShiftRange);
   const followUpWarnings = [
@@ -798,15 +911,21 @@ export async function POST(request: NextRequest) {
     workShiftsResult,
     importedEventsResult,
     scheduledItemsResult,
+    scheduleExceptionsResult,
   ] = await Promise.all([
     fetchProjectsForUser(authResult.supabase, authResult.userId),
     fetchWeeklyPlanBlocksForUser(authResult.supabase, authResult.userId),
     fetchWorkShiftsForUser(authResult.supabase, authResult.userId),
     fetchImportedCalendarEventsForUser(authResult.supabase, authResult.userId),
     fetchScheduledItemsForUser(authResult.supabase, authResult.userId),
+    fetchScheduleExceptionsForUser(authResult.supabase, authResult.userId),
   ]);
 
-  if (projectsResult.error || weeklyPlanResult.error || scheduledItemsResult.error) {
+  if (
+    projectsResult.error ||
+    weeklyPlanResult.error ||
+    scheduledItemsResult.error
+  ) {
     return NextResponse.json(
       {
         error: `Could not load scheduler data before applying suggestions. ${[
@@ -825,6 +944,9 @@ export async function POST(request: NextRequest) {
   const currentProjects = [...projectsResult.data];
   const currentBlocks = [...weeklyPlanResult.data];
   const currentScheduledItems = [...scheduledItemsResult.data];
+  const currentScheduleExceptions = scheduleExceptionsResult.error
+    ? []
+    : [...scheduleExceptionsResult.data];
   const workShifts = workShiftsResult.error ? [] : [...workShiftsResult.data];
   const importedCalendarEvents =
     importedEventsResult.error == null
@@ -861,6 +983,7 @@ export async function POST(request: NextRequest) {
         supabase: authResult.supabase,
         userId: authResult.userId,
         workShifts,
+        scheduleExceptions: currentScheduleExceptions,
       });
 
       results.push(result);
@@ -869,6 +992,19 @@ export async function POST(request: NextRequest) {
         appliedBlockCount += 1;
       }
 
+      continue;
+    }
+
+    if (item.normalized.type === "schedule_exception") {
+      results.push(
+        await applyScheduleExceptionSuggestion({
+          currentExceptions: currentScheduleExceptions,
+          currentWorkShifts: workShifts,
+          suggestion: item.normalized,
+          supabase: authResult.supabase,
+          userId: authResult.userId,
+        }),
+      );
       continue;
     }
 
