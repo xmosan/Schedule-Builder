@@ -259,6 +259,10 @@ function getErrorMessage(error: unknown) {
   return "Assistant planning is unavailable right now.";
 }
 
+function getSafeAssistantErrorMessage() {
+  return "I couldn’t load the full schedule. Try again or continue with the available information.";
+}
+
 function getBearerToken(request: NextRequest) {
   const authorization = request.headers.get("authorization");
 
@@ -364,9 +368,10 @@ function createNdjsonStream(
         try {
           await executor(send);
         } catch (error) {
+          console.error("Assistant stream failed", error);
           send({
             type: "error",
-            error: getErrorMessage(error),
+            error: getSafeAssistantErrorMessage(),
           });
         } finally {
           controller.close();
@@ -414,8 +419,11 @@ async function getAuthenticatedUser(
     const { data, error } = await supabase.auth.getUser(accessToken);
 
     if (error || !data.user) {
+      if (error) {
+        console.error("Assistant session verification failed", error);
+      }
       return NextResponse.json(
-        { error: error?.message ?? "Session could not be verified." },
+        { error: "Session could not be verified. Please sign in again." },
         { status: 401 },
       );
     }
@@ -425,7 +433,11 @@ async function getAuthenticatedUser(
       userId: data.user.id,
     };
   } catch (error) {
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    console.error("Assistant authentication setup failed", error);
+    return NextResponse.json(
+      { error: getSafeAssistantErrorMessage() },
+      { status: 500 },
+    );
   }
 }
 
@@ -478,6 +490,13 @@ async function loadPlanningContext(
     googleSyncRowsResult.error,
   ].filter(Boolean);
 
+  if (loadErrors.length > 0) {
+    console.error(
+      "Assistant planning context loaded partially",
+      loadErrors.map((error) => getErrorMessage(error)),
+    );
+  }
+
   const profile = profileResult.error == null ? profileResult.data : null;
   const plannerType: PlannerType | "Unknown" = profile
     ? profile.plannerType
@@ -528,9 +547,9 @@ async function loadPlanningContext(
     profile,
     warning:
       loadErrors.length > 0
-        ? `Some calendar or schedule data did not load, so this answer may be incomplete. ${loadErrors
-            .map(getErrorMessage)
-            .join(" ")}`
+        ? scheduleExceptionsResult.error
+          ? "Temporary schedule changes could not be loaded, so this plan may be incomplete."
+          : "Some schedule sources did not load. Suggestions may be incomplete."
         : null,
   };
 }
@@ -1076,6 +1095,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     ...response,
     assistantMessage: nextMessage,
+    dataWarning: warning,
     message: nextMessage,
   });
 }
@@ -1135,6 +1155,7 @@ export async function POST(request: NextRequest) {
   const fallbackWithWarning: AssistantPlanReviewResponse = {
     ...fallbackResponse,
     assistantMessage: fallbackMessage,
+    dataWarning: warning,
     message: fallbackMessage,
   };
 
@@ -1237,6 +1258,7 @@ export async function POST(request: NextRequest) {
       actions: suggestions,
       assistantMessage: schedulingTurn.message,
       context: fallbackWithWarning.context,
+      dataWarning: warning,
       message: schedulingTurn.message,
       schedulingContext,
       source: "fallback",
@@ -1275,7 +1297,8 @@ export async function POST(request: NextRequest) {
         send,
       });
     } catch (error) {
-      const fallbackMessage = `${fallbackWithWarning.message} I had trouble getting the full assistant response, so I used a simpler planning check for now. ${getErrorMessage(error)}`;
+      console.error("Assistant model response failed; using fallback", error);
+      const fallbackMessage = `${fallbackWithWarning.message} I had trouble getting the full assistant response, so I used a simpler planning check for now.`;
       const fallbackWithError: AssistantPlanReviewResponse = {
         ...fallbackWithWarning,
         assistantMessage: fallbackMessage,
@@ -1324,6 +1347,7 @@ export async function POST(request: NextRequest) {
         actions: suggestions,
         assistantMessage: messageWithWarning,
         context: fallbackResponse.context,
+        dataWarning: warning,
         message: messageWithWarning,
         source: "ai",
         suggestions,

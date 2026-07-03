@@ -14,6 +14,11 @@
   --coral: #c75b39;
   --moss: #2f6f59;
   --border: rgba(18, 32, 47, 0.09);
+  --radius-panel: 28px;
+  --radius-control: 18px;
+  --shadow-panel: 0 18px 48px rgba(18, 32, 47, 0.075);
+  --motion-fast: 180ms;
+  --motion-medium: 260ms;
 }
 
 html {
@@ -22,6 +27,7 @@ html {
 
 body {
   min-height: 100vh;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 24%),
     radial-gradient(circle at top right, rgba(199, 91, 57, 0.12), transparent 22%),
@@ -80,15 +86,39 @@ textarea {
 
 @layer components {
   .app-shell {
-    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+    @apply mx-auto w-full max-w-[1540px];
   }
 
   .panel {
-    @apply rounded-[26px] border bg-[color:var(--surface)] shadow-[0_18px_45px_rgba(18,32,47,0.08)] backdrop-blur-sm sm:rounded-[30px] sm:shadow-glow;
+    @apply rounded-[26px] border bg-[color:var(--surface)] shadow-[0_18px_45px_rgba(18,32,47,0.08)] backdrop-blur-sm sm:rounded-[28px];
   }
 
   .panel-strong {
-    @apply rounded-[28px] border bg-[color:var(--surface-strong)] shadow-[0_22px_55px_rgba(18,32,47,0.1)] backdrop-blur-sm sm:rounded-[34px] sm:shadow-glow;
+    @apply rounded-[28px] border bg-[color:var(--surface-strong)] shadow-[0_22px_55px_rgba(18,32,47,0.09)] backdrop-blur-sm;
+  }
+
+  .page-header {
+    @apply flex flex-col gap-4 rounded-[28px] border border-white/75 bg-white/75 px-5 py-5 shadow-[0_18px_48px_rgba(18,32,47,0.07)] backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:py-6;
+  }
+
+  .page-eyebrow {
+    @apply mb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-brand-teal sm:text-[11px];
+  }
+
+  .page-title {
+    @apply text-2xl font-semibold tracking-[-0.035em] text-brand-ink sm:text-3xl;
+  }
+
+  .page-contract {
+    @apply mt-1 text-sm leading-6 text-brand-ink/60 sm:text-base;
+  }
+
+  .page-trust-note {
+    @apply mt-2 text-xs font-semibold text-brand-teal;
+  }
+
+  .route-content-enter {
+    animation: route-content-in var(--motion-medium) ease both;
   }
 
   .eyebrow-chip {
@@ -280,6 +310,18 @@ textarea {
 
   to {
     max-height: 500px;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes route-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
     opacity: 1;
     transform: translateY(0);
   }

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CalendarIcon } from "@/components/projects/icons";
 import { IntegrationCard } from "@/components/integrations/integration-card";
-import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
+import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -26,6 +26,7 @@ import {
   fetchImportedCalendarEventsForUser,
   fetchPlannerProfileForUser,
 } from "@/lib/supabase/scheduler";
+import { getUserFacingError } from "@/lib/user-facing-error";
 
 type GoogleCalendarConnectionStatus =
   | "connected"
@@ -614,11 +615,10 @@ export function IntegrationsPage() {
   }
 
   function getGoogleCalendarUiError(error: unknown) {
-    if (error instanceof Error) {
-      return error.message;
-    }
-
-    return "Google Calendar is unavailable right now.";
+    return getUserFacingError(
+      error,
+      "Google Calendar is unavailable right now.",
+    );
   }
 
   async function startGoogleCalendarAuthorization(
@@ -779,9 +779,10 @@ export function IntegrationsPage() {
       setSourcePendingRemoval(null);
     } catch (error) {
       setImportedCalendarError(
-        error instanceof Error
-          ? error.message
-          : "Imported events could not be removed. Refresh and try again.",
+        getUserFacingError(
+          error,
+          "Imported events could not be removed. Refresh and try again.",
+        ),
       );
     } finally {
       setSourceBeingRemoved(null);
@@ -1229,25 +1230,26 @@ export function IntegrationsPage() {
   }
 
   return (
-    <div className="px-3 pb-28 pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
-      <div className="app-shell flex flex-col gap-5 sm:gap-6">
-        <SchedulerNav />
+    <SchedulerAppShell contentClassName="flex flex-col gap-5 sm:gap-6">
 
-        <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
+        <section className="page-header !block overflow-hidden bg-dashboard-radial">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_320px] lg:items-end lg:gap-6">
             <div className="max-w-3xl">
               <div className="eyebrow-chip">
                 <CalendarIcon className="h-4 w-4" />
-                Settings / Integrations
+                Outside schedule sources
               </div>
 
-              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                Connect your schedule tools
+              <h1 className="page-title mt-3">
+                Integrations
               </h1>
 
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                Connect calendars, import school events, and send approved
-                plans to your dedicated Schedule Builder Google Calendar.
+              <p className="page-contract max-w-2xl">
+                Connect the tools that provide your schedule context.
+              </p>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-brand-ink/55">
+                Import school events, read external calendars, and manually
+                send approved plans when you choose.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2.5">
@@ -1520,7 +1522,6 @@ export function IntegrationsPage() {
             }
           }}
         />
-      </div>
-    </div>
+    </SchedulerAppShell>
   );
 }

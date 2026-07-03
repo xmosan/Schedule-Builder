@@ -9,7 +9,7 @@ import {
   FolderStackIcon,
   PlusIcon,
 } from "@/components/projects/icons";
-import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
+import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -75,6 +75,7 @@ import {
   type WorkShift,
 } from "@/lib/work-schedule";
 import { cn } from "@/lib/utils";
+import { getUserFacingError } from "@/lib/user-facing-error";
 
 type CalendarStatus = "loading" | "ready" | "signed_out" | "error";
 type CalendarView = "week" | "month";
@@ -164,20 +165,7 @@ type CalendarEventGroup = {
 };
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return "Calendar data is unavailable right now.";
+  return getUserFacingError(error, "Calendar data is unavailable right now.");
 }
 
 function getMissingTableMessage(error: unknown) {
@@ -2199,7 +2187,7 @@ export function CalendarPage() {
 
       if (result.error) {
         setScheduledItemMessage(
-          result.error.message ?? "This item could not be removed.",
+          getErrorMessage(result.error),
         );
         return;
       }
@@ -2215,8 +2203,7 @@ export function CalendarPage() {
   }
 
   return (
-    <div className="px-3 pb-[calc(10rem+env(safe-area-inset-bottom))] pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
-      <div className="app-shell flex flex-col gap-5 sm:gap-6">
+    <SchedulerAppShell contentClassName="flex flex-col gap-5 sm:gap-6">
         <ScheduledItemFormDialog
           getConflicts={getScheduledItemDraftConflicts}
           initialDraft={
@@ -2247,22 +2234,20 @@ export function CalendarPage() {
           }}
           onConfirm={confirmRemoveScheduledItem}
         />
-        <SchedulerNav />
-
-        <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
+        <section className="page-header !block overflow-hidden bg-dashboard-radial">
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_420px] xl:items-end">
             <div className="max-w-3xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-brand-teal/12 bg-brand-teal/8 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-brand-teal">
                 <CalendarIcon className="h-4 w-4" />
                 Central schedule hub
               </div>
-              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+              <h1 className="page-title mt-3">
                 Calendar
               </h1>
-              <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
+              <p className="page-contract">
                 Confirm your week.
               </p>
-              <p className="mt-2 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
+              <p className="mt-1 text-sm leading-6 text-brand-ink/55">
                 See work shifts, time blocks, external events, and deadlines
                 in one schedule.
               </p>
@@ -2634,7 +2619,6 @@ export function CalendarPage() {
             ) : null}
           </>
         ) : null}
-      </div>
-    </div>
+    </SchedulerAppShell>
   );
 }

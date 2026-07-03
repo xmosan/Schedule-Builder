@@ -1,92 +1,33 @@
 "use client";
 
+import type { ComponentType, SVGProps } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FolderStackIcon } from "@/components/projects/icons";
+import {
+  CalendarIcon,
+  ClockIcon,
+  FolderStackIcon,
+  TargetIcon,
+} from "@/components/projects/icons";
 import { cn } from "@/lib/utils";
 
 type SchedulerNavItem = {
   href: string;
+  icon: ComponentType<SVGProps<SVGSVGElement>>;
   label: string;
-  mobileLabel: string;
 };
 
-const desktopNavItems: SchedulerNavItem[] = [
-  {
-    href: "/assistant",
-    label: "Assistant",
-    mobileLabel: "Assistant",
-  },
-  {
-    href: "/projects",
-    label: "Projects",
-    mobileLabel: "Projects",
-  },
-  {
-    href: "/plan",
-    label: "Plan",
-    mobileLabel: "Plan",
-  },
-  {
-    href: "/calendar",
-    label: "Calendar",
-    mobileLabel: "Calendar",
-  },
-  {
-    href: "/work",
-    label: "Work Schedule",
-    mobileLabel: "Work",
-  },
-  {
-    href: "/integrations",
-    label: "Integrations",
-    mobileLabel: "Links",
-  },
-  {
-    href: "/settings",
-    label: "Settings",
-    mobileLabel: "Settings",
-  },
-];
-
-const mobileNavItems: SchedulerNavItem[] = [
-  {
-    href: "/assistant",
-    label: "Assistant",
-    mobileLabel: "Assistant",
-  },
-  {
-    href: "/projects",
-    label: "Projects",
-    mobileLabel: "Projects",
-  },
-  {
-    href: "/plan",
-    label: "Plan",
-    mobileLabel: "Plan",
-  },
-  {
-    href: "/calendar",
-    label: "Calendar",
-    mobileLabel: "Calendar",
-  },
-  {
-    href: "/work",
-    label: "Work Schedule",
-    mobileLabel: "Work",
-  },
-  {
-    href: "/integrations",
-    label: "Integrations",
-    mobileLabel: "Links",
-  },
+const navItems: SchedulerNavItem[] = [
+  { href: "/assistant", icon: TargetIcon, label: "Assistant" },
+  { href: "/projects", icon: FolderStackIcon, label: "Projects" },
+  { href: "/plan", icon: ClockIcon, label: "Weekly Plan" },
+  { href: "/calendar", icon: CalendarIcon, label: "Calendar" },
+  { href: "/work", icon: ClockIcon, label: "Work Schedule" },
+  { href: "/integrations", icon: CalendarIcon, label: "Integrations" },
+  { href: "/settings", icon: TargetIcon, label: "Settings" },
 ];
 
 function isActiveRoute(pathname: string, href: string) {
-  if (href === "/") {
-    return pathname === href;
-  }
-
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -95,70 +36,89 @@ export function SchedulerNav() {
 
   return (
     <>
-      <div className="panel flex flex-col gap-4 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-5 md:py-4">
+      <aside className="sticky top-5 hidden h-[calc(100dvh-2.5rem)] flex-col overflow-hidden rounded-[28px] border border-white/75 bg-white/76 p-3 shadow-[0_22px_58px_rgba(18,32,47,0.1)] backdrop-blur-xl lg:flex">
         <Link
           href="/assistant"
-          className="flex min-w-0 items-center gap-3 rounded-[22px] text-brand-ink"
+          className="flex items-center gap-3 rounded-[22px] px-3 py-4 text-brand-ink"
         >
-          <div className="rounded-2xl bg-brand-teal/10 p-2.5 text-brand-teal">
-            <FolderStackIcon className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-ink/45">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-teal text-white shadow-[0_12px_28px_rgba(15,118,110,0.2)]">
+            <TargetIcon className="h-5 w-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-[10px] font-bold uppercase tracking-[0.18em] text-brand-ink/42">
               Schedule Builder
-            </p>
-            <p className="truncate text-sm font-semibold text-brand-ink sm:text-base">
-              Tell us what you need. Review the plan before anything changes.
-            </p>
-          </div>
+            </span>
+            <span className="mt-0.5 block text-sm font-semibold tracking-[-0.01em]">
+              Planning workspace
+            </span>
+          </span>
         </Link>
 
-        <nav
-          aria-label="Scheduler navigation"
-          className="hidden flex-wrap items-center justify-end gap-2 md:flex"
-        >
-          {desktopNavItems.map((item) => {
-            const isActive = isActiveRoute(pathname, item.href);
+        <nav aria-label="Scheduler navigation" className="mt-4 grid gap-1.5">
+          {navItems.map((item) => {
+            const active = isActiveRoute(pathname, item.href);
+            const Icon = item.icon;
 
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                aria-current={isActive ? "page" : undefined}
+                aria-current={active ? "page" : undefined}
                 className={cn(
-                  "inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold",
-                  isActive
-                    ? "bg-brand-ink text-white shadow-[0_14px_36px_rgba(18,32,47,0.16)]"
-                    : "border border-brand-ink/10 bg-white/70 text-brand-ink/70 hover:border-brand-ink/20 hover:bg-white hover:text-brand-ink",
+                  "group flex min-h-12 items-center gap-3 rounded-[18px] px-3.5 text-sm font-semibold",
+                  active
+                    ? "bg-brand-ink text-white shadow-[0_14px_32px_rgba(18,32,47,0.16)]"
+                    : "text-brand-ink/62 hover:bg-white hover:text-brand-ink",
                 )}
               >
+                <Icon
+                  aria-hidden="true"
+                  className={cn(
+                    "h-4.5 w-4.5 shrink-0",
+                    active ? "text-white" : "text-brand-teal/72",
+                  )}
+                />
                 {item.label}
               </Link>
             );
           })}
         </nav>
-      </div>
+
+        <div className="mt-auto rounded-[20px] border border-brand-teal/12 bg-brand-teal/[0.055] p-3.5">
+          <p className="text-xs font-semibold text-brand-teal">
+            The Assistant plans. You approve.
+          </p>
+          <p className="mt-1 text-[11px] leading-5 text-brand-ink/48">
+            Manual controls stay available in every supporting view.
+          </p>
+        </div>
+      </aside>
 
       <nav
         aria-label="Mobile scheduler navigation"
-        className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-50 grid grid-cols-6 gap-1 rounded-[24px] border border-white/70 bg-white/92 p-1.5 shadow-[0_18px_44px_rgba(18,32,47,0.18)] backdrop-blur md:hidden"
+        className="fixed inset-x-2 bottom-[calc(0.4rem+env(safe-area-inset-bottom))] z-50 grid grid-cols-7 gap-0.5 rounded-[24px] border border-white/80 bg-white/94 p-1.5 shadow-[0_18px_48px_rgba(18,32,47,0.2)] backdrop-blur-xl lg:hidden"
       >
-        {mobileNavItems.map((item) => {
-          const isActive = isActiveRoute(pathname, item.href);
+        {navItems.map((item) => {
+          const active = isActiveRoute(pathname, item.href);
+          const Icon = item.icon;
 
           return (
             <Link
               key={item.href}
               href={item.href}
-              aria-current={isActive ? "page" : undefined}
+              aria-label={item.label}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "inline-flex min-h-11 items-center justify-center rounded-[18px] px-1 text-center text-[11px] font-semibold leading-tight",
-                isActive
+                "flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-[17px] px-0.5 text-center text-[8px] font-bold leading-none sm:text-[10px]",
+                active
                   ? "bg-brand-ink text-white"
-                  : "text-brand-ink/62 hover:bg-brand-ink/5 hover:text-brand-ink",
+                  : "text-brand-ink/58 hover:bg-brand-ink/5 hover:text-brand-ink",
               )}
             >
-              {item.mobileLabel}
+              <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+              <span className="max-w-full whitespace-normal break-words leading-[1.05]">
+                {item.label}
+              </span>
             </Link>
           );
         })}

@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { parseAssistantConversationSnapshot } from "@/lib/assistant-conversation";
+import { getUserFacingError } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +81,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ available: false, snapshot: null });
     }
 
-    return NextResponse.json({ error: result.error.message }, { status: 500 });
+    console.error("Assistant conversation could not be loaded", result.error);
+    return NextResponse.json(
+      { error: getUserFacingError(result.error, "Conversation history could not be loaded.") },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({
@@ -110,7 +115,11 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ available: false });
     }
 
-    return NextResponse.json({ error: activeResult.error.message }, { status: 500 });
+    console.error("Assistant conversation thread lookup failed", activeResult.error);
+    return NextResponse.json(
+      { error: getUserFacingError(activeResult.error, "Conversation history could not be saved.") },
+      { status: 500 },
+    );
   }
 
   const threadId = activeResult.data?.id ?? snapshot.threadId;
@@ -130,7 +139,11 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ available: false });
     }
 
-    return NextResponse.json({ error: result.error.message }, { status: 500 });
+    console.error("Assistant conversation could not be saved", result.error);
+    return NextResponse.json(
+      { error: getUserFacingError(result.error, "Conversation history could not be saved.") },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({ available: true, snapshot: persistedSnapshot });
@@ -150,7 +163,11 @@ export async function DELETE(request: NextRequest) {
     .eq("status", "active");
 
   if (result.error && !isMissingConversationTable(result.error)) {
-    return NextResponse.json({ error: result.error.message }, { status: 500 });
+    console.error("Assistant conversation could not be cleared", result.error);
+    return NextResponse.json(
+      { error: getUserFacingError(result.error, "Conversation history could not be cleared.") },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({ available: !result.error, cleared: true });

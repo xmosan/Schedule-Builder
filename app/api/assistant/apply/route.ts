@@ -54,6 +54,7 @@ import {
   type ScheduleException,
   type ScheduleExceptionDraft,
 } from "@/lib/schedule-exceptions";
+import { getUserFacingError } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
 
@@ -73,20 +74,10 @@ type ProjectRow = {
 };
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return "The approved suggestion could not be applied.";
+  return getUserFacingError(
+    error,
+    "The approved suggestion could not be applied.",
+  );
 }
 
 function getBearerToken(request: NextRequest) {
@@ -139,8 +130,11 @@ async function getAuthenticatedUser(
     const { data, error } = await supabase.auth.getUser(accessToken);
 
     if (error || !data.user) {
+      if (error) {
+        console.error("Assistant apply session verification failed", error);
+      }
       return NextResponse.json(
-        { error: error?.message ?? "Session could not be verified." },
+        { error: "Session could not be verified. Please sign in again." },
         { status: 401 },
       );
     }
@@ -356,8 +350,8 @@ async function applyScheduleExceptionSuggestion({
       suggestion,
       "error",
       message.includes("schedule_exceptions")
-        ? "One-day work changes need the schedule exceptions migration. Run supabase/schedule-exceptions.sql, then apply this review again."
-        : message || "The one-day work change could not be saved.",
+        ? "Temporary schedule changes are not available yet. Your recurring shift was not changed."
+        : getErrorMessage(message || "The one-day work change could not be saved."),
     );
   }
 
@@ -431,7 +425,7 @@ async function applyScheduledItemSuggestion({
     return createResult(
       suggestion,
       "error",
-      result.error?.message ?? "Scheduled item could not be saved.",
+      getErrorMessage(result.error ?? "Scheduled item could not be saved."),
     );
   }
 
@@ -556,7 +550,7 @@ async function applyWeeklyBlockSuggestion({
   );
 
   if (error) {
-    return createResult(suggestion, "error", error.message);
+    return createResult(suggestion, "error", getErrorMessage(error));
   }
 
   const createdBlock = candidateBlock;
@@ -663,7 +657,7 @@ async function applyNewProjectSuggestion({
   const { error } = await supabase.from("projects").insert(row);
 
   if (error) {
-    return createResult(suggestion, "error", error.message);
+    return createResult(suggestion, "error", getErrorMessage(error));
   }
 
   currentProjects.push({
@@ -779,7 +773,7 @@ async function applyProjectUpdateSuggestion({
     .eq("project_id", project.id);
 
   if (error) {
-    return createResult(suggestion, "error", error.message);
+    return createResult(suggestion, "error", getErrorMessage(error));
   }
 
   if (updates.name) project.name = updates.name;
@@ -831,7 +825,7 @@ async function applyNextActionSuggestion({
     .eq("project_id", project.id);
 
   if (error) {
-    return createResult(suggestion, "error", error.message);
+    return createResult(suggestion, "error", getErrorMessage(error));
   }
 
   project.nextAction = proposedNextAction;

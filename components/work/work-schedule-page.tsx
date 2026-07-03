@@ -16,7 +16,7 @@ import {
   PlusIcon,
   TrashIcon,
 } from "@/components/projects/icons";
-import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
+import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -45,6 +45,7 @@ import {
   type WorkShift,
   type WorkShiftDraft,
 } from "@/lib/work-schedule";
+import { getUserFacingError } from "@/lib/user-facing-error";
 
 type WorkScheduleStatus = "loading" | "ready" | "signed_out" | "error";
 type AddShiftTarget = "quick" | WeekDay;
@@ -65,20 +66,7 @@ const dayChipLabels: Record<WeekDay, string> = {
 };
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return "Work schedule is unavailable right now.";
+  return getUserFacingError(error, "Work schedule is unavailable right now.");
 }
 
 function getMissingTableMessage(error: unknown) {
@@ -997,20 +985,18 @@ export function WorkSchedulePage() {
     : undefined;
 
   return (
-    <div className="px-3 pb-[calc(10rem+env(safe-area-inset-bottom))] pt-4 sm:px-6 sm:pt-6 md:pb-10 lg:px-8 lg:pt-10">
-      <div className="app-shell flex flex-col gap-5 sm:gap-6">
-        <SchedulerNav />
+    <SchedulerAppShell contentClassName="flex flex-col gap-5 sm:gap-6">
 
-        <section className="panel-strong overflow-hidden bg-dashboard-radial p-5 sm:p-8 lg:p-10">
+        <section className="page-header !block overflow-hidden bg-dashboard-radial">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_360px] lg:items-end">
             <div className="max-w-3xl">
-              <h1 className="text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+              <h1 className="page-title">
                 Work Schedule
               </h1>
-              <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
+              <p className="page-contract">
                 Block constraints for planning.
               </p>
-              <p className="mt-2 text-sm leading-6 text-brand-ink/70 sm:text-lg sm:leading-7">
+              <p className="mt-1 text-sm leading-6 text-brand-ink/55">
                 Add work shifts and blocked hours so Schedule Builder can
                 plan around them.
               </p>
@@ -1340,7 +1326,6 @@ export function WorkSchedulePage() {
             }
           }}
         />
-      </div>
-    </div>
+    </SchedulerAppShell>
   );
 }

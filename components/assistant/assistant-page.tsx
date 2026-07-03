@@ -12,11 +12,9 @@ import {
   type AssistantConversationSnapshot,
 } from "@/lib/assistant-conversation";
 import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
-import {
-  FolderStackIcon,
-  TargetIcon,
-} from "@/components/projects/icons";
-import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
+import { TargetIcon } from "@/components/projects/icons";
+import { SchedulerAppShell } from "@/components/scheduler/app-shell";
+import { SchedulerPageHeader } from "@/components/scheduler/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -37,6 +35,7 @@ import type { ScheduledItemType } from "@/lib/scheduled-items";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { formatStartTime, weekDays, type WeekDay } from "@/lib/weekly-plan";
 import { cn } from "@/lib/utils";
+import { getUserFacingError } from "@/lib/user-facing-error";
 
 type AssistantStatus = "loading" | "ready" | "signed_out" | "error";
 type ChatRole = "assistant" | "user";
@@ -165,20 +164,10 @@ function createId(prefix: string) {
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return "Planning Assistant is unavailable right now.";
+  return getUserFacingError(
+    error,
+    "I couldn’t load the full schedule. Try again or continue with the available information.",
+  );
 }
 
 function getBrowserTimeZone() {
@@ -371,22 +360,56 @@ function AssistantWorkspaceContext({
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Planning context">
+    <dl className="grid grid-cols-2 gap-2 xl:grid-cols-1" aria-label="Planning context">
       {items.map((item) => (
         <div
           key={item.label}
-          className="rounded-[18px] border border-brand-ink/7 bg-white/70 px-3 py-2.5"
+          className="rounded-[17px] border border-brand-ink/7 bg-white/72 px-3 py-2.5"
         >
-          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
+          <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
             {item.label}
-          </p>
-          <p className="mt-1 text-xs font-semibold text-brand-ink/72">
+          </dt>
+          <dd className="mt-1 text-xs font-semibold text-brand-ink/72">
             {item.value}
-          </p>
+          </dd>
         </div>
       ))}
-    </div>
+    </dl>
   );
+}
+
+function getWorkflowStatus({
+  context,
+  isApplying,
+  isSubmitting,
+  pendingReviewCount,
+}: {
+  context: AssistantSchedulingContext | null;
+  isApplying: boolean;
+  isSubmitting: boolean;
+  pendingReviewCount: number;
+}) {
+  if (isApplying) {
+    return "Applying approved changes";
+  }
+
+  if (isSubmitting) {
+    return "Checking your schedule";
+  }
+
+  if (pendingReviewCount > 0) {
+    return "Ready for review";
+  }
+
+  if (context?.state === "awaiting_duration" || context?.state === "needs_clarification") {
+    return "Waiting for details";
+  }
+
+  if (context?.state === "awaiting_apply") {
+    return "Ready for review";
+  }
+
+  return "Ready to plan";
 }
 
 
@@ -852,6 +875,7 @@ function ActionCard({
         {detailItems.length > 0 && !isEditing ? (
           <div className="mt-3">
             <button
+              aria-expanded={showDetails}
               className="text-xs font-semibold text-brand-ink/50 transition hover:text-brand-ink active:scale-[0.98]"
               type="button"
               onClick={() => setShowDetails((current) => !current)}
@@ -1063,16 +1087,20 @@ function ChatBubble({
             ) : null}
 
             {!hasHandledAllSuggestions && !isReviewOpen ? (
-              <div className="animate-assistant-card rounded-[22px] border border-brand-teal/14 bg-white/92 p-4 shadow-[0_14px_34px_rgba(18,32,47,0.065)]">
+              <div className="animate-assistant-card rounded-[22px] border border-brand-teal/14 bg-brand-teal/[0.045] p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-semibold text-brand-ink">
-                      I found {visibleActionCount} suggested{" "}
-                      {visibleActionCount === 1 ? "change" : "changes"} to review.
+                      Proposed plan · {visibleActionCount}{" "}
+                      {visibleActionCount === 1 ? "change" : "changes"}
                     </p>
-                    <p className="mt-1 text-xs leading-5 text-brand-ink/55">
-                      Nothing changes until you open them and apply one.
-                    </p>
+                    <ul className="mt-2 grid gap-1 text-xs leading-5 text-brand-ink/58">
+                      {visibleActions.slice(0, 3).map((suggestion) => (
+                        <li key={suggestion.id} className="truncate">
+                          • {suggestion.title}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                   <Button
                     className="h-10 rounded-full px-4 text-xs font-semibold"
@@ -1080,7 +1108,7 @@ function ChatBubble({
                     type="button"
                     onClick={() => onOpenReview(message.id)}
                   >
-                    Review changes
+                    Review plan
                   </Button>
                 </div>
               </div>
@@ -1180,10 +1208,10 @@ export function AssistantPage() {
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [context, setContext] = useState<AssistantContextSummary | undefined>();
+  const [contextWarning, setContextWarning] = useState<string | null>(null);
   const [actionStates, setActionStates] = useState<Record<string, ActionState>>({});
   const [openReviewMessages, setOpenReviewMessages] = useState<Record<string, boolean>>({});
   const [assistantNotices, setAssistantNotices] = useState<AssistantNotice[]>([]);
-  const [isIntroHidden, setIsIntroHidden] = useState(false);
   const [isClearChatDialogOpen, setIsClearChatDialogOpen] = useState(false);
   const [isClearChatLoading, setIsClearChatLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1207,13 +1235,21 @@ export function AssistantPage() {
 
   const hasMessages = messages.length > 0;
   const isBusy = isSubmitting || status === "loading";
-  const showIntroCard = !hasMessages && !isIntroHidden;
   const schedulingQuickReplies = getSchedulingQuickReplies(
     activeSchedulingContext,
   );
   const pendingReviewCount = Object.values(actionStates).filter(
     (state) => state.status === "pending" || state.status === "error",
   ).length;
+  const isApplying = Object.values(actionStates).some(
+    (state) => state.status === "applying",
+  );
+  const workflowStatus = getWorkflowStatus({
+    context: activeSchedulingContext,
+    isApplying,
+    isSubmitting,
+    pendingReviewCount,
+  });
 
   async function clearConversationHistory() {
     setIsClearChatLoading(true);
@@ -1241,7 +1277,6 @@ export function AssistantPage() {
       setOpenReviewMessages({});
       setAssistantNotices([]);
       setError(null);
-      setIsIntroHidden(false);
       setIsClearChatDialogOpen(false);
     } finally {
       setIsClearChatLoading(false);
@@ -1543,7 +1578,6 @@ export function AssistantPage() {
           setActiveSchedulingContext(
             restoredSnapshot.activeSchedulingContext,
           );
-          setIsIntroHidden(restoredSnapshot.messages.length > 0);
         }
 
         const response = await requestPlanReview(
@@ -1557,6 +1591,7 @@ export function AssistantPage() {
         }
 
         setContext(response.context);
+        setContextWarning(response.dataWarning ?? null);
         setHasRestoredConversation(true);
         setError(null);
         setStatus("ready");
@@ -1959,6 +1994,7 @@ export function AssistantPage() {
       const actions = getActions(chatResponse);
 
       setContext(chatResponse.context);
+      setContextWarning(chatResponse.dataWarning ?? null);
       if (chatResponse.schedulingContext !== undefined) {
         setActiveSchedulingContext(chatResponse.schedulingContext);
       }
@@ -2158,94 +2194,100 @@ export function AssistantPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-brand-mist pb-[calc(5.75rem+env(safe-area-inset-bottom))] md:pb-0">
-      <SchedulerNav />
+    <SchedulerAppShell
+      fullHeight
+      contentClassName="gap-3"
+      className="bg-transparent"
+    >
+      <SchedulerPageHeader
+        className="shrink-0 py-4 sm:py-4"
+        description="Tell me what you need to accomplish. I’ll build a plan for you to review."
+        title="Planning Assistant"
+        trustNote="Nothing changes until you approve it."
+        actions={
+          hasMessages ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 rounded-full px-3 text-xs text-brand-ink/55 hover:text-brand-ink"
+              onClick={() => setIsClearChatDialogOpen(true)}
+            >
+              Clear conversation
+            </Button>
+          ) : null
+        }
+      >
+        <div
+          aria-live="polite"
+          className="mt-3 inline-flex w-fit items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58"
+          role="status"
+        >
+          <span
+            aria-hidden="true"
+            className={cn(
+              "h-2 w-2 rounded-full bg-brand-teal",
+              (isSubmitting || isApplying) && "animate-pulse",
+            )}
+          />
+          {workflowStatus}
+        </div>
+      </SchedulerPageHeader>
 
-      <main className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4 px-4 pb-3 pt-4 sm:px-6 sm:py-8 md:gap-6">
-        
-        {showIntroCard ? (
-          <section className="panel shrink-0 p-4 sm:p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-ink sm:text-2xl">
-                  What do you need to get done?
-                </h1>
-                <p className="mt-1 text-sm leading-6 text-brand-ink/60">
-                  Describe tasks, paste a plan, or ask Schedule Builder to organize your week.
-                </p>
-                <p className="mt-2 text-xs font-semibold text-brand-teal">
-                  Nothing is added to your schedule unless you approve it.
-                </p>
-              </div>
-              <button
-                aria-label="Hide assistant intro"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-brand-ink/8 bg-white/70 text-lg leading-none text-brand-ink/45 transition hover:bg-white hover:text-brand-ink"
-                type="button"
-                onClick={() => setIsIntroHidden(true)}
-              >
-                ×
-              </button>
-            </div>
-            <div className="mt-4">
-              <AssistantWorkspaceContext
-                context={context}
-                pendingReviewCount={pendingReviewCount}
-              />
-            </div>
-          </section>
-        ) : (
-          <section className="flex shrink-0 items-center justify-between gap-3 px-1">
-            <div className="min-w-0">
-              <h1 className="text-sm font-semibold text-brand-ink">
-                Planning Assistant
-              </h1>
-              <p className="truncate text-xs text-brand-ink/50">
-                Nothing changes unless you apply a suggestion.
-              </p>
-            </div>
-            {hasMessages ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 shrink-0 rounded-full px-3 text-[11px] font-bold uppercase tracking-wider text-brand-ink/40 hover:text-brand-ink"
-                onClick={() => setIsClearChatDialogOpen(true)}
-              >
-                Clear
-              </Button>
-            ) : null}
-          </section>
-        )}
+      <details className="shrink-0 rounded-[22px] border border-brand-ink/8 bg-white/68 p-3 xl:hidden">
+        <summary className="cursor-pointer text-sm font-semibold text-brand-ink">
+          Planning context
+        </summary>
+        <div className="mt-3">
+          <AssistantWorkspaceContext
+            context={context}
+            pendingReviewCount={pendingReviewCount}
+          />
+          {contextWarning ? (
+            <p className="mt-3 rounded-[16px] border border-brand-coral/15 bg-brand-coral/[0.07] px-3 py-2 text-xs leading-5 text-brand-coral">
+              {contextWarning}
+            </p>
+          ) : null}
+        </div>
+      </details>
 
-        {/* Main Chat Area */}
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {/* Chat Flow Container */}
-          <div className="flex-1 overflow-y-auto px-2 sm:px-6 lg:px-8">
-            <div className="flex flex-col gap-6">
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
+        <section
+          aria-label="Assistant conversation"
+          className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/66 shadow-[0_22px_58px_rgba(18,32,47,0.085)] backdrop-blur-sm"
+        >
+          <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
               {!hasMessages ? (
-                <div className="flex flex-col items-center justify-center py-6 text-center sm:py-16">
-                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-teal/10">
-                    <TargetIcon className="h-6 w-6 text-brand-teal" />
+                <div className="flex min-h-[42vh] flex-col items-center justify-center py-6 text-center">
+                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-teal text-white shadow-[0_14px_32px_rgba(15,118,110,0.18)]">
+                    <TargetIcon
+                      className={cn("h-6 w-6", status === "loading" && "animate-pulse")}
+                    />
                   </div>
-                  <h2 className="mb-2 text-xl font-semibold text-brand-ink sm:text-2xl">
-                    Start with whatever is on your mind.
+                  <h2 className="text-xl font-semibold text-brand-ink sm:text-2xl">
+                    {status === "loading"
+                      ? "Loading your planning context…"
+                      : "What do you need to get done?"}
                   </h2>
-                  <p className="mb-8 max-w-md text-sm text-brand-ink/60">
-                    Add an assignment, task, workout, meeting, deadline, or paste an existing plan. Nothing changes until you approve it.
+                  <p className="mb-7 mt-2 max-w-md text-sm leading-6 text-brand-ink/58">
+                    {status === "loading"
+                      ? "Checking projects, time blocks, work constraints, and calendar sources."
+                      : "Describe a task, deadline, meeting, workout, or paste a full plan. You can review every proposed change."}
                   </p>
-                  <div className="flex max-w-lg flex-wrap justify-center gap-2.5">
-                    {examplePrompts.map((example) => (
+                  {status !== "loading" ? (
+                    <div aria-label="Try asking" className="flex max-w-lg flex-wrap justify-center gap-2">
+                      {examplePrompts.slice(0, 4).map((example) => (
                       <button
                         key={example}
-                        className="rounded-full border border-brand-ink/10 bg-white px-4 py-2 text-sm font-semibold text-brand-ink/70 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-teal/30 hover:text-brand-ink active:scale-95"
+                        className="min-h-10 rounded-full border border-brand-ink/9 bg-white/88 px-4 py-2 text-sm font-semibold text-brand-ink/66 hover:-translate-y-0.5 hover:border-brand-teal/28 hover:text-brand-ink"
                         type="button"
-                        onClick={() => {
-                          setPrompt(example);
-                        }}
+                        onClick={() => setPrompt(example)}
                       >
                         {example}
                       </button>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -2272,7 +2314,7 @@ export function AssistantPage() {
               ))}
 
               {assistantNotices.length > 0 ? (
-                <div className="mx-auto grid w-full max-w-md gap-2">
+                <div aria-live="polite" className="mx-auto grid w-full max-w-md gap-2">
                   {assistantNotices.map((notice) => (
                     <div
                       key={notice.id}
@@ -2290,7 +2332,7 @@ export function AssistantPage() {
               ) : null}
 
               {error ? (
-                <div className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-center text-sm leading-6 text-brand-coral">
+                <div aria-live="assertive" className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-center text-sm leading-6 text-brand-coral" role="alert">
                   {error}
                 </div>
               ) : null}
@@ -2299,10 +2341,9 @@ export function AssistantPage() {
             </div>
           </div>
 
-          {/* Chat Composer */}
-          <div className="shrink-0 border-t border-brand-ink/5 bg-brand-mist/90 pb-2 pt-4 backdrop-blur-md sm:pb-4">
+          <div className="shrink-0 border-t border-brand-ink/7 bg-white/88 px-3 pb-3 pt-3 backdrop-blur-md sm:px-5 sm:pb-4">
             {status === "signed_out" ? (
-              <div className="text-center">
+              <div className="py-2 text-center">
                 <p className="text-sm font-semibold text-brand-ink">
                   Sign in to use Planning Assistant
                 </p>
@@ -2318,32 +2359,18 @@ export function AssistantPage() {
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="mx-auto max-w-3xl">
-                {hasMessages ? (
+                {hasMessages && schedulingQuickReplies.length > 0 ? (
                   <div className="mb-3 px-1">
-                    {schedulingQuickReplies.length > 0 ? (
-                      <p className="mb-2 text-xs font-semibold text-brand-ink/55">
-                        {activeSchedulingContext?.pendingQuestion ?? "Choose an option"}
-                      </p>
-                    ) : null}
+                    <p className="mb-2 text-xs font-semibold text-brand-ink/55">
+                      {activeSchedulingContext?.pendingQuestion ?? "Choose an option"}
+                    </p>
                     <div className="flex flex-wrap gap-2">
-                      {(schedulingQuickReplies.length > 0
-                        ? schedulingQuickReplies
-                        : examplePrompts.map((example) => ({
-                            label: example,
-                            prompt: example,
-                          }))).map((choice) => (
+                      {schedulingQuickReplies.map((choice) => (
                         <button
                           key={`${choice.label}-${choice.prompt}`}
-                          className="rounded-full border border-brand-ink/10 bg-white/80 px-3.5 py-2 text-xs font-semibold text-brand-ink/60 shadow-sm hover:-translate-y-0.5 hover:border-brand-teal/30 hover:bg-white hover:text-brand-ink active:scale-95"
+                          className="min-h-10 rounded-full border border-brand-ink/10 bg-white px-3.5 py-2 text-xs font-semibold text-brand-ink/62 hover:-translate-y-0.5 hover:border-brand-teal/30 hover:text-brand-ink"
                           type="button"
-                          onClick={() => {
-                            if (schedulingQuickReplies.length > 0) {
-                              void sendPrompt(choice.prompt);
-                              return;
-                            }
-
-                            setPrompt(choice.prompt);
-                          }}
+                          onClick={() => void sendPrompt(choice.prompt)}
                         >
                           {choice.label}
                         </button>
@@ -2351,14 +2378,15 @@ export function AssistantPage() {
                     </div>
                   </div>
                 ) : null}
-                <div className="flex flex-col gap-3 rounded-[24px] border border-brand-ink/10 bg-white p-2 shadow-sm focus-within:border-brand-teal/30 sm:flex-row sm:items-end sm:rounded-full sm:p-2.5">
+                <div className="flex flex-col gap-2 rounded-[22px] border border-brand-ink/10 bg-white p-2 shadow-[0_12px_34px_rgba(18,32,47,0.08)] focus-within:border-brand-teal/35 focus-within:shadow-[0_14px_38px_rgba(15,118,110,0.1)] sm:flex-row sm:items-end sm:rounded-[24px] sm:p-2.5">
                   <div className="relative flex-1">
                     <textarea
                       ref={textareaRef}
-                      className="min-h-[44px] w-full resize-none bg-transparent px-4 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/40 focus:outline-none sm:min-h-[48px] sm:text-base max-h-[160px] overflow-y-auto"
+                      aria-label="Planning request"
+                      className="max-h-[180px] min-h-[48px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/38 focus:outline-none sm:px-4 sm:text-base"
                       disabled={isBusy}
                       maxLength={12000}
-                      placeholder="Add a task, deadline, meeting, or paste a plan…"
+                      placeholder="Tell me what you need to do, or paste a task list or plan…"
                       rows={1}
                       value={prompt}
                       onChange={(event) => setPrompt(event.target.value)}
@@ -2371,18 +2399,51 @@ export function AssistantPage() {
                     />
                   </div>
                   <Button
-                    className="h-11 w-full shrink-0 rounded-[16px] px-6 text-sm font-semibold sm:h-12 sm:w-auto sm:rounded-full"
+                    className="h-11 w-full shrink-0 rounded-[16px] px-6 text-sm font-semibold sm:h-12 sm:w-auto sm:rounded-[18px]"
                     disabled={isBusy || !prompt.trim()}
                     type="submit"
                   >
                     Send
                   </Button>
                 </div>
+                <p className="mt-2 px-2 text-[11px] text-brand-ink/42">
+                  Assignments, tasks, workouts, meetings, deadlines, or full plans
+                </p>
               </form>
             )}
           </div>
         </section>
-      </main>
+
+        <aside className="hidden min-h-0 overflow-y-auto rounded-[26px] border border-white/75 bg-white/62 p-4 shadow-[0_18px_48px_rgba(18,32,47,0.065)] xl:block">
+          <p className="text-[10px] font-bold uppercase tracking-[0.17em] text-brand-teal">
+            Planning context
+          </p>
+          <p className="mt-2 text-sm leading-6 text-brand-ink/58">
+            The Assistant checks these sources before proposing a change.
+          </p>
+          <div className="mt-4">
+            <AssistantWorkspaceContext
+              context={context}
+              pendingReviewCount={pendingReviewCount}
+            />
+          </div>
+          {contextWarning ? (
+            <p className="mt-4 rounded-[18px] border border-brand-coral/15 bg-brand-coral/[0.07] p-3 text-xs leading-5 text-brand-coral">
+              {contextWarning}
+            </p>
+          ) : null}
+          {pendingReviewCount > 0 ? (
+            <div className="mt-4 rounded-[18px] border border-brand-teal/12 bg-brand-teal/[0.06] p-3">
+              <p className="text-xs font-semibold text-brand-teal">
+                {pendingReviewCount} {pendingReviewCount === 1 ? "change" : "changes"} waiting
+              </p>
+              <p className="mt-1 text-[11px] leading-5 text-brand-ink/50">
+                Review them inline with the request that created them.
+              </p>
+            </div>
+          ) : null}
+        </aside>
+      </div>
 
       <ConfirmDialog
         confirmLabel="Clear conversation"
@@ -2394,6 +2455,6 @@ export function AssistantPage() {
         onCancel={() => setIsClearChatDialogOpen(false)}
         onConfirm={() => void clearConversationHistory()}
       />
-    </div>
+    </SchedulerAppShell>
   );
 }

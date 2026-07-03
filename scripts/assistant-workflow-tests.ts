@@ -8,6 +8,7 @@ import {
 } from "../lib/assistant-schedule-analysis";
 import { getCurrentWeekStart } from "../lib/calendar";
 import { weekDays } from "../lib/weekly-plan";
+import { getUserFacingError } from "../lib/user-facing-error";
 
 function toIsoDate(date: Date) {
   const year = date.getFullYear();
@@ -174,9 +175,29 @@ function runEarlyDepartureWorkflow() {
   assert.equal(ready.proposal?.durationMinutes, 60);
 }
 
+function runUserFacingErrorSafetyCases() {
+  assert.equal(
+    getUserFacingError(
+      new Error(
+        "Could not find the table 'public.schedule_exceptions' in the schema cache",
+      ),
+      "Some schedule sources did not load.",
+    ),
+    "Some schedule sources did not load.",
+  );
+  assert.equal(
+    getUserFacingError(
+      new Error("Your session expired. Please sign in again."),
+      "Please try again.",
+    ),
+    "Your session expired. Please sign in again.",
+  );
+}
+
 runExactMsaWorkflow();
 runCorrectionAndValidationCases();
 runUnavailableAndBoundaryCases();
 runEarlyDepartureWorkflow();
+runUserFacingErrorSafetyCases();
 
-console.log("Assistant workflow tests passed (4 suites, 28 assertions).\n");
+console.log("Assistant workflow tests passed (5 suites, 30 assertions).\n");

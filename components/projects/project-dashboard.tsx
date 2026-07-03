@@ -15,7 +15,7 @@ import { AddProjectForm } from "@/components/projects/add-project-form";
 import { ProjectList } from "@/components/projects/project-list";
 import { WeeklyPlanSection } from "@/components/projects/weekly-plan-section";
 import { WeeklySummaryCard } from "@/components/projects/weekly-summary-card";
-import { SchedulerNav } from "@/components/scheduler/scheduler-nav";
+import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -72,6 +72,7 @@ import {
   getWorkShiftDurationHours,
   type WorkShift,
 } from "@/lib/work-schedule";
+import { getUserFacingError } from "@/lib/user-facing-error";
 import {
   formatEstimatedHours,
   formatStartTime,
@@ -155,24 +156,7 @@ function getSchedulerSection(pathname: string): SchedulerSection {
 }
 
 function getSchedulerErrorMessage(error: unknown) {
-  if (typeof error === "string") {
-    return error;
-  }
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return "Please try again shortly.";
+  return getUserFacingError(error, "Please try again shortly.");
 }
 
 function getFriendlyAuthErrorMessage(error: unknown) {
@@ -2877,13 +2861,11 @@ export function ProjectDashboard() {
   }
 
   return (
-    <div className="pb-28 pt-5 sm:pt-6 md:pb-10 lg:pt-10">
-      <div className="app-shell flex flex-col gap-5 sm:gap-6">
-        <SchedulerNav />
+    <SchedulerAppShell contentClassName="flex flex-col gap-5 sm:gap-6">
 
         {currentSection === "dashboard" ? (
           <>
-            <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
+            <section className="page-header !block overflow-hidden bg-dashboard-radial">
               <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-end">
                 <div className="max-w-4xl">
                   <div className="eyebrow-chip">
@@ -3012,9 +2994,12 @@ export function ProjectDashboard() {
                     <FolderStackIcon className="h-4 w-4" />
                     Projects
                   </div>
-                  <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                    Manage your active work, next actions, and weekly project priorities.
+                  <h1 className="page-title mt-3">
+                    Projects
                   </h1>
+                  <p className="page-contract">
+                    Define what you are working toward and the next action.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -3072,12 +3057,12 @@ export function ProjectDashboard() {
 
         {currentSection === "plan" ? (
           <>
-            <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
+            <section className="page-header !block overflow-hidden bg-dashboard-radial">
               <div className="max-w-3xl">
-                <h1 className="text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-5xl">
+                <h1 className="page-title">
                   Weekly Plan
                 </h1>
-                <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
+                <p className="page-contract">
                   Draft your time blocks.
                 </p>
               </div>
@@ -3098,18 +3083,17 @@ export function ProjectDashboard() {
 
         {currentSection === "settings" ? (
           <>
-            <section className="panel-strong overflow-hidden bg-dashboard-radial p-6 sm:p-8 lg:p-10">
+            <section className="page-header !block overflow-hidden bg-dashboard-radial">
               <div className="max-w-3xl">
                 <div className="eyebrow-chip">
                   <TargetIcon className="h-4 w-4" />
                   Settings
                 </div>
-                <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-brand-ink sm:mt-5 sm:text-5xl">
-                  Account and sync status.
+                <h1 className="page-title mt-3">
+                  Settings
                 </h1>
-                <p className="mt-3 text-sm leading-6 text-brand-ink/70 sm:mt-4 sm:text-lg sm:leading-7">
-                  Check which account is signed in and confirm your schedule is
-                  syncing.
+                <p className="page-contract">
+                  Control your planning preferences and connected services.
                 </p>
               </div>
             </section>
@@ -3137,7 +3121,6 @@ export function ProjectDashboard() {
             </section>
           </>
         ) : null}
-      </div>
-    </div>
+    </SchedulerAppShell>
   );
 }

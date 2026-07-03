@@ -166,6 +166,7 @@ export type AssistantPlanReviewResponse = {
   actions: AssistantSuggestion[];
   assistantMessage: string;
   context: AssistantContextSummary;
+  dataWarning?: string | null;
   message: string;
   source: AssistantSource;
   suggestions: AssistantSuggestion[];
