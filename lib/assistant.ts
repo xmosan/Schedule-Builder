@@ -93,6 +93,26 @@ export type AssistantSuggestionType = (typeof assistantSuggestionTypes)[number];
 export type AssistantSuggestionSeverity = "info" | "warning" | "important";
 export type AssistantSource = "ai" | "fallback";
 
+export type AssistantContextSourceState =
+  | "available"
+  | "empty"
+  | "failed"
+  | "not_connected";
+
+export type AssistantContextSourceStatus = {
+  detail: string;
+  lastUpdatedAt?: string | null;
+  state: AssistantContextSourceState;
+};
+
+export type AssistantContextStatus = {
+  externalCalendars: AssistantContextSourceStatus;
+  refreshedAt: string;
+  scheduleExceptions: AssistantContextSourceStatus;
+  weeklyPlan: AssistantContextSourceStatus;
+  workSchedule: AssistantContextSourceStatus;
+};
+
 export type AssistantContextSummary = {
   activeProjectsCount: number;
   calendarConflictCount: number;
@@ -166,6 +186,7 @@ export type AssistantPlanReviewResponse = {
   actions: AssistantSuggestion[];
   assistantMessage: string;
   context: AssistantContextSummary;
+  contextStatus?: AssistantContextStatus;
   dataWarning?: string | null;
   message: string;
   source: AssistantSource;

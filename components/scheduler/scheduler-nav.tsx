@@ -84,13 +84,8 @@ export function SchedulerNav() {
           })}
         </nav>
 
-        <div className="mt-auto rounded-[20px] border border-brand-teal/12 bg-brand-teal/[0.055] p-3.5">
-          <p className="text-xs font-semibold text-brand-teal">
-            The Assistant plans. You approve.
-          </p>
-          <p className="mt-1 text-[11px] leading-5 text-brand-ink/48">
-            Manual controls stay available in every supporting view.
-          </p>
+        <div className="mt-auto px-3 pb-2 pt-4 text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-ink/32">
+          Supporting views stay editable
         </div>
       </aside>
 

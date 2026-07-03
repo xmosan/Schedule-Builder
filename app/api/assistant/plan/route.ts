@@ -15,6 +15,7 @@ import {
   isVaguePrompt,
   normalizeAssistantSuggestions,
   shouldGenerateAssistantActionCards,
+  type AssistantContextStatus,
   type AssistantGoogleSyncRow,
   type AssistantPlanReviewResponse,
   type AssistantPlanningContext,
@@ -467,7 +468,7 @@ async function loadPlanningContext(
     fetchScheduleExceptionsForUser(supabase, userId),
     supabase
       .from("google_calendar_connections")
-      .select("sync_enabled, sync_calendar_name")
+      .select("status, last_synced_at, sync_enabled, sync_calendar_name")
       .eq("user_id", userId)
       .maybeSingle(),
     supabase
@@ -514,6 +515,90 @@ async function loadPlanningContext(
           weeklyPlanBlockId: row.weekly_plan_block_id,
         })) satisfies AssistantGoogleSyncRow[])
       : [];
+  const importedEvents =
+    importedEventsResult.error == null ? importedEventsResult.data : [];
+  const relevantImportedEvents = getRelevantImportedCalendarEvents(importedEvents);
+  const googleConnection =
+    googleSyncConnectionResult.error == null
+      ? googleSyncConnectionResult.data
+      : null;
+  const latestImportedAt = importedEvents.reduce<string | null>(
+    (latest, event) =>
+      !latest || event.importedAt > latest ? event.importedAt : latest,
+    null,
+  );
+  const refreshedAt = new Date().toISOString();
+  const contextStatus: AssistantContextStatus = {
+    externalCalendars: importedEventsResult.error
+      ? {
+          detail: "Couldn’t load · Retry",
+          state: "failed",
+        }
+      : relevantImportedEvents.length > 0
+        ? {
+            detail: `${relevantImportedEvents.length} upcoming event${relevantImportedEvents.length === 1 ? "" : "s"} loaded`,
+            lastUpdatedAt: googleConnection?.last_synced_at ?? latestImportedAt,
+            state: "available",
+          }
+        : googleSyncConnectionResult.error
+          ? {
+              detail: "Couldn’t verify connection · Retry",
+              state: "failed",
+            }
+          : googleConnection?.status === "connected" || importedEvents.length > 0
+            ? {
+                detail: "Connected · 0 events this week",
+                lastUpdatedAt: googleConnection?.last_synced_at ?? latestImportedAt,
+                state: "empty",
+              }
+            : {
+                detail: "Not connected",
+                state: "not_connected",
+              },
+    refreshedAt,
+    scheduleExceptions: scheduleExceptionsResult.error
+      ? {
+          detail: "Couldn’t load · Retry",
+          state: "failed",
+        }
+      : scheduleExceptionsResult.data.length > 0
+        ? {
+            detail: `${scheduleExceptionsResult.data.length} temporary change${scheduleExceptionsResult.data.length === 1 ? "" : "s"} loaded`,
+            state: "available",
+          }
+        : {
+            detail: "No temporary changes",
+            state: "empty",
+          },
+    weeklyPlan: weeklyPlanResult.error
+      ? {
+          detail: "Couldn’t load · Retry",
+          state: "failed",
+        }
+      : weeklyPlanResult.data.length > 0
+        ? {
+            detail: `${weeklyPlanResult.data.length} time block${weeklyPlanResult.data.length === 1 ? "" : "s"} this week`,
+            state: "available",
+          }
+        : {
+            detail: "No time blocks this week",
+            state: "empty",
+          },
+    workSchedule: workShiftsResult.error
+      ? {
+          detail: "Couldn’t load · Retry",
+          state: "failed",
+        }
+      : workShiftsResult.data.length > 0
+        ? {
+            detail: `${workShiftsResult.data.length} shift${workShiftsResult.data.length === 1 ? "" : "s"} loaded`,
+            state: "available",
+          }
+        : {
+            detail: "No shifts added",
+            state: "empty",
+          },
+  };
 
   return {
     context: createAssistantPlanningContext(
@@ -521,9 +606,7 @@ async function loadPlanningContext(
       weeklyPlanResult.error == null ? weeklyPlanResult.data : [],
       plannerType,
       workShiftsResult.error == null ? workShiftsResult.data : [],
-      importedEventsResult.error == null
-        ? getRelevantImportedCalendarEvents(importedEventsResult.data)
-        : [],
+      relevantImportedEvents,
       googleSyncRows,
       {
         syncCalendarName:
@@ -544,11 +627,12 @@ async function loadPlanningContext(
         weekStartDate: syncWeekStartDate,
       },
     ),
+    contextStatus,
     profile,
     warning:
       loadErrors.length > 0
         ? scheduleExceptionsResult.error
-          ? "Temporary schedule changes could not be loaded, so this plan may be incomplete."
+          ? "Temporary schedule changes could not be loaded. Availability answers may be incomplete."
           : "Some schedule sources did not load. Suggestions may be incomplete."
         : null,
   };
@@ -1083,20 +1167,18 @@ export async function GET(request: NextRequest) {
     return authResult;
   }
 
-  const { context, warning } = await loadPlanningContext(
+  const { context, contextStatus, warning } = await loadPlanningContext(
     authResult.supabase,
     authResult.userId,
   );
   const response = createContextOnlyAssistantResponse(context);
-  const nextMessage = warning
-    ? `${response.message} ${warning}`
-    : response.message;
 
   return NextResponse.json({
     ...response,
-    assistantMessage: nextMessage,
+    assistantMessage: response.message,
+    contextStatus,
     dataWarning: warning,
-    message: nextMessage,
+    message: response.message,
   });
 }
 
@@ -1139,7 +1221,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { context, profile, warning } = await loadPlanningContext(
+  const { context, contextStatus, profile, warning } = await loadPlanningContext(
     authResult.supabase,
     authResult.userId,
     timezone,
@@ -1149,14 +1231,12 @@ export async function POST(request: NextRequest) {
     prompt,
     recentMessages,
   );
-  const fallbackMessage = warning
-    ? `${fallbackResponse.message} ${warning}`
-    : fallbackResponse.message;
   const fallbackWithWarning: AssistantPlanReviewResponse = {
     ...fallbackResponse,
-    assistantMessage: fallbackMessage,
+    assistantMessage: fallbackResponse.message,
+    contextStatus,
     dataWarning: warning,
-    message: fallbackMessage,
+    message: fallbackResponse.message,
   };
 
   const scheduleInput = {
@@ -1172,7 +1252,7 @@ export async function POST(request: NextRequest) {
   const schedulingTurn = advanceAssistantSchedulingConversation({
     activeContext: activeSchedulingContext,
     input: scheduleInput,
-    loadWarning: warning,
+    loadWarning: null,
     prompt,
     recentMessages,
   });
@@ -1258,6 +1338,7 @@ export async function POST(request: NextRequest) {
       actions: suggestions,
       assistantMessage: schedulingTurn.message,
       context: fallbackWithWarning.context,
+      contextStatus,
       dataWarning: warning,
       message: schedulingTurn.message,
       schedulingContext,
@@ -1335,20 +1416,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const messageWithWarning = warning ? `${finalMessage} ${warning}` : finalMessage;
-
-    if (warning) {
-      send({ type: "message_delta", delta: ` ${warning}` });
-    }
-
     send({
       type: "final",
       response: {
         actions: suggestions,
-        assistantMessage: messageWithWarning,
+        assistantMessage: finalMessage,
         context: fallbackResponse.context,
+        contextStatus,
         dataWarning: warning,
-        message: messageWithWarning,
+        message: finalMessage,
         source: "ai",
         suggestions,
       },

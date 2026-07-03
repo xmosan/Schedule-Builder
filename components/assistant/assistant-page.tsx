@@ -13,6 +13,7 @@ import {
 } from "@/lib/assistant-conversation";
 import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
 import { TargetIcon } from "@/components/projects/icons";
+import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
 import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { SchedulerPageHeader } from "@/components/scheduler/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +22,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   type AssistantApplyResponse,
   type AssistantContextSummary,
+  type AssistantContextStatus,
   type AssistantPlanReviewResponse,
   type AssistantSuggestion,
   type AssistantSuggestionType,
@@ -80,13 +82,37 @@ type AssistantNotice = {
 
 const cardExitDelayMs = 300;
 
-const examplePrompts = [
-  "Plan my week",
-  "Balance school and work",
-  "Find open time",
-  "Create study blocks",
-  "Suggest my Top 3",
-];
+function getExamplePrompts(plannerType?: string) {
+  if (plannerType === "Student") {
+    return [
+      "Plan around my school deadlines",
+      "Find study time this week",
+      "Balance school and work",
+    ];
+  }
+
+  if (plannerType === "Professional") {
+    return [
+      "Plan around my work shifts",
+      "Find open time after work",
+      "Organize my priorities this week",
+    ];
+  }
+
+  if (plannerType === "Organization leader") {
+    return [
+      "Plan preparation time this week",
+      "Check my schedule for conflicts",
+      "Organize my team priorities",
+    ];
+  }
+
+  return [
+    "Plan the rest of my week",
+    "Find time for my active projects",
+    "Review upcoming deadlines",
+  ];
+}
 
 function getSchedulingQuickReplies(
   context: AssistantSchedulingContext | null,
@@ -118,6 +144,11 @@ function getSchedulingQuickReplies(
 }
 const confirmationPromptPattern =
   /^(yes|yeah|yep|confirm|confirmed|apply|apply it|do it|save it|update it|make the change|alright|all right|ok|okay)(?:[\s,!.].*)?$/i;
+const legacyWorkspaceWarningSuffixes = [
+  "Temporary schedule changes could not be loaded, so this plan may be incomplete.",
+  "Some schedule sources did not load. Suggestions may be incomplete.",
+  "Some calendar or schedule data did not load, so this answer may be incomplete.",
+];
 
 const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
   new_project: "Project draft",
@@ -161,6 +192,16 @@ function createId(prefix: string) {
   }
 
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function stripLegacyWorkspaceWarning(content: string) {
+  return legacyWorkspaceWarningSuffixes.reduce(
+    (nextContent, warning) =>
+      nextContent.endsWith(warning)
+        ? nextContent.slice(0, -warning.length).trimEnd()
+        : nextContent,
+    content,
+  );
 }
 
 function getErrorMessage(error: unknown) {
@@ -220,6 +261,30 @@ function isPendingActionState(actionState?: ActionState) {
 
 function isConfirmationPrompt(prompt: string) {
   return confirmationPromptPattern.test(prompt.trim());
+}
+
+function getPendingReviewCount(
+  messages: ChatMessage[],
+  actionStates: Record<string, ActionState>,
+) {
+  return messages.reduce((count, message) => {
+    if (!message.response) {
+      return count;
+    }
+
+    return (
+      count +
+      getActions(message.response).filter((suggestion) => {
+        const state = actionStates[suggestion.id];
+
+        return (
+          isActionableSuggestion(suggestion) &&
+          isActionVisible(state) &&
+          isPendingActionState(state)
+        );
+      }).length
+    );
+  }, 0);
 }
 
 function getActions(response?: AssistantPlanReviewResponse) {
@@ -323,68 +388,15 @@ function getTypingDelay(chunk: string) {
   return Math.max(22, Math.min(42, chunk.length * 4));
 }
 
-function AssistantWorkspaceContext({
-  context,
-  pendingReviewCount,
-}: {
-  context?: AssistantContextSummary;
-  pendingReviewCount: number;
-}) {
-  if (!context) {
-    return null;
-  }
-
-  const items = [
-    {
-      label: "Work schedule",
-      value:
-        context.workShiftsCount > 0
-          ? `${context.workShiftsCount} shift${context.workShiftsCount === 1 ? "" : "s"} loaded`
-          : "Not added",
-    },
-    {
-      label: "Calendar context",
-      value:
-        context.importedEventsCount > 0
-          ? `${context.importedEventsCount} external event${context.importedEventsCount === 1 ? "" : "s"}`
-          : "No external events",
-    },
-    {
-      label: "This week",
-      value: `${context.weeklyBlocksCount} time block${context.weeklyBlocksCount === 1 ? "" : "s"}`,
-    },
-    {
-      label: "Awaiting review",
-      value: `${pendingReviewCount} change${pendingReviewCount === 1 ? "" : "s"}`,
-    },
-  ];
-
-  return (
-    <dl className="grid grid-cols-2 gap-2 xl:grid-cols-1" aria-label="Planning context">
-      {items.map((item) => (
-        <div
-          key={item.label}
-          className="rounded-[17px] border border-brand-ink/7 bg-white/72 px-3 py-2.5"
-        >
-          <dt className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">
-            {item.label}
-          </dt>
-          <dd className="mt-1 text-xs font-semibold text-brand-ink/72">
-            {item.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 function getWorkflowStatus({
   context,
+  hasDataWarning,
   isApplying,
   isSubmitting,
   pendingReviewCount,
 }: {
   context: AssistantSchedulingContext | null;
+  hasDataWarning: boolean;
   isApplying: boolean;
   isSubmitting: boolean;
   pendingReviewCount: number;
@@ -398,18 +410,46 @@ function getWorkflowStatus({
   }
 
   if (pendingReviewCount > 0) {
-    return "Ready for review";
+    return `${pendingReviewCount} ${pendingReviewCount === 1 ? "change" : "changes"} ready to review`;
   }
 
-  if (context?.state === "awaiting_duration" || context?.state === "needs_clarification") {
+  if (context?.state === "calculating_availability") {
+    return "Checking your schedule";
+  }
+
+  if (context?.state === "awaiting_window_selection") {
+    return "Waiting for a time choice";
+  }
+
+  if (context?.state === "awaiting_duration") {
+    return "Waiting for a duration";
+  }
+
+  if (context?.state === "awaiting_title") {
+    return "Waiting for a title";
+  }
+
+  if (context?.state === "needs_clarification") {
     return "Waiting for details";
   }
 
-  if (context?.state === "awaiting_apply") {
+  if (context?.state === "proposal_ready" || context?.state === "awaiting_apply") {
     return "Ready for review";
   }
 
-  return "Ready to plan";
+  if (context?.state === "applied") {
+    return "Plan applied";
+  }
+
+  if (context?.state === "failed") {
+    return "Couldn’t finish this planning step";
+  }
+
+  if (hasDataWarning) {
+    return "Some schedule data is unavailable";
+  }
+
+  return "Ready for a request";
 }
 
 
@@ -433,16 +473,22 @@ function ActionCard({
   index,
   onApply,
   onIgnore,
+  onSelectionChange,
   onToggleEdit,
   onUpdate,
+  selected,
+  showSelection,
   suggestion,
 }: {
   actionState: ActionState;
   index: number;
   onApply: () => void;
   onIgnore: () => void;
+  onSelectionChange: (selected: boolean) => void;
   onToggleEdit: () => void;
   onUpdate: (patch: Partial<AssistantSuggestion>) => void;
+  selected: boolean;
+  showSelection: boolean;
   suggestion: AssistantSuggestion;
 }) {
   const canApply = isActionableSuggestion(suggestion);
@@ -515,6 +561,15 @@ function ActionCard({
         )}
       >
         <div className="flex items-start gap-3">
+          {showSelection ? (
+            <input
+              aria-label={`Select ${suggestion.title}`}
+              checked={selected}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-brand-teal"
+              type="checkbox"
+              onChange={(event) => onSelectionChange(event.target.checked)}
+            />
+          ) : null}
           <span
             className={cn(
               "mt-1 h-2.5 w-2.5 shrink-0 rounded-full",
@@ -1029,16 +1084,31 @@ function ChatBubble({
     patch: Partial<AssistantSuggestion>,
   ) => void;
 }) {
+  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const isUser = message.role === "user";
   const actions = getActions(message.response);
   const visibleActions = actions.filter((suggestion) =>
     isActionVisible(actionStates[suggestion.id]),
   );
-  const visibleActionCount = visibleActions.length;
-  const hasHandledAllSuggestions = actions.length > 0 && visibleActionCount === 0;
+  const pendingVisibleActions = visibleActions.filter((suggestion) =>
+    isPendingActionState(actionStates[suggestion.id]),
+  );
   const actionableActions = visibleActions.filter(isActionableSuggestion);
+  const pendingActionableActions = actionableActions.filter((suggestion) =>
+    isPendingActionState(actionStates[suggestion.id]),
+  );
   const insightActions = visibleActions.filter(
     (suggestion) => !isActionableSuggestion(suggestion),
+  );
+  const pendingInsightActions = insightActions.filter((suggestion) =>
+    isPendingActionState(actionStates[suggestion.id]),
+  );
+  const visibleActionCount = pendingVisibleActions.length;
+  const hasHandledAllSuggestions = actions.length > 0 && visibleActionCount === 0;
+  const selectedActions = pendingActionableActions.filter((suggestion) =>
+    selectedActionIds.has(suggestion.id),
   );
 
   return (
@@ -1079,7 +1149,11 @@ function ChatBubble({
         </div>
 
         {!isUser && !message.isStreaming && actions.length > 0 ? (
-          <div className="mt-2 w-full space-y-4">
+          <div
+            id={`assistant-review-${message.id}`}
+            className="mt-2 w-full space-y-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal/30"
+            tabIndex={-1}
+          >
             {hasHandledAllSuggestions ? (
               <div className="animate-assistant-card rounded-[20px] border border-brand-teal/20 bg-brand-teal/10 p-4 text-sm font-semibold leading-6 text-brand-teal">
                 You’re all set. Ask for another plan whenever you’re ready.
@@ -1095,7 +1169,7 @@ function ChatBubble({
                       {visibleActionCount === 1 ? "change" : "changes"}
                     </p>
                     <ul className="mt-2 grid gap-1 text-xs leading-5 text-brand-ink/58">
-                      {visibleActions.slice(0, 3).map((suggestion) => (
+                      {pendingVisibleActions.slice(0, 3).map((suggestion) => (
                         <li key={suggestion.id} className="truncate">
                           • {suggestion.title}
                         </li>
@@ -1122,19 +1196,32 @@ function ChatBubble({
                       Suggested next steps
                     </h4>
                     <span className="text-xs text-brand-ink/40">
-                      {actionableActions.length} remaining
+                      {pendingActionableActions.length} remaining
                     </span>
                   </div>
-                  {actionableActions.length > 1 ? (
-                    <Button
-                      className="h-9 rounded-full px-4 text-xs font-semibold"
-                      size="sm"
-                      type="button"
-                      onClick={() => onApplyAll(actionableActions)}
-                    >
-                      Apply all
-                    </Button>
-                  ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    {selectedActions.length > 0 ? (
+                      <Button
+                        className="h-9 rounded-full px-4 text-xs font-semibold"
+                        size="sm"
+                        type="button"
+                        onClick={() => onApplyAll(selectedActions)}
+                      >
+                        Apply selected ({selectedActions.length})
+                      </Button>
+                    ) : null}
+                    {pendingActionableActions.length > 1 ? (
+                      <Button
+                        className="h-9 rounded-full px-4 text-xs font-semibold"
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                        onClick={() => onApplyAll(pendingActionableActions)}
+                      >
+                        Apply all
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
                   {actionableActions.map((suggestion, index) => (
@@ -1150,9 +1237,27 @@ function ChatBubble({
                       suggestion={suggestion}
                       onApply={() => onApply(suggestion)}
                       onIgnore={() => onIgnore(suggestion.id)}
+                      onSelectionChange={(selected) =>
+                        setSelectedActionIds((current) => {
+                          const next = new Set(current);
+
+                          if (selected) {
+                            next.add(suggestion.id);
+                          } else {
+                            next.delete(suggestion.id);
+                          }
+
+                          return next;
+                        })
+                      }
                       onToggleEdit={() => onToggleEdit(suggestion.id)}
                       onUpdate={(patch) =>
                         onUpdateSuggestion(message.id, suggestion.id, patch)
+                      }
+                      selected={selectedActionIds.has(suggestion.id)}
+                      showSelection={
+                        pendingActionableActions.length > 1 &&
+                        isPendingActionState(actionStates[suggestion.id])
                       }
                     />
                   ))}
@@ -1167,7 +1272,7 @@ function ChatBubble({
                     Helpful notes
                   </h4>
                   <span className="text-xs text-brand-ink/40">
-                    {insightActions.length} remaining
+                      {pendingInsightActions.length} remaining
                   </span>
                 </div>
                 <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
@@ -1184,10 +1289,13 @@ function ChatBubble({
                       suggestion={suggestion}
                       onApply={() => onApply(suggestion)}
                       onIgnore={() => onIgnore(suggestion.id)}
+                      onSelectionChange={() => undefined}
                       onToggleEdit={() => onToggleEdit(suggestion.id)}
                       onUpdate={(patch) =>
                         onUpdateSuggestion(message.id, suggestion.id, patch)
                       }
+                      selected={false}
+                      showSelection={false}
                     />
                   ))}
                 </div>
@@ -1208,6 +1316,7 @@ export function AssistantPage() {
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [context, setContext] = useState<AssistantContextSummary | undefined>();
+  const [contextStatus, setContextStatus] = useState<AssistantContextStatus>();
   const [contextWarning, setContextWarning] = useState<string | null>(null);
   const [actionStates, setActionStates] = useState<Record<string, ActionState>>({});
   const [openReviewMessages, setOpenReviewMessages] = useState<Record<string, boolean>>({});
@@ -1215,6 +1324,7 @@ export function AssistantPage() {
   const [isClearChatDialogOpen, setIsClearChatDialogOpen] = useState(false);
   const [isClearChatLoading, setIsClearChatLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRefreshingContext, setIsRefreshingContext] = useState(false);
   const [activeSchedulingContext, setActiveSchedulingContext] =
     useState<AssistantSchedulingContext | null>(null);
   const [activeUserId, setActiveUserId] = useState<string | null>(null);
@@ -1234,18 +1344,18 @@ export function AssistantPage() {
   }, [prompt]);
 
   const hasMessages = messages.length > 0;
+  const examplePrompts = getExamplePrompts(context?.plannerType);
   const isBusy = isSubmitting || status === "loading";
   const schedulingQuickReplies = getSchedulingQuickReplies(
     activeSchedulingContext,
   );
-  const pendingReviewCount = Object.values(actionStates).filter(
-    (state) => state.status === "pending" || state.status === "error",
-  ).length;
+  const pendingReviewCount = getPendingReviewCount(messages, actionStates);
   const isApplying = Object.values(actionStates).some(
     (state) => state.status === "applying",
   );
   const workflowStatus = getWorkflowStatus({
     context: activeSchedulingContext,
+    hasDataWarning: Boolean(contextWarning),
     isApplying,
     isSubmitting,
     pendingReviewCount,
@@ -1502,6 +1612,27 @@ export function AssistantPage() {
     return requestApplyActions([suggestion]);
   }
 
+  async function refreshPlanningContext() {
+    if (status === "signed_out" || isRefreshingContext) {
+      return;
+    }
+
+    setIsRefreshingContext(true);
+
+    try {
+      const response = await requestPlanReview("GET");
+      setContext(response.context);
+      setContextStatus(response.contextStatus);
+      setContextWarning(response.dataWarning ?? null);
+      setError(null);
+      setStatus("ready");
+    } catch (refreshError) {
+      setError(getErrorMessage(refreshError));
+    } finally {
+      setIsRefreshingContext(false);
+    }
+  }
+
   useEffect(() => {
     if (!isSupabaseConfigured()) {
       setStatus("signed_out");
@@ -1563,7 +1694,12 @@ export function AssistantPage() {
 
         if (restoredSnapshot && isActive) {
           setThreadId(restoredSnapshot.threadId);
-          setMessages(restoredSnapshot.messages);
+          setMessages(
+            restoredSnapshot.messages.map((message) => ({
+              ...message,
+              content: stripLegacyWorkspaceWarning(message.content),
+            })),
+          );
           setActionStates(
             Object.fromEntries(
               Object.entries(restoredSnapshot.actionStates).map(([id, state]) => [
@@ -1591,6 +1727,7 @@ export function AssistantPage() {
         }
 
         setContext(response.context);
+        setContextStatus(response.contextStatus);
         setContextWarning(response.dataWarning ?? null);
         setHasRestoredConversation(true);
         setError(null);
@@ -1794,6 +1931,26 @@ export function AssistantPage() {
     return null;
   }
 
+  function openLatestReview() {
+    const pendingReview = getLatestPendingActionReview();
+
+    if (!pendingReview) {
+      return;
+    }
+
+    setOpenReviewMessages((current) => ({
+      ...current,
+      [pendingReview.messageId]: true,
+    }));
+    window.requestAnimationFrame(() => {
+      const review = document.getElementById(
+        `assistant-review-${pendingReview.messageId}`,
+      );
+      review?.scrollIntoView({ behavior: "smooth", block: "center" });
+      review?.focus({ preventScroll: true });
+    });
+  }
+
   async function applyConfirmedSuggestion(
     userMessage: ChatMessage,
     assistantMessageId: string,
@@ -1994,6 +2151,7 @@ export function AssistantPage() {
       const actions = getActions(chatResponse);
 
       setContext(chatResponse.context);
+      setContextStatus(chatResponse.contextStatus);
       setContextWarning(chatResponse.dataWarning ?? null);
       if (chatResponse.schedulingContext !== undefined) {
         setActiveSchedulingContext(chatResponse.schedulingContext);
@@ -2200,60 +2358,60 @@ export function AssistantPage() {
       className="bg-transparent"
     >
       <SchedulerPageHeader
-        className="shrink-0 py-4 sm:py-4"
+        className="shrink-0 py-3.5 sm:py-4"
         description="Tell me what you need to accomplish. I’ll build a plan for you to review."
         title="Planning Assistant"
-        trustNote="Nothing changes until you approve it."
+        trustNote="The Assistant plans. You approve."
         actions={
           hasMessages ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 rounded-full px-3 text-xs text-brand-ink/55 hover:text-brand-ink"
-              onClick={() => setIsClearChatDialogOpen(true)}
-            >
-              Clear conversation
-            </Button>
+            <details className="group relative">
+              <summary
+                aria-label="Conversation options"
+                className="flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-full border border-brand-ink/10 bg-white text-lg font-bold tracking-[0.12em] text-brand-ink/52 hover:border-brand-teal/25 hover:text-brand-ink [&::-webkit-details-marker]:hidden"
+              >
+                ···
+              </summary>
+              <div
+                className="absolute right-0 z-30 mt-2 w-52 rounded-[18px] border border-brand-ink/10 bg-white p-1.5 shadow-[0_18px_44px_rgba(18,32,47,0.16)]"
+                role="menu"
+              >
+                <button
+                  className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-coral hover:bg-brand-coral/[0.07]"
+                  role="menuitem"
+                  type="button"
+                  onClick={() => setIsClearChatDialogOpen(true)}
+                >
+                  Clear conversation
+                </button>
+              </div>
+            </details>
           ) : null
         }
       >
         <div
           aria-live="polite"
-          className="mt-3 inline-flex w-fit items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58"
+          aria-atomic="true"
+          className="mt-2.5 inline-flex min-h-8 w-fit items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58"
           role="status"
         >
           <span
             aria-hidden="true"
             className={cn(
-              "h-2 w-2 rounded-full bg-brand-teal",
+              "h-2 w-2 rounded-full",
+              contextWarning ? "bg-brand-coral" : "bg-brand-teal",
               (isSubmitting || isApplying) && "animate-pulse",
             )}
           />
-          {workflowStatus}
+          <span key={workflowStatus} className="animate-assistant-message">
+            {workflowStatus}
+          </span>
         </div>
       </SchedulerPageHeader>
-
-      <details className="shrink-0 rounded-[22px] border border-brand-ink/8 bg-white/68 p-3 xl:hidden">
-        <summary className="cursor-pointer text-sm font-semibold text-brand-ink">
-          Planning context
-        </summary>
-        <div className="mt-3">
-          <AssistantWorkspaceContext
-            context={context}
-            pendingReviewCount={pendingReviewCount}
-          />
-          {contextWarning ? (
-            <p className="mt-3 rounded-[16px] border border-brand-coral/15 bg-brand-coral/[0.07] px-3 py-2 text-xs leading-5 text-brand-coral">
-              {contextWarning}
-            </p>
-          ) : null}
-        </div>
-      </details>
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
         <section
           aria-label="Assistant conversation"
-          className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/66 shadow-[0_22px_58px_rgba(18,32,47,0.085)] backdrop-blur-sm"
+          className="order-last flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/66 shadow-[0_22px_58px_rgba(18,32,47,0.085)] backdrop-blur-sm xl:order-first"
         >
           <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -2276,7 +2434,7 @@ export function AssistantPage() {
                   </p>
                   {status !== "loading" ? (
                     <div aria-label="Try asking" className="flex max-w-lg flex-wrap justify-center gap-2">
-                      {examplePrompts.slice(0, 4).map((example) => (
+                      {examplePrompts.map((example) => (
                       <button
                         key={example}
                         className="min-h-10 rounded-full border border-brand-ink/9 bg-white/88 px-4 py-2 text-sm font-semibold text-brand-ink/66 hover:-translate-y-0.5 hover:border-brand-teal/28 hover:text-brand-ink"
@@ -2341,7 +2499,7 @@ export function AssistantPage() {
             </div>
           </div>
 
-          <div className="shrink-0 border-t border-brand-ink/7 bg-white/88 px-3 pb-3 pt-3 backdrop-blur-md sm:px-5 sm:pb-4">
+          <div className="sticky bottom-0 z-10 shrink-0 border-t border-brand-ink/7 bg-white/92 px-3 pb-3 pt-3 backdrop-blur-md sm:px-5 sm:pb-4">
             {status === "signed_out" ? (
               <div className="py-2 text-center">
                 <p className="text-sm font-semibold text-brand-ink">
@@ -2386,7 +2544,7 @@ export function AssistantPage() {
                       className="max-h-[180px] min-h-[48px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/38 focus:outline-none sm:px-4 sm:text-base"
                       disabled={isBusy}
                       maxLength={12000}
-                      placeholder="Tell me what you need to do, or paste a task list or plan…"
+                      placeholder="Describe what you need to do, or paste a task list, email, syllabus section, or plan…"
                       rows={1}
                       value={prompt}
                       onChange={(event) => setPrompt(event.target.value)}
@@ -2407,42 +2565,23 @@ export function AssistantPage() {
                   </Button>
                 </div>
                 <p className="mt-2 px-2 text-[11px] text-brand-ink/42">
-                  Assignments, tasks, workouts, meetings, deadlines, or full plans
+                  Assignments, tasks, workouts, meetings, or full plans · Enter to send · Shift+Enter for a new line
                 </p>
               </form>
             )}
           </div>
         </section>
 
-        <aside className="hidden min-h-0 overflow-y-auto rounded-[26px] border border-white/75 bg-white/62 p-4 shadow-[0_18px_48px_rgba(18,32,47,0.065)] xl:block">
-          <p className="text-[10px] font-bold uppercase tracking-[0.17em] text-brand-teal">
-            Planning context
-          </p>
-          <p className="mt-2 text-sm leading-6 text-brand-ink/58">
-            The Assistant checks these sources before proposing a change.
-          </p>
-          <div className="mt-4">
-            <AssistantWorkspaceContext
-              context={context}
-              pendingReviewCount={pendingReviewCount}
-            />
-          </div>
-          {contextWarning ? (
-            <p className="mt-4 rounded-[18px] border border-brand-coral/15 bg-brand-coral/[0.07] p-3 text-xs leading-5 text-brand-coral">
-              {contextWarning}
-            </p>
-          ) : null}
-          {pendingReviewCount > 0 ? (
-            <div className="mt-4 rounded-[18px] border border-brand-teal/12 bg-brand-teal/[0.06] p-3">
-              <p className="text-xs font-semibold text-brand-teal">
-                {pendingReviewCount} {pendingReviewCount === 1 ? "change" : "changes"} waiting
-              </p>
-              <p className="mt-1 text-[11px] leading-5 text-brand-ink/50">
-                Review them inline with the request that created them.
-              </p>
-            </div>
-          ) : null}
-        </aside>
+        <AssistantContextPanel
+          context={context}
+          contextStatus={contextStatus}
+          loading={status === "loading"}
+          pendingReviewCount={pendingReviewCount}
+          refreshing={isRefreshingContext}
+          warning={contextWarning}
+          onRefresh={() => void refreshPlanningContext()}
+          onReviewChanges={openLatestReview}
+        />
       </div>
 
       <ConfirmDialog
