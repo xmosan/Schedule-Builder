@@ -31,8 +31,90 @@ function isActiveRoute(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function SchedulerNav() {
+export function SchedulerNav({
+  variant = "sidebar",
+}: {
+  variant?: "sidebar" | "top";
+}) {
   const pathname = usePathname();
+  const mobileNavigation = (
+    <nav
+      aria-label="Mobile scheduler navigation"
+      className="fixed inset-x-2 bottom-[calc(0.4rem+env(safe-area-inset-bottom))] z-50 grid grid-cols-7 gap-0.5 rounded-[24px] border border-white/80 bg-white/94 p-1.5 shadow-[0_18px_48px_rgba(18,32,47,0.2)] backdrop-blur-xl lg:hidden"
+    >
+      {navItems.map((item) => {
+        const active = isActiveRoute(pathname, item.href);
+        const Icon = item.icon;
+
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-label={item.label}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-[17px] px-0.5 text-center text-[8px] font-bold leading-none sm:text-[10px]",
+              active
+                ? "bg-brand-ink text-white"
+                : "text-brand-ink/58 hover:bg-brand-ink/5 hover:text-brand-ink",
+            )}
+          >
+            <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+            <span className="max-w-full whitespace-normal break-words leading-[1.05]">
+              {item.label}
+            </span>
+          </Link>
+        );
+      })}
+    </nav>
+  );
+
+  if (variant === "top") {
+    return (
+      <>
+        <header className="hidden min-h-[64px] shrink-0 items-center gap-4 rounded-[22px] border border-white/75 bg-white/82 px-3 py-2 shadow-[0_14px_38px_rgba(18,32,47,0.075)] backdrop-blur-xl lg:flex">
+          <Link
+            href="/assistant"
+            aria-label="Schedule Builder Assistant"
+            className="flex shrink-0 items-center gap-2.5 rounded-[16px] px-2 py-1.5 text-brand-ink"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-brand-teal text-white">
+              <TargetIcon aria-hidden="true" className="h-4.5 w-4.5" />
+            </span>
+            <span className="text-sm font-semibold tracking-[-0.02em]">
+              Schedule Builder
+            </span>
+          </Link>
+
+          <nav
+            aria-label="Scheduler navigation"
+            className="flex min-w-0 flex-1 items-center justify-end gap-1"
+          >
+            {navItems.map((item) => {
+              const active = isActiveRoute(pathname, item.href);
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "inline-flex min-h-10 items-center rounded-[14px] px-2.5 text-[12px] font-semibold whitespace-nowrap xl:px-3 xl:text-[13px]",
+                    active
+                      ? "bg-brand-ink text-white shadow-sm"
+                      : "text-brand-ink/58 hover:bg-brand-ink/5 hover:text-brand-ink",
+                  )}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+        </header>
+        {mobileNavigation}
+      </>
+    );
+  }
 
   return (
     <>
@@ -84,40 +166,8 @@ export function SchedulerNav() {
           })}
         </nav>
 
-        <div className="mt-auto px-3 pb-2 pt-4 text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-ink/32">
-          Supporting views stay editable
-        </div>
       </aside>
-
-      <nav
-        aria-label="Mobile scheduler navigation"
-        className="fixed inset-x-2 bottom-[calc(0.4rem+env(safe-area-inset-bottom))] z-50 grid grid-cols-7 gap-0.5 rounded-[24px] border border-white/80 bg-white/94 p-1.5 shadow-[0_18px_48px_rgba(18,32,47,0.2)] backdrop-blur-xl lg:hidden"
-      >
-        {navItems.map((item) => {
-          const active = isActiveRoute(pathname, item.href);
-          const Icon = item.icon;
-
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-label={item.label}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-[17px] px-0.5 text-center text-[8px] font-bold leading-none sm:text-[10px]",
-                active
-                  ? "bg-brand-ink text-white"
-                  : "text-brand-ink/58 hover:bg-brand-ink/5 hover:text-brand-ink",
-              )}
-            >
-              <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
-              <span className="max-w-full whitespace-normal break-words leading-[1.05]">
-                {item.label}
-              </span>
-            </Link>
-          );
-        })}
-      </nav>
+      {mobileNavigation}
     </>
   );
 }

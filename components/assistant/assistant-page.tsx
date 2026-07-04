@@ -13,9 +13,9 @@ import {
 } from "@/lib/assistant-conversation";
 import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
 import { TargetIcon } from "@/components/projects/icons";
+import { AssistantClarificationPanel } from "@/components/assistant/assistant-clarification-panel";
 import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
 import { SchedulerAppShell } from "@/components/scheduler/app-shell";
-import { SchedulerPageHeader } from "@/components/scheduler/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -125,7 +125,8 @@ function getSchedulingQuickReplies(
     context.state === "awaiting_window_selection" ||
     context.state === "needs_clarification"
   ) {
-    return context.candidateWindows.slice(0, 6).map((window) => ({
+    return context.candidateWindows.map((window) => ({
+      id: window.id,
       label: window.label,
       prompt: window.label,
     }));
@@ -133,10 +134,10 @@ function getSchedulingQuickReplies(
 
   if (context.state === "awaiting_duration") {
     return [
-      { label: "30 minutes", prompt: "30 minutes" },
-      { label: "1 hour", prompt: "one hour" },
-      { label: "2 hours", prompt: "two hours" },
-      { label: "Full opening", prompt: "Use the full opening" },
+      { id: "duration-30", label: "30 minutes", prompt: "30 minutes" },
+      { id: "duration-60", label: "1 hour", prompt: "one hour" },
+      { id: "duration-120", label: "2 hours", prompt: "two hours" },
+      { id: "duration-full", label: "Full opening", prompt: "Use the full opening" },
     ];
   }
 
@@ -202,6 +203,17 @@ function stripLegacyWorkspaceWarning(content: string) {
         : nextContent,
     content,
   );
+}
+
+function stripTrailingPendingQuestion(
+  content: string,
+  pendingQuestion?: string | null,
+) {
+  if (!pendingQuestion || !content.trimEnd().endsWith(pendingQuestion)) {
+    return content;
+  }
+
+  return content.trimEnd().slice(0, -pendingQuestion.length).trimEnd();
 }
 
 function getErrorMessage(error: unknown) {
@@ -1061,6 +1073,7 @@ function ActionCard({
 
 function ChatBubble({
   actionStates,
+  hiddenTrailingPrompt,
   isReviewOpen,
   message,
   onApply,
@@ -1071,6 +1084,7 @@ function ChatBubble({
   onUpdateSuggestion,
 }: {
   actionStates: Record<string, ActionState>;
+  hiddenTrailingPrompt?: string | null;
   isReviewOpen: boolean;
   message: ChatMessage;
   onApply: (suggestion: AssistantSuggestion) => void;
@@ -1110,43 +1124,54 @@ function ChatBubble({
   const selectedActions = pendingActionableActions.filter((suggestion) =>
     selectedActionIds.has(suggestion.id),
   );
+  const displayedContent = stripTrailingPendingQuestion(
+    message.content,
+    hiddenTrailingPrompt,
+  );
+  const showsMessageBubble = message.isStreaming || Boolean(displayedContent);
+
+  if (!showsMessageBubble && actions.length === 0) {
+    return null;
+  }
 
   return (
     <div className={cn("animate-assistant-message flex w-full gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
-      {!isUser && (
+      {!isUser && showsMessageBubble ? (
         <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-teal/10">
           <TargetIcon className="h-4 w-4 text-brand-teal" />
         </div>
-      )}
+      ) : null}
       <div className={cn("flex max-w-[90%] flex-col gap-2 sm:max-w-[82%]", isUser ? "items-end" : "items-start")}>
-        <div
-          className={cn(
-            "rounded-[22px] px-4 py-3 sm:px-5 sm:py-3.5",
-            isUser
-              ? "bg-brand-ink text-white shadow-sm"
-              : "border border-brand-ink/5 bg-white text-brand-ink shadow-sm",
-          )}
-        >
-          {message.isStreaming && !message.content ? (
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-brand-ink/60">
-                Thinking through your schedule
-              </span>
-              <span className="flex gap-1.5">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40" />
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]" />
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.4s]" />
-              </span>
-            </div>
-          ) : (
-            <p className={cn("text-sm leading-6 whitespace-pre-wrap", isUser ? "text-white" : "text-brand-ink")}>
-              {message.content}
-              {!isUser && message.isStreaming ? (
-                <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded-full bg-brand-teal align-[-2px]" />
-              ) : null}
-            </p>
-          )}
-        </div>
+        {showsMessageBubble ? (
+          <div
+            className={cn(
+              "rounded-[22px] px-4 py-3 sm:px-5 sm:py-3.5",
+              isUser
+                ? "bg-brand-ink text-white shadow-sm"
+                : "border border-brand-ink/5 bg-white text-brand-ink shadow-sm",
+            )}
+          >
+            {message.isStreaming && !message.content ? (
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-brand-ink/60">
+                  Thinking through your schedule
+                </span>
+                <span className="flex gap-1.5">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.4s]" />
+                </span>
+              </div>
+            ) : (
+              <p className={cn("text-sm leading-6 whitespace-pre-wrap", isUser ? "text-white" : "text-brand-ink")}>
+                {displayedContent}
+                {!isUser && message.isStreaming ? (
+                  <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded-full bg-brand-teal align-[-2px]" />
+                ) : null}
+              </p>
+            )}
+          </div>
+        ) : null}
 
         {!isUser && !message.isStreaming && actions.length > 0 ? (
           <div
@@ -1344,11 +1369,25 @@ export function AssistantPage() {
   }, [prompt]);
 
   const hasMessages = messages.length > 0;
+  const showsPlanningContext = status !== "signed_out";
   const examplePrompts = getExamplePrompts(context?.plannerType);
   const isBusy = isSubmitting || status === "loading";
   const schedulingQuickReplies = getSchedulingQuickReplies(
     activeSchedulingContext,
   );
+  const clarificationKind =
+    activeSchedulingContext?.state === "awaiting_duration"
+      ? "duration"
+      : "opening";
+  const latestAssistantMessageId = messages.reduce<string | null>(
+    (latestId, message) =>
+      message.role === "assistant" ? message.id : latestId,
+    null,
+  );
+  const activeClarificationQuestion =
+    schedulingQuickReplies.length > 0
+      ? activeSchedulingContext?.pendingQuestion
+      : null;
   const pendingReviewCount = getPendingReviewCount(messages, actionStates);
   const isApplying = Object.values(actionStates).some(
     (state) => state.status === "applying",
@@ -2030,6 +2069,7 @@ export function AssistantPage() {
       );
     } finally {
       setIsSubmitting(false);
+      window.requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }
 
@@ -2354,20 +2394,49 @@ export function AssistantPage() {
   return (
     <SchedulerAppShell
       fullHeight
-      contentClassName="gap-3"
+      navigationVariant="top"
+      contentClassName="gap-2.5"
       className="bg-transparent"
     >
-      <SchedulerPageHeader
-        className="shrink-0 py-3.5 sm:py-4"
-        description="Tell me what you need to accomplish. I’ll build a plan for you to review."
-        title="Planning Assistant"
-        trustNote="The Assistant plans. You approve."
-        actions={
-          hasMessages ? (
+      <header className="flex shrink-0 items-start justify-between gap-3 px-1 py-1 sm:items-center sm:px-2">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-[-0.035em] text-brand-ink sm:text-2xl">
+            Planning Assistant
+          </h1>
+          <p className="mt-0.5 text-xs leading-5 text-brand-ink/56 sm:text-sm">
+            Tell me what you need to accomplish. I’ll build a plan for you to review.
+            <span className="ml-1.5 font-semibold text-brand-teal">
+              The Assistant plans. You approve.
+            </span>
+          </p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <div
+            aria-live="polite"
+            aria-atomic="true"
+            className="hidden min-h-8 items-center gap-2 rounded-full bg-white/72 px-3 py-1.5 text-xs font-semibold text-brand-ink/58 shadow-sm sm:inline-flex"
+            role="status"
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "h-2 w-2 rounded-full",
+                contextWarning ? "bg-brand-coral" : "bg-brand-teal",
+                (isSubmitting || isApplying) && "animate-pulse",
+              )}
+            />
+            <span key={workflowStatus} className="animate-assistant-message">
+              {workflowStatus}
+            </span>
+          </div>
+
+          {hasMessages ? (
             <details className="group relative">
               <summary
+                aria-haspopup="menu"
                 aria-label="Conversation options"
-                className="flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-full border border-brand-ink/10 bg-white text-lg font-bold tracking-[0.12em] text-brand-ink/52 hover:border-brand-teal/25 hover:text-brand-ink [&::-webkit-details-marker]:hidden"
+                className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-full border border-brand-ink/10 bg-white text-base font-bold tracking-[0.12em] text-brand-ink/52 hover:border-brand-teal/25 hover:text-brand-ink [&::-webkit-details-marker]:hidden"
               >
                 ···
               </summary>
@@ -2385,30 +2454,20 @@ export function AssistantPage() {
                 </button>
               </div>
             </details>
-          ) : null
-        }
-      >
-        <div
-          aria-live="polite"
-          aria-atomic="true"
-          className="mt-2.5 inline-flex min-h-8 w-fit items-center gap-2 rounded-full bg-brand-ink/[0.045] px-3 py-1.5 text-xs font-semibold text-brand-ink/58"
-          role="status"
-        >
-          <span
-            aria-hidden="true"
-            className={cn(
-              "h-2 w-2 rounded-full",
-              contextWarning ? "bg-brand-coral" : "bg-brand-teal",
-              (isSubmitting || isApplying) && "animate-pulse",
-            )}
-          />
-          <span key={workflowStatus} className="animate-assistant-message">
-            {workflowStatus}
-          </span>
+          ) : null}
         </div>
-      </SchedulerPageHeader>
 
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
+        <span className="sr-only sm:hidden" aria-live="polite" role="status">
+          {workflowStatus}
+        </span>
+      </header>
+
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 gap-4",
+          showsPlanningContext && "xl:grid-cols-[minmax(0,1fr)_260px]",
+        )}
+      >
         <section
           aria-label="Assistant conversation"
           className="order-last flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/66 shadow-[0_22px_58px_rgba(18,32,47,0.085)] backdrop-blur-sm xl:order-first"
@@ -2453,6 +2512,11 @@ export function AssistantPage() {
                 <ChatBubble
                   key={message.id}
                   actionStates={actionStates}
+                  hiddenTrailingPrompt={
+                    message.id === latestAssistantMessageId
+                      ? activeClarificationQuestion
+                      : null
+                  }
                   isReviewOpen={openReviewMessages[message.id] ?? false}
                   message={message}
                   onApply={(suggestion) => void applySuggestion(suggestion)}
@@ -2470,6 +2534,17 @@ export function AssistantPage() {
                   onUpdateSuggestion={updateSuggestion}
                 />
               ))}
+
+              {hasMessages && schedulingQuickReplies.length > 0 ? (
+                <AssistantClarificationPanel
+                  key={`${activeSchedulingContext?.lastUpdatedAt ?? "clarification"}-${clarificationKind}`}
+                  choices={schedulingQuickReplies}
+                  disabled={isBusy}
+                  kind={clarificationKind}
+                  question={activeClarificationQuestion}
+                  onSelect={(nextPrompt) => void sendPrompt(nextPrompt)}
+                />
+              ) : null}
 
               {assistantNotices.length > 0 ? (
                 <div aria-live="polite" className="mx-auto grid w-full max-w-md gap-2">
@@ -2517,25 +2592,6 @@ export function AssistantPage() {
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="mx-auto max-w-3xl">
-                {hasMessages && schedulingQuickReplies.length > 0 ? (
-                  <div className="mb-3 px-1">
-                    <p className="mb-2 text-xs font-semibold text-brand-ink/55">
-                      {activeSchedulingContext?.pendingQuestion ?? "Choose an option"}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {schedulingQuickReplies.map((choice) => (
-                        <button
-                          key={`${choice.label}-${choice.prompt}`}
-                          className="min-h-10 rounded-full border border-brand-ink/10 bg-white px-3.5 py-2 text-xs font-semibold text-brand-ink/62 hover:-translate-y-0.5 hover:border-brand-teal/30 hover:text-brand-ink"
-                          type="button"
-                          onClick={() => void sendPrompt(choice.prompt)}
-                        >
-                          {choice.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
                 <div className="flex flex-col gap-2 rounded-[22px] border border-brand-ink/10 bg-white p-2 shadow-[0_12px_34px_rgba(18,32,47,0.08)] focus-within:border-brand-teal/35 focus-within:shadow-[0_14px_38px_rgba(15,118,110,0.1)] sm:flex-row sm:items-end sm:rounded-[24px] sm:p-2.5">
                   <div className="relative flex-1">
                     <textarea
@@ -2572,16 +2628,18 @@ export function AssistantPage() {
           </div>
         </section>
 
-        <AssistantContextPanel
-          context={context}
-          contextStatus={contextStatus}
-          loading={status === "loading"}
-          pendingReviewCount={pendingReviewCount}
-          refreshing={isRefreshingContext}
-          warning={contextWarning}
-          onRefresh={() => void refreshPlanningContext()}
-          onReviewChanges={openLatestReview}
-        />
+        {showsPlanningContext ? (
+          <AssistantContextPanel
+            context={context}
+            contextStatus={contextStatus}
+            loading={status === "loading"}
+            pendingReviewCount={pendingReviewCount}
+            refreshing={isRefreshingContext}
+            warning={contextWarning}
+            onRefresh={() => void refreshPlanningContext()}
+            onReviewChanges={openLatestReview}
+          />
+        ) : null}
       </div>
 
       <ConfirmDialog

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import type {
   AssistantContextSourceState,
@@ -66,12 +66,6 @@ export function AssistantContextPanel({
   warning,
 }: AssistantContextPanelProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    if (warning) {
-      setMobileOpen(true);
-    }
-  }, [warning]);
   const workStatus = contextStatus?.workSchedule ?? {
     detail: context
       ? context.workShiftsCount > 0
@@ -134,7 +128,14 @@ export function AssistantContextPanel({
       label: "Temporary changes",
       status: temporaryChangesStatus,
     },
-  ];
+  ].filter(
+    (item) =>
+      !(
+        warning &&
+        item.label === "Temporary changes" &&
+        item.status.state === "failed"
+      ),
+  );
 
   return (
     <aside
@@ -162,6 +163,36 @@ export function AssistantContextPanel({
         </span>
       </button>
 
+      {warning ? (
+        <div
+          className="animate-assistant-message mt-2 rounded-[18px] border border-brand-coral/18 bg-brand-coral/[0.07] p-3 xl:mt-0"
+          role="status"
+        >
+          <p className="text-xs font-semibold text-brand-coral">
+            Some schedule data is unavailable
+          </p>
+          <p className="mt-1 text-[11px] leading-5 text-brand-ink/58">
+            {warning}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              className="text-xs font-semibold text-brand-coral underline decoration-brand-coral/30 underline-offset-4 disabled:opacity-50"
+              disabled={refreshing}
+              type="button"
+              onClick={onRefresh}
+            >
+              {refreshing ? "Retrying…" : "Retry"}
+            </button>
+            <Link
+              className="text-xs font-semibold text-brand-ink/58 underline decoration-brand-ink/20 underline-offset-4"
+              href="/work"
+            >
+              View Work Schedule
+            </Link>
+          </div>
+        </div>
+      ) : null}
+
       <div
         id="assistant-planning-context"
         className={cn(
@@ -177,36 +208,6 @@ export function AssistantContextPanel({
             Sources checked before the Assistant proposes a change.
           </p>
         </div>
-
-        {warning ? (
-          <div
-            className="animate-assistant-message mb-3 rounded-[18px] border border-brand-coral/18 bg-brand-coral/[0.07] p-3 xl:mt-4"
-            role="status"
-          >
-            <p className="text-xs font-semibold text-brand-coral">
-              Some schedule data is unavailable
-            </p>
-            <p className="mt-1 text-[11px] leading-5 text-brand-ink/58">
-              {warning}
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                className="text-xs font-semibold text-brand-coral underline decoration-brand-coral/30 underline-offset-4 disabled:opacity-50"
-                disabled={refreshing}
-                type="button"
-                onClick={onRefresh}
-              >
-                {refreshing ? "Retrying…" : "Retry"}
-              </button>
-              <Link
-                className="text-xs font-semibold text-brand-ink/58 underline decoration-brand-ink/20 underline-offset-4"
-                href="/work"
-              >
-                View Work Schedule
-              </Link>
-            </div>
-          </div>
-        ) : null}
 
         <div className="divide-y divide-brand-ink/7 xl:mt-4">
           {items.map((item) => (
