@@ -5,6 +5,7 @@ import {
   extractPlanningItems,
   isAssistantStatusQuestion,
   isExplicitMutationRequest,
+  isExplicitSchedulingRequest,
   matchProjectsForText,
   parseExplicitDurationMinutes,
   parseRequestedSessionCount,
@@ -17,6 +18,15 @@ import {
   type AssistantSchedulingConversationTurn,
 } from "../lib/assistant-schedule-analysis";
 import type { Project } from "../lib/projects";
+import type { AssistantSuggestion } from "../lib/assistant";
+import {
+  createCanonicalProposal,
+  deriveAssistantWorkflowAfterProposalUpdates,
+  getCanonicalPendingProposals,
+  getProposalBatchStatus,
+  validateMutationSuggestion,
+  type SchedulingWorkflowContext,
+} from "../lib/assistant-workflow";
 
 const input: AssistantScheduleAnalysisInput = {
   importedCalendarEvents: [],
@@ -130,6 +140,189 @@ check("Pending status starts Not yet", () => assert.match(sealedPendingStatus.me
 check("Applied status starts Yes", () => assert.match(sealedAppliedStatus.message, /^Yes\./));
 check("Applied status lists saved records", () => assert.match(sealedAppliedStatus.message, /saved-|Read The Sealed Nectar|2026-/));
 
+const liveProductionPrompt =
+  "Give me some slots to work on the halaqah for the masjid. I need to find time to read The Sealed Nectar.";
+const liveInitial = advance(liveProductionPrompt);
+const liveContinued = advance("Put it on the schedule.", liveInitial);
+const liveReady = advance("Three sessions, 45 minutes.", liveContinued);
+check("Exact production wording starts a workflow", () =>
+  assert.equal(isExplicitSchedulingRequest(liveProductionPrompt), true));
+check("Exact production wording preserves Sealed Nectar", () =>
+  assert.equal(liveInitial.context.extractedItems[0]?.title, "Read The Sealed Nectar"));
+check("Exact production wording preserves halaqah purpose", () =>
+  assert.equal(liveInitial.context.extractedItems[0]?.purpose, "Prepare for the masjid halaqah"));
+check("Plural slots creates a multi-session workflow", () =>
+  assert.equal(liveInitial.context.intent, "create_multiple_time_blocks"));
+check("Exact production wording asks frequency and duration", () =>
+  assert.equal(
+    liveInitial.message,
+    "How many reading sessions would you like this week, and how long should each session be?",
+  ));
+check("Put it on schedule keeps the exact activity", () =>
+  assert.equal(liveContinued.context.extractedItems[0]?.title, "Read The Sealed Nectar"));
+check("Exact production flow creates three actions", () =>
+  assert.equal(liveReady.context.pendingProposals.length, 3));
+
+const countOnly = advance("Three times", liveInitial);
+const durationAfterCount = advance("45 minutes", countOnly);
+check("Three times fills frequency without inventing duration", () => {
+  assert.equal(countOnly.context.requestedSessionCount, 3);
+  assert.equal(countOnly.context.requestedDurationMinutes, null);
+});
+check("45 minutes completes the active workflow", () => {
+  assert.equal(durationAfterCount.context.requestedSessionCount, 3);
+  assert.equal(durationAfterCount.context.requestedDurationMinutes, 45);
+  assert.equal(durationAfterCount.context.pendingProposals.length, 3);
+});
+
+const workflowId = liveReady.context.workflowId;
+const workflowSuggestions: AssistantSuggestion[] = liveReady.context.pendingProposals.map(
+  (proposal) => {
+    const day = liveReady.context.candidateWindows.find(
+      (window) => window.date === proposal.date,
+    )?.day;
+    assert.ok(day);
+    return {
+      confidence: 1,
+      day,
+      description: proposal.details,
+      estimatedHours: (proposal.durationMinutes ?? 0) / 60,
+      id: proposal.id ?? `proposal-${proposal.date}`,
+      itemDate: proposal.date,
+      plannedTask: proposal.details,
+      projectName: proposal.title,
+      rationale: "Validated deterministic opening.",
+      severity: "important",
+      startTime: proposal.startTime,
+      summary: proposal.details,
+      title: proposal.title,
+      type: "suggested_weekly_block",
+      workflowId,
+    };
+  },
+);
+const canonicalProposals = workflowSuggestions.map((suggestion) =>
+  createCanonicalProposal(suggestion, "2026-07-04T12:00:00.000Z"),
+);
+check("All three time-block actions pass strict proposal validation", () =>
+  assert.ok(canonicalProposals.every(Boolean)));
+check("Canonical proposals include exact date, time, and duration", () =>
+  assert.ok(
+    canonicalProposals.every(
+      (proposal) =>
+        proposal?.timeBlock?.date &&
+        /^\d{2}:\d{2}$/.test(proposal.timeBlock.startTime) &&
+        proposal.timeBlock.durationMinutes === 45,
+    ),
+  ));
+const canonicalWorkflow: SchedulingWorkflowContext = {
+  appliedProposalIds: [],
+  completionStatus: "proposal_created",
+  context: liveReady.context,
+  extractedItems: liveReady.context.extractedItems,
+  intent: "create_multiple_time_blocks",
+  lastUpdatedAt: "2026-07-04T12:00:00.000Z",
+  missingFields: [],
+  pendingProposalIds: workflowSuggestions.map((suggestion) => suggestion.id),
+  persistenceStatus: "persisted",
+  proposalIds: workflowSuggestions.map((suggestion) => suggestion.id),
+  selectedCandidateIds: liveReady.context.candidateWindows.map((window) => window.id),
+  state: "awaiting_approval",
+  threadId: "thread-regression",
+  userId: "user-regression",
+  workflowId,
+};
+check("Canonical pending count equals persisted workflow count", () =>
+  assert.equal(
+    getCanonicalPendingProposals(
+      canonicalWorkflow,
+      canonicalProposals.filter((proposal) => proposal !== null),
+    ).length,
+    canonicalWorkflow.pendingProposalIds.length,
+  ));
+check("A proposal from another workflow cannot enter the review queue", () => {
+  const foreign = canonicalProposals[0];
+  assert.ok(foreign);
+  assert.equal(
+    getCanonicalPendingProposals(canonicalWorkflow, [
+      { ...foreign, workflowId: "foreign-workflow" },
+    ]).length,
+    0,
+  );
+});
+const observation = {
+  confidence: 1,
+  description: "Monday has work plus project blocks.",
+  id: "observation",
+  rationale: "Informational only.",
+  severity: "warning",
+  summary: "Monday is busy.",
+  title: "Monday has work plus project blocks",
+  type: "workload_warning",
+  workflowId,
+} satisfies AssistantSuggestion;
+check("Analysis notes cannot enter the proposal schema", () =>
+  assert.match(validateMutationSuggestion(observation), /cannot be persisted/i));
+check("Analysis notes cannot become canonical proposals", () =>
+  assert.equal(createCanonicalProposal(observation), null));
+check("An untimed block cannot enter the proposal schema", () => {
+  const untimed = { ...workflowSuggestions[0], startTime: undefined };
+  assert.match(validateMutationSuggestion(untimed), /start time/i);
+});
+const persistedProposals = canonicalProposals.filter(
+  (proposal) => proposal !== null,
+);
+const partiallyApplied = deriveAssistantWorkflowAfterProposalUpdates(
+  canonicalWorkflow,
+  persistedProposals,
+  persistedProposals.slice(0, 2).map((proposal, index) => ({
+    approvalStatus: "applied" as const,
+    proposalId: proposal.id,
+    savedRecordId: `saved-reading-${index + 1}`,
+  })),
+  "2026-07-04T13:00:00.000Z",
+);
+check("Partial apply leaves one canonical proposal pending", () => {
+  assert.equal(partiallyApplied.workflow.appliedProposalIds.length, 2);
+  assert.equal(partiallyApplied.workflow.pendingProposalIds.length, 1);
+  assert.equal(getProposalBatchStatus(partiallyApplied.workflow), "partially_applied");
+});
+const fullyApplied = deriveAssistantWorkflowAfterProposalUpdates(
+  partiallyApplied.workflow,
+  partiallyApplied.proposals,
+  [
+    {
+      approvalStatus: "applied",
+      proposalId: partiallyApplied.workflow.pendingProposalIds[0],
+      savedRecordId: "saved-reading-3",
+    },
+  ],
+  "2026-07-04T14:00:00.000Z",
+);
+check("Apply all produces authoritative applied state", () => {
+  assert.equal(fullyApplied.workflow.pendingProposalIds.length, 0);
+  assert.equal(fullyApplied.workflow.appliedProposalIds.length, 3);
+  assert.equal(fullyApplied.workflow.context?.appliedRecords.length, 3);
+  assert.equal(fullyApplied.workflow.completionStatus, "records_applied");
+  assert.equal(fullyApplied.workflow.state, "applied");
+  assert.equal(getProposalBatchStatus(fullyApplied.workflow), "applied");
+});
+const allRejected = deriveAssistantWorkflowAfterProposalUpdates(
+  canonicalWorkflow,
+  persistedProposals,
+  persistedProposals.map((proposal) => ({
+    approvalStatus: "rejected" as const,
+    proposalId: proposal.id,
+  })),
+  "2026-07-04T15:00:00.000Z",
+);
+check("Rejecting every proposal clears the canonical review queue", () => {
+  assert.equal(allRejected.workflow.pendingProposalIds.length, 0);
+  assert.equal(allRejected.workflow.completionStatus, "nothing_created");
+  assert.equal(allRejected.workflow.state, "idle");
+  assert.equal(getProposalBatchStatus(allRejected.workflow), "rejected");
+});
+
 const partialStatus = advanceAssistantSchedulingConversation({
   activeContext: {
     ...sealedReady.context,
@@ -142,6 +335,10 @@ assert.ok(partialStatus);
 check("Partial batch status starts Partly", () => assert.match(partialStatus.message, /^Partly\./));
 
 check("Status phrasing is recognized", () => assert.equal(isAssistantStatusQuestion("Is it on the schedule?"), true));
+check("Session-created status phrasing is recognized", () =>
+  assert.equal(isAssistantStatusQuestion("Did those sessions get created?"), true));
+check("Activity-specific status phrasing is recognized", () =>
+  assert.equal(isAssistantStatusQuestion("Is the reading scheduled?"), true));
 check("Put it on schedule is explicit mutation", () => assert.equal(isExplicitMutationRequest("Put it on the schedule"), true));
 check("Add it to my week is explicit mutation", () => assert.equal(isExplicitMutationRequest("Add it to my week"), true));
 check("Recurring explicit request gets batch intent", () =>

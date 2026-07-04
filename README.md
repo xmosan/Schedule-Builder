@@ -33,7 +33,8 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `work_shifts` stores manual work availability and uses Row Level Security so each user only sees their own shifts.
    - `imported_calendar_events` stores reviewed ICS imports and synced external calendar events. Row Level Security keeps each user's events scoped to their account.
    - `google_calendar_connections` stores server-only Google Calendar OAuth tokens. RLS is enabled with no client policies; app API routes access it with `SUPABASE_SERVICE_ROLE_KEY`.
-   - If your existing Supabase project already has the scheduler tables, you can run `supabase/onboarding.sql` for onboarding, `supabase/work-shifts.sql` for work schedule support, `supabase/imported-calendar-events.sql` for ICS import, and `supabase/google-calendar.sql` for Google Calendar read-only sync.
+   - Run `supabase/assistant-conversations.sql` and `supabase/assistant-workflows.sql` to enable persisted Assistant threads, workflow state, proposal batches, and the canonical review queue.
+   - If your existing Supabase project already has the scheduler tables, run the relevant standalone SQL files, including `supabase/assistant-workflows.sql` before deploying the canonical Assistant workflow routes.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.
    - Magic link sign-in also uses the Email provider.
@@ -138,13 +139,13 @@ The `/work` page lets signed-in users add recurring or one-time work shifts manu
 
 The `/assistant` page gives signed-in users a chat-style planning workspace. Users can ask naturally for help planning the week, then review structured action cards before applying approved changes.
 
-- Action cards can be applied or ignored one at a time.
+- Action cards are rendered only from persisted canonical proposals and can be applied or rejected one at a time.
 - Safe apply supports adding weekly plan blocks and updating approved next actions.
-- Ignored suggestions are never sent to the apply endpoint, and informational warnings are skipped instead of written.
+- Rejected suggestions are removed from the persisted review queue. Informational observations never enter the proposal schema.
 - The assistant can suggest weekly blocks, next actions, workload warnings, and missing or unclear project details.
 - The server routes load the signed-in user's projects, weekly plan blocks, work shifts, and onboarding profile from Supabase. The client never sends or controls `user_id`.
 - `OPENAI_API_KEY` is optional. If it is configured, `/api/assistant/plan` uses the OpenAI Responses API through the official `openai` JavaScript SDK.
-- If `OPENAI_API_KEY` is missing or OpenAI returns invalid output, the assistant returns deterministic rule-based fallback suggestions.
+- Explicit scheduling requests use deterministic extraction, availability, and workflow transitions. A model or fallback failure cannot create a review card or success claim.
 - `OPENAI_ASSISTANT_MODEL` is optional and defaults to `gpt-4o-mini`. `AI_MODEL` remains a legacy fallback.
 - `OPENAI_ASSISTANT_EVAL_MODEL` is optional and is used only by the repeatable model-comparison harness.
 - Keep `OPENAI_API_KEY` server-side only in `.env.local` or Vercel environment variables. Do not prefix it with `NEXT_PUBLIC_`.
@@ -205,6 +206,7 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 - `public/` contains PWA icons and the lightweight service worker.
 - `supabase/schema.sql` contains the database tables and RLS policies required for sync.
 - `supabase/imported-calendar-events.sql` contains the standalone migration for ICS imported calendar events.
+- `supabase/assistant-workflows.sql` contains the canonical Assistant workflow, proposal-batch, proposal, RLS, and atomic persistence schema.
 
 ## Notes
 

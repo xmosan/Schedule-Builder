@@ -26,9 +26,8 @@ import {
   advanceAssistantSchedulingConversation,
   createAssistantScheduleAnalysisSnapshot,
   hasDeterministicScheduleQuestionIntent,
-  normalizeAssistantSchedulingContext,
+  type AssistantSchedulingContext,
 } from "@/lib/assistant-schedule-analysis";
-import { parseAssistantConversationSnapshot } from "@/lib/assistant-conversation";
 import {
   assistantIntents,
   assistantTurnOutcomes,
@@ -38,9 +37,24 @@ import {
   extractPlanningItems,
   isAssistantStatusQuestion,
   isExplicitMutationRequest,
+  isExplicitSchedulingRequest,
   validateAssistantCompletionLanguage,
   type AssistantTurnOutcome,
 } from "@/lib/assistant-intelligence";
+import {
+  createCanonicalProposal,
+  createProposalBatch,
+  getCanonicalPendingProposals,
+  getCanonicalWorkflowState,
+  isAssistantMutationSuggestion,
+  type SchedulingWorkflowContext,
+} from "@/lib/assistant-workflow";
+import {
+  isMissingAssistantWorkflowSchema,
+  loadAssistantWorkflow,
+  persistAssistantWorkflow,
+  type LoadedAssistantWorkflow,
+} from "@/lib/assistant-workflow-store";
 import {
   fetchPlannerProfileForUser,
   fetchImportedCalendarEventsForUser,
@@ -77,15 +91,6 @@ type AssistantStreamEvent =
   | { type: "final"; response: AssistantPlanReviewResponse }
   | { type: "error"; error: string };
 
-const actionableSuggestionTypes = new Set<AssistantSuggestionType>([
-  "new_project",
-  "update_project",
-  "suggested_scheduled_item",
-  "suggested_weekly_block",
-  "suggested_next_action",
-  "schedule_exception",
-]);
-
 function formatTimeInputLabel(value: string) {
   const [hours, minutes] = value.split(":").map(Number);
   const period = hours >= 12 ? "PM" : "AM";
@@ -117,11 +122,12 @@ function finalizeAssistantResponse({
     !schedulingContext &&
     missingFields.length > 0
       ? response.suggestions.filter(
-          (suggestion) => !actionableSuggestionTypes.has(suggestion.type),
+          (suggestion) => !isAssistantMutationSuggestion(suggestion),
         )
       : response.suggestions;
-  const actionable = suggestions.filter((suggestion) =>
-    actionableSuggestionTypes.has(suggestion.type),
+  const actionable = suggestions.filter(isAssistantMutationSuggestion);
+  const insights = suggestions.filter(
+    (suggestion) => !isAssistantMutationSuggestion(suggestion),
   );
   const completionStatus =
     schedulingContext?.state === "applied" && schedulingContext.appliedRecords.length > 0
@@ -166,7 +172,7 @@ function finalizeAssistantResponse({
 
   if (isAssistantStatusQuestion(prompt) && !schedulingContext) {
     responseText =
-      "I can’t confirm that from an identified proposal or saved record. A chat reply or draft alone does not put anything on the schedule.";
+      "No. I found no persisted proposal or applied record for this conversation.";
   }
 
   const guarded = validateAssistantCompletionLanguage(responseText, completionStatus);
@@ -186,11 +192,365 @@ function finalizeAssistantResponse({
 
   return {
     ...response,
-    actions: suggestions,
+    actions: actionable,
     assistantMessage: guarded.responseText,
+    insights,
     message: guarded.responseText,
-    suggestions,
+    suggestions: insights,
     turnResult,
+  };
+}
+
+type AssistantDiagnostic = {
+  candidateCount?: number;
+  extractedItemCount?: number;
+  fallbackPath?: string;
+  intent?: string;
+  missingFields?: string[];
+  nextState?: string;
+  persistenceResult?: string;
+  previousState?: string;
+  proposalCount?: number;
+  responseValidation?: string;
+  threadId?: string | null;
+  workflowId?: string | null;
+};
+
+function logAssistantDiagnostic(event: string, diagnostic: AssistantDiagnostic) {
+  console.info("assistant_workflow", { event, ...diagnostic });
+}
+
+function createWorkflowPersistenceFailureResponse({
+  response,
+  threadId,
+  userId,
+}: {
+  response: AssistantPlanReviewResponse;
+  threadId: string;
+  userId: string;
+}): AssistantPlanReviewResponse {
+  const context = response.schedulingContext ?? null;
+  const workflow: SchedulingWorkflowContext = {
+    appliedProposalIds: [],
+    completionStatus: "nothing_created",
+    context,
+    extractedItems: response.turnResult?.extractedItems ?? [],
+    intent: response.turnResult?.intent ?? "general_conversation",
+    lastUpdatedAt: new Date().toISOString(),
+    missingFields: response.turnResult?.missingFields ?? [],
+    pendingProposalIds: [],
+    persistenceStatus: "failed",
+    proposalIds: [],
+    selectedCandidateIds: [],
+    state: "failed",
+    threadId,
+    userId,
+    workflowId: context?.workflowId ?? `workflow-${Date.now()}-failed`,
+  };
+  const message = response.actions.length > 0
+    ? "I found possible times, but I could not save the proposals for review. Nothing has been scheduled."
+    : "I couldn’t save this planning workflow. Nothing has been scheduled. Please try again.";
+
+  return {
+    ...response,
+    actions: [],
+    assistantMessage: message,
+    canonicalProposals: [],
+    message,
+    proposalBatch: null,
+    suggestions: response.insights ?? response.suggestions,
+    turnResult: response.turnResult
+      ? {
+          ...response.turnResult,
+          completionStatus: "nothing_created",
+          outcome: "apply_failed",
+          proposalIds: [],
+          responseText: message,
+          workflowState: "failed",
+        }
+      : undefined,
+    workflow,
+  };
+}
+
+async function persistCanonicalWorkflowResponse({
+  previous,
+  response,
+  supabase,
+  threadId,
+  userId,
+}: {
+  previous: LoadedAssistantWorkflow | null;
+  response: AssistantPlanReviewResponse;
+  supabase: SupabaseClient;
+  threadId: string;
+  userId: string;
+}) {
+  const context = response.schedulingContext ?? null;
+  const shouldPersist = Boolean(context || response.actions.length > 0 || previous);
+  if (!shouldPersist) return response;
+
+  const now = new Date().toISOString();
+  const workflowId =
+    context?.workflowId ??
+    response.actions.find((action) => action.workflowId)?.workflowId ??
+    previous?.workflow.workflowId ??
+    `workflow-${Date.now()}`;
+  const actionCandidates = response.actions.map((action) => ({
+    ...action,
+    workflowId,
+  }));
+  const canonicalProposals = actionCandidates.map((action) =>
+    createCanonicalProposal(action, now),
+  );
+
+  if (canonicalProposals.some((proposal) => !proposal)) {
+    logAssistantDiagnostic("proposal_validation_failed", {
+      intent: response.turnResult?.intent,
+      proposalCount: actionCandidates.length,
+      threadId,
+      workflowId,
+    });
+    return createWorkflowPersistenceFailureResponse({ response, threadId, userId });
+  }
+
+  const proposals = canonicalProposals.filter(
+    (proposal): proposal is NonNullable<typeof proposal> => Boolean(proposal),
+  );
+  const priorApplied = previous?.proposals.filter(
+    (proposal) => proposal.approvalStatus === "applied",
+  ) ?? [];
+  const priorPending = previous?.proposals.filter(
+    (proposal) => proposal.approvalStatus === "pending",
+  ) ?? [];
+  const proposalsToPersist =
+    proposals.length === 0 && context?.state === "awaiting_apply"
+      ? priorPending
+      : proposals;
+  const combinedProposals = [
+    ...priorApplied.filter(
+      (applied) => !proposalsToPersist.some((proposal) => proposal.id === applied.id),
+    ),
+    ...proposalsToPersist,
+  ];
+  const pendingProposalIds = proposalsToPersist.map((proposal) => proposal.id);
+  const appliedProposalIds = priorApplied.map((proposal) => proposal.id);
+  const allProposalIds = combinedProposals.map((proposal) => proposal.id);
+  const workflow: SchedulingWorkflowContext = {
+    appliedProposalIds,
+    completionStatus:
+      pendingProposalIds.length > 0
+        ? "proposal_created"
+        : appliedProposalIds.length > 0
+          ? "records_applied"
+          : "nothing_created",
+    context,
+    extractedItems:
+      response.turnResult?.extractedItems ?? context?.extractedItems ?? [],
+    intent: response.turnResult?.intent ?? previous?.workflow.intent ?? "general_conversation",
+    lastUpdatedAt: now,
+    missingFields: response.turnResult?.missingFields ?? [],
+    pendingProposalIds,
+    persistenceStatus: "persisted",
+    proposalIds: allProposalIds,
+    selectedCandidateIds: context
+      ? [
+          ...new Set(
+            context.pendingProposals.flatMap((proposal) => {
+              const startMinutes = proposal.startTime
+                .split(":")
+                .map(Number)
+                .reduce((hours, minutes) => hours * 60 + minutes);
+              const matchingWindow = context.candidateWindows.find(
+                (window) =>
+                  window.date === proposal.date &&
+                  startMinutes >= window.startMinutes &&
+                  startMinutes + (proposal.durationMinutes ?? 0) <=
+                    window.endMinutes,
+              );
+              return matchingWindow ? [matchingWindow.id] : [];
+            }),
+          ),
+        ]
+      : [],
+    state: getCanonicalWorkflowState(context, pendingProposalIds.length),
+    threadId,
+    userId,
+    workflowId,
+  };
+  const batch = createProposalBatch(
+    workflowId,
+    proposalsToPersist,
+    context?.purpose ?? response.turnResult?.extractedItems[0]?.title ?? "Planning changes",
+  );
+  const persisted = await persistAssistantWorkflow(
+    supabase,
+    workflow,
+    combinedProposals,
+    batch,
+  );
+
+  if (persisted.error || !persisted.data) {
+    logAssistantDiagnostic("workflow_persistence_failed", {
+      candidateCount: context?.candidateWindows.length ?? 0,
+      extractedItemCount: workflow.extractedItems.length,
+      intent: workflow.intent,
+      missingFields: workflow.missingFields,
+      nextState: workflow.state,
+      persistenceResult: isMissingAssistantWorkflowSchema(persisted.error)
+        ? "schema_missing"
+        : "error",
+      previousState: previous?.workflow.state ?? "none",
+      proposalCount: proposals.length,
+      threadId,
+      workflowId,
+    });
+    return createWorkflowPersistenceFailureResponse({ response, threadId, userId });
+  }
+
+  const loaded = persisted.data;
+  const pendingProposals = getCanonicalPendingProposals(
+    loaded.workflow,
+    loaded.proposals,
+  );
+  const completionStatus = loaded.workflow.completionStatus;
+  const guarded = validateAssistantCompletionLanguage(response.message, completionStatus);
+  logAssistantDiagnostic("workflow_persisted", {
+    candidateCount: loaded.workflow.context?.candidateWindows.length ?? 0,
+    extractedItemCount: loaded.workflow.extractedItems.length,
+    intent: loaded.workflow.intent,
+    missingFields: loaded.workflow.missingFields,
+    nextState: loaded.workflow.state,
+    persistenceResult: "persisted",
+    previousState: previous?.workflow.state ?? "none",
+    proposalCount: pendingProposals.length,
+    responseValidation: guarded.mismatch ? "replaced" : "passed",
+    threadId,
+    workflowId,
+  });
+
+  return {
+    ...response,
+    actions: pendingProposals.map((proposal) => proposal.suggestion),
+    assistantMessage: guarded.responseText,
+    canonicalProposals: loaded.proposals,
+    message: guarded.responseText,
+    proposalBatch: loaded.batch,
+    schedulingContext: loaded.workflow.context,
+    turnResult: response.turnResult
+      ? {
+          ...response.turnResult,
+          completionStatus,
+          proposalIds: loaded.workflow.proposalIds,
+          responseText: guarded.responseText,
+          workflowState: loaded.workflow.state,
+        }
+      : undefined,
+    workflow: loaded.workflow,
+  } satisfies AssistantPlanReviewResponse;
+}
+
+function createAuthoritativeStatusResponse({
+  baseResponse,
+  loaded,
+  planningContext,
+}: {
+  baseResponse: AssistantPlanReviewResponse;
+  loaded: LoadedAssistantWorkflow;
+  planningContext: AssistantPlanningContext;
+}): AssistantPlanReviewResponse {
+  const savedBlockIds = new Set(
+    planningContext.weeklyPlanBlocks.map((block) => block.id),
+  );
+  const applied = loaded.proposals.filter(
+    (proposal) =>
+      proposal.approvalStatus === "applied" &&
+      Boolean(proposal.savedRecordId) &&
+      (proposal.actionType !== "create_time_block" ||
+        savedBlockIds.has(proposal.savedRecordId ?? "")),
+  );
+  const pending = getCanonicalPendingProposals(
+    loaded.workflow,
+    loaded.proposals,
+  );
+  const title =
+    loaded.workflow.extractedItems[0]?.title ??
+    loaded.workflow.context?.purpose ??
+    "The requested item";
+  let message: string;
+
+  if (applied.length > 0 && pending.length === 0) {
+    const lines = applied
+      .map((proposal) => proposal.timeBlock)
+      .filter((proposal): proposal is NonNullable<typeof proposal> => Boolean(proposal))
+      .map(
+        (proposal) =>
+          `- ${proposal.date}, ${formatTimeInputLabel(
+            proposal.startTime,
+          )}–${formatTimeInputLabel(proposal.endTime)}`,
+      );
+    message = `Yes. ${applied.length} ${title} session${
+      applied.length === 1 ? " was" : "s were"
+    } added${lines.length > 0 ? `:\n\n${lines.join("\n")}` : "."}`;
+  } else if (applied.length > 0 && pending.length > 0) {
+    message = `Partly. ${applied.length} session${
+      applied.length === 1 ? " was" : "s were"
+    } added, and ${pending.length} ${pending.length === 1 ? "is" : "are"} still awaiting approval.`;
+  } else if (pending.length > 0) {
+    message = `Not yet. ${pending.length === 1 ? "The session is" : `The ${pending.length} sessions are`} waiting for your approval.`;
+  } else {
+    const missing = loaded.workflow.missingFields;
+    message = `No. ${title} has not been added yet.${
+      missing.length > 0
+        ? ` I still need ${missing.join(" and ").replace("frequency", "the number of sessions").replace("duration", "the session length")}.`
+        : " No saved proposal or applied record matches this workflow."
+    }`;
+  }
+
+  const guarded = validateAssistantCompletionLanguage(
+    message,
+    loaded.workflow.completionStatus,
+  );
+  const turnResult = createAssistantTurnResult({
+    completionStatus: loaded.workflow.completionStatus,
+    contextStatus: baseResponse.contextStatus,
+    extractedItems: loaded.workflow.extractedItems,
+    intent: "status_question",
+    missingFields: loaded.workflow.missingFields,
+    outcome:
+      applied.length > 0 && pending.length === 0
+        ? "apply_succeeded"
+        : pending.length > 0
+          ? "proposal_pending_review"
+          : "cannot_confirm",
+    proposalIds: loaded.workflow.proposalIds,
+    responseText: guarded.responseText,
+    uncertaintyNotes: baseResponse.dataWarning ? [baseResponse.dataWarning] : [],
+    workflowState: loaded.workflow.state,
+  });
+
+  logAssistantDiagnostic("status_answered", {
+    intent: "status_question",
+    nextState: loaded.workflow.state,
+    persistenceResult: "loaded",
+    proposalCount: pending.length,
+    responseValidation: guarded.mismatch ? "replaced" : "passed",
+    threadId: loaded.workflow.threadId,
+    workflowId: loaded.workflow.workflowId,
+  });
+
+  return {
+    ...baseResponse,
+    actions: [],
+    assistantMessage: guarded.responseText,
+    canonicalProposals: loaded.proposals,
+    insights: [],
+    message: guarded.responseText,
+    proposalBatch: loaded.batch,
+    schedulingContext: loaded.workflow.context,
+    suggestions: [],
+    turnResult,
+    workflow: loaded.workflow,
   };
 }
 
@@ -1373,13 +1733,32 @@ export async function GET(request: NextRequest) {
     authResult.userId,
   );
   const response = createContextOnlyAssistantResponse(context);
+  const threadId = request.nextUrl.searchParams.get("threadId")?.slice(0, 80) ?? null;
+  const workflowResult = threadId
+    ? await loadAssistantWorkflow(
+        authResult.supabase,
+        authResult.userId,
+        threadId,
+      )
+    : { data: null, error: null };
+  const loaded = workflowResult.data;
+  const pendingActions = loaded
+    ? getCanonicalPendingProposals(loaded.workflow, loaded.proposals)
+        .map((proposal) => proposal.suggestion)
+    : [];
 
   return NextResponse.json({
     ...response,
+    actions: pendingActions,
     assistantMessage: response.message,
+    canonicalProposals: loaded?.proposals ?? [],
     contextStatus,
     dataWarning: warning,
     message: response.message,
+    proposalBatch: loaded?.batch ?? null,
+    schedulingContext: loaded?.workflow.context ?? null,
+    suggestions: [],
+    workflow: loaded?.workflow ?? null,
   });
 }
 
@@ -1400,9 +1779,8 @@ export async function POST(request: NextRequest) {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const recentMessages = normalizeRecentMessages(body.recentMessages);
   const timezone = normalizeTimezone(body.timezone);
-  let activeSchedulingContext = normalizeAssistantSchedulingContext(
-    body.activeSchedulingContext,
-  );
+  let activeSchedulingContext: AssistantSchedulingContext | null = null;
+  let loadedWorkflow: LoadedAssistantWorkflow | null = null;
   const threadId =
     typeof body.threadId === "string" && body.threadId.length <= 80
       ? body.threadId
@@ -1427,35 +1805,26 @@ export async function POST(request: NextRequest) {
     authResult.userId,
     timezone,
   );
-
-  if (!activeSchedulingContext && isAssistantStatusQuestion(prompt) && threadId) {
-    const threadResult = await authResult.supabase
-      .from("assistant_threads")
-      .select("snapshot")
-      .eq("id", threadId)
-      .eq("user_id", authResult.userId)
-      .maybeSingle();
-    const snapshot = parseAssistantConversationSnapshot(threadResult.data?.snapshot);
-    activeSchedulingContext = normalizeAssistantSchedulingContext(
-      snapshot?.activeSchedulingContext,
+  if (threadId) {
+    const workflowResult = await loadAssistantWorkflow(
+      authResult.supabase,
+      authResult.userId,
+      threadId,
     );
+    if (workflowResult.data) {
+      loadedWorkflow = workflowResult.data;
+      activeSchedulingContext = workflowResult.data.workflow.context;
+    } else if (workflowResult.error && !isMissingAssistantWorkflowSchema(workflowResult.error)) {
+      console.error("Assistant workflow could not be loaded", workflowResult.error);
+    }
   }
 
-  if (activeSchedulingContext?.appliedRecords.length) {
-    const savedBlockIds = new Set(context.weeklyPlanBlocks.map((block) => block.id));
-    const verifiedRecords = activeSchedulingContext.appliedRecords.filter((record) =>
-      savedBlockIds.has(record.id),
-    );
-    activeSchedulingContext = {
-      ...activeSchedulingContext,
-      appliedRecords: verifiedRecords,
-      state:
-        verifiedRecords.length > 0
-          ? activeSchedulingContext.state
-          : activeSchedulingContext.pendingProposals.length > 0
-            ? "awaiting_apply"
-            : "needs_clarification",
-    };
+  if (
+    loadedWorkflow?.workflow.state === "applied" &&
+    !isAssistantStatusQuestion(prompt)
+  ) {
+    activeSchedulingContext = null;
+    loadedWorkflow = null;
   }
   const fallbackResponse = createFallbackAssistantResponse(
     context,
@@ -1469,6 +1838,34 @@ export async function POST(request: NextRequest) {
     dataWarning: warning,
     message: fallbackResponse.message,
   };
+
+  if (isAssistantStatusQuestion(prompt)) {
+    const response = loadedWorkflow
+      ? createAuthoritativeStatusResponse({
+          baseResponse: fallbackWithWarning,
+          loaded: loadedWorkflow,
+          planningContext: context,
+        })
+      : finalizeAssistantResponse({
+          contextStatus,
+          planningContext: context,
+          prompt,
+          response: {
+            ...fallbackWithWarning,
+            actions: [],
+            assistantMessage:
+              "No. I found no persisted proposal or applied record for this conversation.",
+            message:
+              "No. I found no persisted proposal or applied record for this conversation.",
+            suggestions: [],
+          },
+        });
+
+    return createNdjsonStream(async (send) => {
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
+    });
+  }
 
   const scheduleInput = {
     importedCalendarEvents: context.importedCalendarEvents,
@@ -1581,13 +1978,14 @@ export async function POST(request: NextRequest) {
               overrideEndTime: workException.overrideEndTime,
               overrideStartTime: workException.overrideStartTime,
               relatedWorkShiftId: workException.relatedWorkShiftId,
+              workflowId: schedulingContext.workflowId,
               conflictWarnings: [] as string[],
             },
           ]
         : []),
       ...timeBlockSuggestions,
     ];
-    const response = finalizeAssistantResponse({
+    const finalizedResponse = finalizeAssistantResponse({
       contextStatus,
       planningContext: context,
       prompt,
@@ -1603,6 +2001,19 @@ export async function POST(request: NextRequest) {
         suggestions,
       },
     });
+    const response = threadId
+      ? await persistCanonicalWorkflowResponse({
+          previous: loadedWorkflow,
+          response: finalizedResponse,
+          supabase: authResult.supabase,
+          threadId,
+          userId: authResult.userId,
+        })
+      : createWorkflowPersistenceFailureResponse({
+          response: finalizedResponse,
+          threadId: "missing-thread",
+          userId: authResult.userId,
+        });
 
     return createNdjsonStream(async (send) => {
       await streamFallbackMessage(response.message, send);
@@ -1639,6 +2050,63 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  if (activeSchedulingContext || isExplicitSchedulingRequest(prompt)) {
+    const activeItems =
+      activeSchedulingContext?.extractedItems?.length
+        ? activeSchedulingContext.extractedItems
+        : extractedItems;
+    const clarification = createConsolidatedClarification(activeItems);
+    const message = clarification
+      ? clarification
+      : "I couldn’t finish building that plan. Nothing has been scheduled. Please try again.";
+    logAssistantDiagnostic("deterministic_workflow_fallback", {
+      candidateCount: activeSchedulingContext?.candidateWindows.length ?? 0,
+      extractedItemCount: activeItems.length,
+      fallbackPath: clarification ? "clarification" : "failure",
+      intent: loadedWorkflow?.workflow.intent ?? classifyAssistantIntent(prompt, activeItems),
+      missingFields: activeItems.flatMap((item) => item.missingFields),
+      nextState: activeSchedulingContext?.state ?? "failed",
+      previousState: loadedWorkflow?.workflow.state ?? "none",
+      proposalCount: loadedWorkflow?.workflow.pendingProposalIds.length ?? 0,
+      threadId,
+      workflowId: activeSchedulingContext?.workflowId ?? null,
+    });
+    const finalizedResponse = finalizeAssistantResponse({
+      contextStatus,
+      planningContext: context,
+      prompt,
+      response: {
+        actions: [],
+        assistantMessage: message,
+        context: fallbackWithWarning.context,
+        contextStatus,
+        dataWarning: warning,
+        message,
+        schedulingContext: activeSchedulingContext,
+        source: "fallback",
+        suggestions: [],
+      },
+    });
+    const response = threadId
+      ? await persistCanonicalWorkflowResponse({
+          previous: loadedWorkflow,
+          response: finalizedResponse,
+          supabase: authResult.supabase,
+          threadId,
+          userId: authResult.userId,
+        })
+      : createWorkflowPersistenceFailureResponse({
+          response: finalizedResponse,
+          threadId: "missing-thread",
+          userId: authResult.userId,
+        });
+
+    return createNdjsonStream(async (send) => {
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
+    });
+  }
+
   return createNdjsonStream(async (send) => {
     if (
       isGreetingPrompt(prompt) ||
@@ -1649,6 +2117,16 @@ export async function POST(request: NextRequest) {
         !shouldGenerateAssistantActionCards(prompt)) ||
       !process.env.OPENAI_API_KEY
     ) {
+      logAssistantDiagnostic("generic_fallback_triggered", {
+        extractedItemCount: extractedItems.length,
+        fallbackPath: !process.env.OPENAI_API_KEY
+          ? "openai_unavailable"
+          : "deterministic_general_response",
+        intent: classifyAssistantIntent(prompt, extractedItems),
+        proposalCount: 0,
+        threadId,
+        workflowId: null,
+      });
       const response = finalizeAssistantResponse({
         contextStatus,
         planningContext: context,
@@ -1674,7 +2152,7 @@ export async function POST(request: NextRequest) {
             fallbackResponse.suggestions,
           )
         : [];
-      const response = finalizeAssistantResponse({
+      const finalizedResponse = finalizeAssistantResponse({
         contextStatus,
         planningContext: context,
         prompt,
@@ -1689,11 +2167,35 @@ export async function POST(request: NextRequest) {
           suggestions,
         },
       });
+      const response =
+        finalizedResponse.actions.length > 0
+          ? threadId
+            ? await persistCanonicalWorkflowResponse({
+                previous: loadedWorkflow,
+                response: finalizedResponse,
+                supabase: authResult.supabase,
+                threadId,
+                userId: authResult.userId,
+              })
+            : createWorkflowPersistenceFailureResponse({
+                response: finalizedResponse,
+                threadId: "missing-thread",
+                userId: authResult.userId,
+              })
+          : finalizedResponse;
 
       await streamFallbackMessage(response.message, send);
       send({ type: "final", response });
     } catch (error) {
       console.error("Assistant model response failed; using fallback", error);
+      logAssistantDiagnostic("generic_fallback_triggered", {
+        extractedItemCount: extractedItems.length,
+        fallbackPath: "model_error",
+        intent: classifyAssistantIntent(prompt, extractedItems),
+        proposalCount: 0,
+        threadId,
+        workflowId: loadedWorkflow?.workflow.workflowId ?? null,
+      });
       const fallbackWithError = finalizeAssistantResponse({
         contextStatus,
         planningContext: context,

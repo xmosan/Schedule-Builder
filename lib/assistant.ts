@@ -3,6 +3,11 @@ import type {
   AssistantCompletionStatus,
   AssistantTurnResult,
 } from "@/lib/assistant-intelligence";
+import type {
+  CanonicalAssistantProposal,
+  ProposalBatch,
+  SchedulingWorkflowContext,
+} from "@/lib/assistant-workflow";
 import {
   createDeterministicScheduleAnswer,
   type AssistantScheduleAnalysisInput,
@@ -202,6 +207,10 @@ export type AssistantPlanReviewResponse = {
   suggestions: AssistantSuggestion[];
   schedulingContext?: AssistantSchedulingContext | null;
   turnResult?: AssistantTurnResult;
+  canonicalProposals?: CanonicalAssistantProposal[];
+  insights?: AssistantSuggestion[];
+  proposalBatch?: ProposalBatch | null;
+  workflow?: SchedulingWorkflowContext | null;
 };
 
 export type AssistantApplyResultStatus = "applied" | "error" | "skipped";
@@ -225,6 +234,9 @@ export type AssistantApplyResponse = {
   context: AssistantContextSummary;
   message: string;
   results: AssistantApplyResult[];
+  canonicalProposals?: CanonicalAssistantProposal[];
+  proposalBatch?: ProposalBatch | null;
+  workflow?: SchedulingWorkflowContext | null;
 };
 
 type AssistantHistoryItem = {

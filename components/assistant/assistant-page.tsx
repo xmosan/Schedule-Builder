@@ -30,6 +30,7 @@ import {
   type AssistantSuggestion,
   type AssistantSuggestionType,
 } from "@/lib/assistant";
+import type { SchedulingWorkflowContext } from "@/lib/assistant-workflow";
 import {
   priorityLevels,
   projectCategories,
@@ -344,46 +345,24 @@ function updateSchedulingContextAfterApply(
 }
 
 function getPendingReviewCount(
-  messages: ChatMessage[],
-  actionStates: Record<string, ActionState>,
+  workflow: SchedulingWorkflowContext | null,
 ) {
-  return messages.reduce((count, message) => {
-    if (!message.response) {
-      return count;
-    }
-
-    return (
-      count +
-      getActions(message.response).filter((suggestion) => {
-        const state = actionStates[suggestion.id];
-
-        return (
-          isActionableSuggestion(suggestion) &&
-          isActionVisible(state) &&
-          isPendingActionState(state)
-        );
-      }).length
-    );
-  }, 0);
+  return workflow?.pendingProposalIds.length ?? 0;
 }
 
 function getActions(response?: AssistantPlanReviewResponse) {
-  return response?.actions?.length ? response.actions : response?.suggestions ?? [];
+  return response?.actions ?? [];
 }
 
 function normalizeResponseForChat(
   response: AssistantPlanReviewResponse,
-  messageId: string,
+  _messageId: string,
 ): AssistantPlanReviewResponse {
-  const actions = getActions(response).map((suggestion, index) => ({
-    ...suggestion,
-    id: `${messageId}-${suggestion.id || index + 1}`,
-  }));
+  const actions = getActions(response);
 
   return {
     ...response,
     actions,
-    suggestions: actions,
   };
 }
 
@@ -1090,7 +1069,7 @@ function ActionCard({
                       ? "Apply one-day change"
                     : "Apply"}
               </Button>
-              {isEditableSuggestion(suggestion) && (
+              {isEditableSuggestion(suggestion) && !suggestion.workflowId && (
                 <Button
                   className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
                   disabled={isFinished || actionState.status === "applying"}
@@ -1150,6 +1129,7 @@ function ChatBubble({
   onOpenReview,
   onToggleEdit,
   onUpdateSuggestion,
+  reviewableProposalIds,
 }: {
   actionStates: Record<string, ActionState>;
   hiddenTrailingPrompt?: string | null;
@@ -1165,17 +1145,18 @@ function ChatBubble({
     suggestionId: string,
     patch: Partial<AssistantSuggestion>,
   ) => void;
+  reviewableProposalIds: string[];
 }) {
   const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(
     () => new Set(),
   );
   const isUser = message.role === "user";
-  const actions = getActions(message.response);
+  const reviewableIdSet = new Set(reviewableProposalIds);
+  const actions = getActions(message.response).filter((suggestion) =>
+    reviewableIdSet.has(suggestion.id),
+  );
   const visibleActions = actions.filter((suggestion) =>
     isActionVisible(actionStates[suggestion.id]),
-  );
-  const pendingVisibleActions = visibleActions.filter((suggestion) =>
-    isPendingActionState(actionStates[suggestion.id]),
   );
   const actionableActions = visibleActions.filter(isActionableSuggestion);
   const pendingActionableActions = actionableActions.filter((suggestion) =>
@@ -1187,7 +1168,7 @@ function ChatBubble({
   const pendingInsightActions = insightActions.filter((suggestion) =>
     isPendingActionState(actionStates[suggestion.id]),
   );
-  const visibleActionCount = pendingVisibleActions.length;
+  const visibleActionCount = pendingActionableActions.length;
   const hasHandledAllSuggestions = actions.length > 0 && visibleActionCount === 0;
   const selectedActions = pendingActionableActions.filter((suggestion) =>
     selectedActionIds.has(suggestion.id),
@@ -1249,7 +1230,7 @@ function ChatBubble({
           >
             {hasHandledAllSuggestions ? (
               <div className="animate-assistant-card rounded-[20px] border border-brand-teal/20 bg-brand-teal/10 p-4 text-sm font-semibold leading-6 text-brand-teal">
-                You’re all set. Ask for another plan whenever you’re ready.
+                No changes remain in this review.
               </div>
             ) : null}
 
@@ -1262,7 +1243,7 @@ function ChatBubble({
                       {visibleActionCount === 1 ? "change" : "changes"}
                     </p>
                     <ul className="mt-2 grid gap-1 text-xs leading-5 text-brand-ink/58">
-                      {pendingVisibleActions.slice(0, 3).map((suggestion) => (
+                      {pendingActionableActions.slice(0, 3).map((suggestion) => (
                         <li key={suggestion.id} className="truncate">
                           • {suggestion.title}
                         </li>
@@ -1420,6 +1401,8 @@ export function AssistantPage() {
   const [isRefreshingContext, setIsRefreshingContext] = useState(false);
   const [activeSchedulingContext, setActiveSchedulingContext] =
     useState<AssistantSchedulingContext | null>(null);
+  const [activeWorkflow, setActiveWorkflow] =
+    useState<SchedulingWorkflowContext | null>(null);
   const [activeUserId, setActiveUserId] = useState<string | null>(null);
   const [threadId, setThreadId] = useState(() => createAssistantThreadId());
   const [hasRestoredConversation, setHasRestoredConversation] = useState(false);
@@ -1457,7 +1440,7 @@ export function AssistantPage() {
     schedulingQuickReplies.length > 0
       ? activeSchedulingContext?.pendingQuestion
       : null;
-  const pendingReviewCount = getPendingReviewCount(messages, actionStates);
+  const pendingReviewCount = getPendingReviewCount(activeWorkflow);
   const isApplying = Object.values(actionStates).some(
     (state) => state.status === "applying",
   );
@@ -1490,6 +1473,7 @@ export function AssistantPage() {
 
       setThreadId(createAssistantThreadId());
       setActiveSchedulingContext(null);
+      setActiveWorkflow(null);
       setMessages([]);
       setActionStates({});
       setOpenReviewMessages({});
@@ -1506,6 +1490,7 @@ export function AssistantPage() {
     method: "GET" | "POST",
     nextPrompt?: string,
     signal?: AbortSignal,
+    threadIdOverride?: string,
   ) {
     const supabase = getSupabaseBrowserClient();
     const { data, error: sessionError } = await supabase.auth.getSession();
@@ -1522,7 +1507,12 @@ export function AssistantPage() {
       throw signedOutError;
     }
 
-    const apiResponse = await fetch("/api/assistant/plan", {
+    const requestThreadId = threadIdOverride ?? threadId;
+    const apiResponse = await fetch(
+      method === "GET"
+        ? `/api/assistant/plan?threadId=${encodeURIComponent(requestThreadId)}`
+        : "/api/assistant/plan",
+      {
       method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -1533,12 +1523,13 @@ export function AssistantPage() {
           ? JSON.stringify({
               prompt: nextPrompt,
               activeSchedulingContext,
-              threadId,
+              threadId: requestThreadId,
               timezone: getBrowserTimeZone(),
             })
           : undefined,
       signal,
-    });
+      },
+    );
 
     const payload: unknown = await apiResponse.json().catch(() => null);
 
@@ -1689,6 +1680,12 @@ export function AssistantPage() {
       throw signedOutError;
     }
 
+    const workflowId =
+      activeWorkflow?.workflowId ?? suggestions[0]?.workflowId ?? null;
+    if (!workflowId) {
+      throw new Error("This review is not linked to a persisted workflow.");
+    }
+
     const apiResponse = await fetch("/api/assistant/apply", {
       method: "POST",
       headers: {
@@ -1696,7 +1693,8 @@ export function AssistantPage() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        approvedSuggestions: suggestions,
+        proposalIds: suggestions.map((suggestion) => suggestion.id),
+        workflowId,
       }),
     });
 
@@ -1720,6 +1718,42 @@ export function AssistantPage() {
     return requestApplyActions([suggestion]);
   }
 
+  async function requestRejectProposal(proposalId: string) {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw new Error(sessionError.message);
+    const accessToken = data.session?.access_token;
+    if (!accessToken) throw new Error("Sign in before changing a proposal.");
+    if (!activeWorkflow?.workflowId) {
+      throw new Error("This proposal is not linked to a persisted workflow.");
+    }
+
+    const apiResponse = await fetch("/api/assistant/proposals", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "reject",
+        proposalId,
+        workflowId: activeWorkflow.workflowId,
+      }),
+    });
+    const payload: unknown = await apiResponse.json().catch(() => null);
+    if (!apiResponse.ok) {
+      const apiError =
+        typeof payload === "object" &&
+        payload !== null &&
+        "error" in payload &&
+        typeof payload.error === "string"
+          ? payload.error
+          : "The proposal could not be removed.";
+      throw new Error(apiError);
+    }
+    return payload as { workflow: SchedulingWorkflowContext };
+  }
+
   async function refreshPlanningContext() {
     if (status === "signed_out" || isRefreshingContext) {
       return;
@@ -1732,6 +1766,10 @@ export function AssistantPage() {
       setContext(response.context);
       setContextStatus(response.contextStatus);
       setContextWarning(response.dataWarning ?? null);
+      setActiveWorkflow(response.workflow ?? null);
+      if (response.workflow) {
+        setActiveSchedulingContext(response.workflow.context);
+      }
       setError(null);
       setStatus("ready");
     } catch (refreshError) {
@@ -1773,6 +1811,7 @@ export function AssistantPage() {
 
         setActiveUserId(userId);
         let restoredSnapshot = readLocalAssistantConversation(userId);
+        let restoredThreadId = threadId;
 
         try {
           const conversationResponse = await fetch(
@@ -1801,6 +1840,7 @@ export function AssistantPage() {
         }
 
         if (restoredSnapshot && isActive) {
+          restoredThreadId = restoredSnapshot.threadId;
           setThreadId(restoredSnapshot.threadId);
           setMessages(
             restoredSnapshot.messages.map((message) => ({
@@ -1828,6 +1868,7 @@ export function AssistantPage() {
           "GET",
           undefined,
           controller.signal,
+          restoredThreadId,
         );
 
         if (!isActive) {
@@ -1837,6 +1878,10 @@ export function AssistantPage() {
         setContext(response.context);
         setContextStatus(response.contextStatus);
         setContextWarning(response.dataWarning ?? null);
+        setActiveWorkflow(response.workflow ?? null);
+        if (response.workflow) {
+          setActiveSchedulingContext(response.workflow.context);
+        }
         setHasRestoredConversation(true);
         setError(null);
         setStatus("ready");
@@ -2013,6 +2058,7 @@ export function AssistantPage() {
   }
 
   function getLatestPendingActionReview() {
+    const canonicalPendingIds = new Set(activeWorkflow?.pendingProposalIds ?? []);
     for (const message of [...messages].reverse()) {
       if (message.role !== "assistant" || !message.response) {
         continue;
@@ -2023,6 +2069,7 @@ export function AssistantPage() {
 
         return (
           isActionableSuggestion(suggestion) &&
+          canonicalPendingIds.has(suggestion.id) &&
           isActionVisible(actionState) &&
           isPendingActionState(actionState)
         );
@@ -2087,6 +2134,7 @@ export function AssistantPage() {
       const result = response.results[0];
 
       setContext(response.context);
+      setActiveWorkflow(response.workflow ?? activeWorkflow);
       updateActionState(suggestion.id, {
         editing: false,
         message: result?.message ?? response.message,
@@ -2114,8 +2162,9 @@ export function AssistantPage() {
 
       if (result?.status === "applied") {
         addAssistantNotice(result.message || "Suggestion applied.");
-        setActiveSchedulingContext((current) =>
-          updateSchedulingContextAfterApply(current, response.results),
+        setActiveSchedulingContext(
+          response.workflow?.context ??
+            updateSchedulingContextAfterApply(activeSchedulingContext, response.results),
         );
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
@@ -2265,6 +2314,7 @@ export function AssistantPage() {
       setContext(chatResponse.context);
       setContextStatus(chatResponse.contextStatus);
       setContextWarning(chatResponse.dataWarning ?? null);
+      setActiveWorkflow(chatResponse.workflow ?? activeWorkflow);
       if (chatResponse.schedulingContext !== undefined) {
         setActiveSchedulingContext(chatResponse.schedulingContext);
       }
@@ -2359,6 +2409,7 @@ export function AssistantPage() {
       const result = response.results[0];
 
       setContext(response.context);
+      setActiveWorkflow(response.workflow ?? activeWorkflow);
       updateActionState(suggestion.id, {
         editing: false,
         message: result?.message ?? response.message,
@@ -2368,8 +2419,9 @@ export function AssistantPage() {
 
       if (result?.status === "applied") {
         addAssistantNotice(result.message || "Suggestion applied.");
-        setActiveSchedulingContext((current) =>
-          updateSchedulingContextAfterApply(current, response.results),
+        setActiveSchedulingContext(
+          response.workflow?.context ??
+            updateSchedulingContextAfterApply(activeSchedulingContext, response.results),
         );
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
@@ -2409,6 +2461,7 @@ export function AssistantPage() {
     try {
       const response = await requestApplyActions(actionable);
       setContext(response.context);
+      setActiveWorkflow(response.workflow ?? activeWorkflow);
 
       response.results.forEach((result) => {
         updateActionState(result.suggestionId, {
@@ -2425,8 +2478,9 @@ export function AssistantPage() {
 
       if (appliedCount > 0) {
         addAssistantNotice(response.message);
-        setActiveSchedulingContext((current) =>
-          updateSchedulingContextAfterApply(current, response.results),
+        setActiveSchedulingContext(
+          response.workflow?.context ??
+            updateSchedulingContextAfterApply(activeSchedulingContext, response.results),
         );
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
@@ -2444,8 +2498,18 @@ export function AssistantPage() {
     }
   }
 
-  function ignoreSuggestion(suggestionId: string) {
-    removeSuggestionAfterAnimation(suggestionId);
+  async function ignoreSuggestion(suggestionId: string) {
+    try {
+      const response = await requestRejectProposal(suggestionId);
+      setActiveWorkflow(response.workflow);
+      setActiveSchedulingContext(response.workflow.context);
+      removeSuggestionAfterAnimation(suggestionId);
+    } catch (ignoreError) {
+      updateActionState(suggestionId, {
+        message: getErrorMessage(ignoreError),
+        status: "error",
+      });
+    }
   }
 
   function toggleEdit(suggestionId: string) {
@@ -2597,7 +2661,7 @@ export function AssistantPage() {
                   onApplyAll={(suggestions) =>
                     void applyAllSuggestions(suggestions)
                   }
-                  onIgnore={ignoreSuggestion}
+                  onIgnore={(suggestionId) => void ignoreSuggestion(suggestionId)}
                   onOpenReview={(messageId) =>
                     setOpenReviewMessages((current) => ({
                       ...current,
@@ -2606,6 +2670,7 @@ export function AssistantPage() {
                   }
                   onToggleEdit={toggleEdit}
                   onUpdateSuggestion={updateSuggestion}
+                  reviewableProposalIds={activeWorkflow?.pendingProposalIds ?? []}
                 />
               ))}
 

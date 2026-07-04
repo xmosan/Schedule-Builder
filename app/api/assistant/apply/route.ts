@@ -4,7 +4,6 @@ import {
   createAssistantContextSummary,
   getAssistantCurrentWeekStartInput,
   getRelevantImportedCalendarEvents,
-  normalizeAssistantSuggestions,
   type AssistantApplyResponse,
   type AssistantApplyResult,
   type AssistantSuggestion,
@@ -27,6 +26,7 @@ import {
   createScheduledItemForUser,
   createScheduleExceptionForUser,
   createWeeklyPlanBlockForUser,
+  deleteWeeklyPlanBlockForUser,
 } from "@/lib/supabase/scheduler";
 import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
 import {
@@ -56,6 +56,11 @@ import {
   type ScheduleExceptionDraft,
 } from "@/lib/schedule-exceptions";
 import { getUserFacingError } from "@/lib/user-facing-error";
+import {
+  loadAssistantWorkflowById,
+  updateAssistantProposalResults,
+} from "@/lib/assistant-workflow-store";
+import { getCanonicalPendingProposals } from "@/lib/assistant-workflow";
 
 export const dynamic = "force-dynamic";
 
@@ -919,36 +924,78 @@ export async function POST(request: NextRequest) {
   }
 
   const body = (await request.json().catch(() => ({}))) as {
-    approvedSuggestions?: unknown;
+    proposalIds?: unknown;
+    workflowId?: unknown;
   };
+  const workflowId =
+    typeof body.workflowId === "string" ? body.workflowId.trim() : "";
+  const proposalIds = Array.isArray(body.proposalIds)
+    ? body.proposalIds.filter(
+        (proposalId): proposalId is string =>
+          typeof proposalId === "string" && proposalId.length > 0,
+      )
+    : [];
 
-  if (!Array.isArray(body.approvedSuggestions)) {
+  if (!workflowId || !Array.isArray(body.proposalIds)) {
     return NextResponse.json(
-      { error: "Send approvedSuggestions as an array." },
+      { error: "Send a workflowId and proposalIds array." },
       { status: 400 },
     );
   }
 
-  if (body.approvedSuggestions.length === 0) {
+  if (proposalIds.length === 0) {
     return NextResponse.json(
       { error: "Approve at least one suggestion before applying." },
       { status: 400 },
     );
   }
 
-  if (body.approvedSuggestions.length > maxApprovedSuggestions) {
+  if (proposalIds.length > maxApprovedSuggestions) {
     return NextResponse.json(
       { error: `Apply at most ${maxApprovedSuggestions} suggestions at a time.` },
       { status: 400 },
     );
   }
 
-  const suggestions = body.approvedSuggestions.map((rawSuggestion, index) => {
-    return {
-      normalized: normalizeAssistantSuggestions([rawSuggestion])[0] ?? null,
-      fallbackId: `approved-${index + 1}`,
-    };
-  });
+  const workflowResult = await loadAssistantWorkflowById(
+    authResult.supabase,
+    authResult.userId,
+    workflowId,
+  );
+
+  if (workflowResult.error || !workflowResult.data) {
+    return NextResponse.json(
+      {
+        error:
+          "The persisted proposal workflow could not be loaded. No schedule changes were applied.",
+      },
+      { status: workflowResult.error ? 500 : 404 },
+    );
+  }
+
+  const proposalById = new Map(
+    getCanonicalPendingProposals(
+      workflowResult.data.workflow,
+      workflowResult.data.proposals,
+    ).map((proposal) => [proposal.id, proposal]),
+  );
+  const suggestions = proposalIds.map((proposalId) => ({
+    normalized:
+      proposalById.get(proposalId)?.approvalStatus === "pending"
+        ? proposalById.get(proposalId)?.suggestion ?? null
+        : null,
+    fallbackId: proposalId,
+  }));
+
+  if (suggestions.some((item) => !item.normalized)) {
+    return NextResponse.json(
+      {
+        error:
+          "One or more selected proposals are missing, already handled, or do not belong to this workflow. Nothing was applied.",
+      },
+      { status: 409 },
+    );
+  }
 
   const [
     projectsResult,
@@ -1105,17 +1152,78 @@ export async function POST(request: NextRequest) {
   const appliedMessages = results
     .filter((result) => result.status === "applied")
     .map((result) => result.message);
+  const workflowUpdate = await updateAssistantProposalResults(
+    authResult.supabase,
+    workflowResult.data.workflow,
+    results
+      .filter(
+        (result): result is AssistantApplyResult & { savedRecordId: string } =>
+          result.status === "applied" && Boolean(result.savedRecordId),
+      )
+      .map((result) => ({
+        approvalStatus: "applied" as const,
+        proposalId: result.suggestionId,
+        savedRecordId: result.savedRecordId,
+      })),
+  );
+
+  console.info("assistant_workflow", {
+    appliedCount,
+    event: "apply_completed",
+    failedCount,
+    persistenceResult: workflowUpdate.error ? "failed" : "persisted",
+    proposalCount: proposalIds.length,
+    workflowId,
+  });
+
+  if (workflowUpdate.error || !workflowUpdate.data) {
+    const createdWeeklyBlockIds = results.flatMap((result) =>
+      result.status === "applied" &&
+      result.type === "suggested_weekly_block" &&
+      result.savedRecordId
+        ? [result.savedRecordId]
+        : [],
+    );
+    const rollbackResults = await Promise.all(
+      createdWeeklyBlockIds.map((blockId) =>
+        deleteWeeklyPlanBlockForUser(
+          authResult.supabase,
+          authResult.userId,
+          blockId,
+        ),
+      ),
+    );
+    console.error("assistant_workflow", {
+      event: "apply_persistence_failed",
+      rollbackFailed: rollbackResults.some((result) => Boolean(result.error)),
+      rolledBackTimeBlockCount: rollbackResults.filter(
+        (result) => !result.error,
+      ).length,
+      workflowId,
+    });
+    return NextResponse.json(
+      {
+        error:
+          "I couldn’t record the result of applying the approved sessions. No success confirmation was recorded.",
+      },
+      { status: 500 },
+    );
+  }
+
   const context = await loadContextSummary(authResult.supabase, authResult.userId);
   const response: AssistantApplyResponse = {
-    completionStatus: appliedCount > 0 ? "records_applied" : "nothing_created",
+    canonicalProposals: workflowUpdate.data.proposals,
+    completionStatus: workflowUpdate.data.workflow.completionStatus,
     context,
     message:
       appliedCount > 0
-        ? `${failedCount > 0 ? "Partly applied the approved plan." : "Saved the approved plan."} ${appliedMessages.join(
+        ? `${failedCount > 0 ? "Partly." : "Yes."} ${appliedMessages.join(
             " ",
           )}`
-        : "No approved suggestions were applied.",
+        : "No. I couldn’t apply the approved sessions. No success confirmation was recorded.",
+    proposalBatch: workflowUpdate.data.batch,
     results,
+    workflow: workflowUpdate.data.workflow,
   };
 
   return NextResponse.json(response);

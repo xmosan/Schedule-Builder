@@ -1,0 +1,40 @@
+# Assistant scheduling workflow
+
+## Request-to-record path
+
+1. `components/assistant/assistant-page.tsx` submits the user message with a stable thread ID and persists chat messages separately from scheduling state.
+2. `app/api/assistant/plan/route.ts` authenticates the user and loads projects, work shifts, exceptions, Weekly Plan blocks, scheduled items, and read-only imported events.
+3. The route loads the latest `assistant_workflows` record for the signed-in user and thread. Browser-supplied workflow state is not authoritative.
+4. Status questions are answered from the persisted workflow/proposals and verified saved Weekly Plan record IDs.
+5. `lib/assistant-schedule-analysis.ts` interprets explicit scheduling requests and contextual follow-ups before any generic or model fallback.
+6. `lib/assistant-intelligence.ts` preserves extracted activity, purpose, recurrence, explicit duration, explicit count, and missing fields.
+7. Missing required fields produce one deterministic clarification and persist the workflow in `awaiting_clarification`.
+8. Complete requests use deterministic candidate windows calculated from recurring work, date exceptions, Weekly Plan blocks, tasks/appointments, imported events, deadlines, and timezone.
+9. The model may explain or rank validated options, but it does not create candidate times.
+10. `lib/assistant-workflow.ts` rejects observations and validates every mutation before it becomes a proposal.
+11. `lib/assistant-workflow-store.ts` atomically persists workflow state, proposal batch, and proposals through `persist_assistant_workflow`.
+12. The plan route returns review actions only after persistence succeeds. A persistence failure returns zero actions and an explicit “nothing scheduled” response.
+13. The Assistant UI renders only proposal IDs listed in the persisted workflow’s `pendingProposalIds`.
+14. The visible count, context count, review queue, status answer, and apply request all use those same pending IDs.
+15. `app/api/assistant/apply/route.ts` accepts workflow/proposal IDs, reloads the persisted records, and rejects missing, foreign, or already handled proposals.
+16. The apply route revalidates each time against current server-loaded constraints before writing. It records saved IDs on applied proposals; timed blocks are rolled back if workflow-result persistence fails.
+17. Apply and status responses use saved server records. Google Calendar and other imports remain read-only and are never mutated by this flow.
+
+## Production failure root causes
+
+- The original extraction trigger recognized “time for” and open/free-time wording, but not the production phrase “find time to read”; the activity never entered a persistent workflow.
+- `createFallbackAssistantResponse` emitted the “highest-impact next steps” sentence whenever generic workload warnings existed. The plan route preferred this fallback before structured scheduling handling.
+- The client appended “You’re all set” when local cards appeared handled; that condition had no relationship to server writes.
+- “Put it on the schedule” was evaluated as a new prompt because active scheduling context existed only in a debounced client/thread snapshot and the failed first turn had created none.
+- Workload warnings and model suggestions shared one `actions`/`suggestions` shape. The UI treated observations such as “Monday has work plus project blocks” as reviewable mutations.
+- The collapsed proposal count counted all visible local action cards, while Planning context independently counted only actionable pending cards, producing 2 versus 0.
+- There were two proposal systems: local chat/action-state cards and a separate scheduling-context pending proposal. Neither was a durable, authoritative review queue.
+- Client normalization rewrote proposal IDs using message IDs, while apply accepted full browser-supplied suggestion payloads. Proposal identity was therefore not server-authoritative.
+- Generic fallback responses bypassed mutation schema validation because no persisted proposal layer sat between response generation and rendering.
+
+## Required invariants
+
+- Explicit scheduling ends only in clarification, a persisted proposal, verified applied records, or a clear failure.
+- `visible count = pendingProposalIds = persisted pending rows = review queue count`.
+- A response cannot claim completion unless `completionStatus` and saved records support it.
+- No proposal can apply without review approval and server-side revalidation.

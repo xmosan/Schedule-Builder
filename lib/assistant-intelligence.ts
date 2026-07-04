@@ -115,9 +115,9 @@ export type ProjectMatch = {
 const explicitMutationPattern =
   /\b(?:add|apply|block|book|create|draft|fit|move|plan|plug|put|reserve|save|schedule|shift)\b/i;
 const statusQuestionPattern =
-  /\b(?:is it on (?:my|the) schedule|did you add (?:it|that|them|those)|was (?:it|that) saved|is the plan applied|did (?:that|those|the) blocks? get created|has (?:it|that) been (?:added|scheduled|saved))\b/i;
+  /\b(?:is it on (?:my|the) schedule|is the [^?.]{1,60} scheduled|did you add (?:it|that|them|those)|was (?:it|that) saved|is the plan applied|did (?:that|those|the) (?:blocks?|sessions?) get created|has (?:it|that) been (?:added|scheduled|saved))\b/i;
 const recurringPattern =
-  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every weekday|every other day|times? this week|sessions? this week|twice|three times|four times|gradually|recurring)\b/i;
+  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every weekday|every other day|times? this week|sessions? this week|slots|twice|three times|four times|gradually|recurring)\b/i;
 const completionClaimPattern =
   /\b(?:you(?:'re| are) all set|it(?:'s| is) scheduled|i (?:added|scheduled|saved|applied|put) (?:it|that|them|those)|it(?:'s| is) on (?:your|the) schedule|your plan has been updated|(?:done|applied|completed)[.!]?\s*$)\b/i;
 const appliedClaimPattern =
@@ -147,6 +147,19 @@ function stableItemId(title: string, index: number) {
 
 export function isExplicitMutationRequest(prompt: string) {
   return explicitMutationPattern.test(prompt.trim());
+}
+
+export function isExplicitSchedulingRequest(prompt: string) {
+  const normalized = prompt.trim();
+  return (
+    /\b(?:put|add|schedule|plug|fit|reserve|block|book)\b.*\b(?:schedule|calendar|week|time|slot|spot|at\s+\d)/i.test(
+      normalized,
+    ) ||
+    /\b(?:find|give|show)\s+(?:me\s+)?(?:some\s+)?(?:time|slots?|openings?)\b/i.test(
+      normalized,
+    ) ||
+    /\bplan\s+(?:it|this|them|these|my week)\b/i.test(normalized)
+  );
 }
 
 export function isAssistantStatusQuestion(prompt: string) {
@@ -248,8 +261,11 @@ function inferDeadline(text: string) {
 }
 
 function inferPurpose(text: string, title: string) {
-  if (/\bsealed nectar|halaqah|south side masjid\b/i.test(text)) {
+  if (/\bsouth side masjid\b/i.test(text)) {
     return "Prepare for weekly South Side masjid halaqahs";
+  }
+  if (/\bsealed nectar|halaqah|masjid\b/i.test(text)) {
+    return "Prepare for the masjid halaqah";
   }
   const purpose = text.match(/\b(?:in order to|so (?:that )?i can|to)\s+(.+)$/i)?.[1];
   return purpose && !title.toLowerCase().includes(purpose.toLowerCase())
@@ -480,7 +496,7 @@ export function createConsolidatedClarification(items: ExtractedPlanningItem[]) 
     const activity = items[0].type === "reading" || /read/i.test(items[0].title)
       ? "reading sessions"
       : "sessions";
-    return `How many ${activity} would you like this week, and roughly how long should each one be?`;
+    return `How many ${activity} would you like this week, and how long should each session be?`;
   }
 
   const questions: string[] = [];

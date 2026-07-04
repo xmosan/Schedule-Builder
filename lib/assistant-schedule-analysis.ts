@@ -22,6 +22,7 @@ import {
   extractPlanningItems,
   isAssistantStatusQuestion,
   isExplicitMutationRequest,
+  isExplicitSchedulingRequest,
   isRecurringPlanningRequest,
   parseExplicitDurationMinutes,
   parseRequestedSessionCount,
@@ -2658,7 +2659,11 @@ function createRecurringSchedulingTurn({
 
   if (!isRecurring) return null;
   if (!isContinuation && extractedItems.length !== 1) return null;
-  if (!isContinuation && !isExplicitMutationRequest(prompt) && !/\bfind\s+me\s+(?:some\s+)?time\b/i.test(prompt)) {
+  if (
+    !isContinuation &&
+    !isExplicitMutationRequest(prompt) &&
+    !isExplicitSchedulingRequest(prompt)
+  ) {
     return null;
   }
 
