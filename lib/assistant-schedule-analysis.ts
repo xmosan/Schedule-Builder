@@ -17,6 +17,16 @@ import {
   type ScheduleException,
 } from "@/lib/schedule-exceptions";
 import type { Project } from "@/lib/projects";
+import {
+  createConsolidatedClarification,
+  extractPlanningItems,
+  isAssistantStatusQuestion,
+  isExplicitMutationRequest,
+  isRecurringPlanningRequest,
+  parseExplicitDurationMinutes,
+  parseRequestedSessionCount,
+  type ExtractedPlanningItem,
+} from "@/lib/assistant-intelligence";
 
 const dayStartDefault = 8 * 60;
 const dayEndDefault = 22 * 60;
@@ -124,6 +134,7 @@ export type AssistantWorkflowState =
   | "calculating_availability"
   | "awaiting_window_selection"
   | "awaiting_duration"
+  | "awaiting_session_details"
   | "awaiting_title"
   | "proposal_ready"
   | "awaiting_apply"
@@ -141,6 +152,17 @@ export type AssistantPendingTimeBlockProposal = {
   startTime: string;
   status: "needs_duration" | "ready_for_review";
   title: string;
+  batchId?: string;
+  id?: string;
+};
+
+export type AssistantAppliedScheduleRecord = {
+  date: string;
+  endTime: string;
+  id: string;
+  proposalId: string;
+  startTime: string;
+  title: string;
 };
 
 export type AssistantPendingWorkExceptionProposal = {
@@ -155,26 +177,37 @@ export type AssistantPendingWorkExceptionProposal = {
 };
 
 export type AssistantSchedulingContext = {
+  appliedRecords: AssistantAppliedScheduleRecord[];
+  batchId: string | null;
   candidateWindows: AssistantOpenWindow[];
   confirmationStatus:
     | "awaiting_window_confirmation"
     | "awaiting_window_selection"
     | "awaiting_duration"
+    | "awaiting_session_details"
     | "ready_for_review";
+  extractedItems: ExtractedPlanningItem[];
   originalDateBoundary?: SchedulingQuery["timeBoundary"];
-  intent: "create_time_block" | "find_open_time";
+  intent:
+    | "create_multiple_time_blocks"
+    | "create_time_block"
+    | "find_open_time"
+    | "multi_action_request";
   lastUpdatedAt: string;
   maximumDurationMinutes: number | null;
   pendingQuestion: string | null;
   pendingProposal: AssistantPendingTimeBlockProposal | null;
+  pendingProposals: AssistantPendingTimeBlockProposal[];
   pendingWorkException: AssistantPendingWorkExceptionProposal | null;
   purpose: string;
   requestedDurationMinutes: number | null;
+  requestedSessionCount: number | null;
   selectedDate: string | null;
   selectedWindowId: string | null;
   selectedWindowEnd: string | null;
   selectedWindowStart: string | null;
   state: AssistantWorkflowState;
+  workflowId: string;
 };
 
 export type AssistantSchedulingConversationTurn = {
@@ -195,6 +228,7 @@ export function normalizeAssistantSchedulingContext(
     "awaiting_window_confirmation",
     "awaiting_window_selection",
     "awaiting_duration",
+    "awaiting_session_details",
     "ready_for_review",
   ];
   const allowedStates: AssistantWorkflowState[] = [
@@ -202,6 +236,7 @@ export function normalizeAssistantSchedulingContext(
     "calculating_availability",
     "awaiting_window_selection",
     "awaiting_duration",
+    "awaiting_session_details",
     "awaiting_title",
     "proposal_ready",
     "awaiting_apply",
@@ -238,7 +273,12 @@ export function normalizeAssistantSchedulingContext(
     }),
   );
 
-  if (candidateWindows.length === 0 && candidate.state !== "failed") {
+  if (
+    candidateWindows.length === 0 &&
+    candidate.state !== "failed" &&
+    candidate.state !== "awaiting_session_details" &&
+    candidate.state !== "applied"
+  ) {
     return null;
   }
 
@@ -247,17 +287,40 @@ export function normalizeAssistantSchedulingContext(
       ? candidate.state
       : candidate.confirmationStatus === "awaiting_duration"
         ? "awaiting_duration"
+        : candidate.confirmationStatus === "awaiting_session_details"
+          ? "awaiting_session_details"
         : candidate.confirmationStatus === "ready_for_review"
           ? "awaiting_apply"
           : "awaiting_window_selection";
 
   return {
+    appliedRecords: Array.isArray(candidate.appliedRecords)
+      ? candidate.appliedRecords.filter(
+          (record): record is AssistantAppliedScheduleRecord =>
+            typeof record === "object" &&
+            record !== null &&
+            typeof record.id === "string" &&
+            typeof record.proposalId === "string" &&
+            typeof record.title === "string" &&
+            typeof record.date === "string" &&
+            typeof record.startTime === "string" &&
+            typeof record.endTime === "string",
+        )
+      : [],
+    batchId: typeof candidate.batchId === "string" ? candidate.batchId : null,
     candidateWindows: candidateWindows.slice(0, 28),
     confirmationStatus: candidate.confirmationStatus,
     intent:
       candidate.intent === "find_open_time"
         ? "find_open_time"
-        : "create_time_block",
+        : candidate.intent === "create_multiple_time_blocks"
+          ? "create_multiple_time_blocks"
+          : candidate.intent === "multi_action_request"
+            ? "multi_action_request"
+          : "create_time_block",
+    extractedItems: Array.isArray(candidate.extractedItems)
+      ? (candidate.extractedItems as ExtractedPlanningItem[]).slice(0, 12)
+      : [],
     lastUpdatedAt:
       typeof candidate.lastUpdatedAt === "string"
         ? candidate.lastUpdatedAt
@@ -277,6 +340,14 @@ export function normalizeAssistantSchedulingContext(
       candidate.pendingProposal !== null
         ? candidate.pendingProposal
         : null,
+    pendingProposals: Array.isArray(candidate.pendingProposals)
+      ? candidate.pendingProposals.filter(
+          (proposal): proposal is AssistantPendingTimeBlockProposal =>
+            typeof proposal === "object" && proposal !== null,
+        )
+      : candidate.pendingProposal
+        ? [candidate.pendingProposal]
+        : [],
     pendingWorkException:
       typeof candidate.pendingWorkException === "object" &&
       candidate.pendingWorkException !== null
@@ -287,6 +358,12 @@ export function normalizeAssistantSchedulingContext(
       typeof candidate.requestedDurationMinutes === "number" &&
       candidate.requestedDurationMinutes > 0
         ? candidate.requestedDurationMinutes
+        : null,
+    requestedSessionCount:
+      typeof candidate.requestedSessionCount === "number" &&
+      Number.isInteger(candidate.requestedSessionCount) &&
+      candidate.requestedSessionCount > 0
+        ? candidate.requestedSessionCount
         : null,
     selectedDate:
       typeof candidate.selectedDate === "string" ? candidate.selectedDate : null,
@@ -303,6 +380,10 @@ export function normalizeAssistantSchedulingContext(
         ? candidate.selectedWindowStart
         : null,
     state,
+    workflowId:
+      typeof candidate.workflowId === "string" && candidate.workflowId
+        ? candidate.workflowId
+        : `workflow-${Date.now()}`,
   };
 }
 
@@ -680,7 +761,7 @@ function inferPlanningPurpose(
 
   for (const candidate of candidates) {
     const timeForMatch = candidate.match(
-      /\b(?:make|find|reserve|block|need)\s+(?:me\s+)?(?:some\s+)?time\s+for\s+(.+?)(?:[.!?]|$)/i,
+      /\b(?:make|find|reserve|block|need)\s+(?:me\s+)?(?:some\s+)?time\s+(?:for|to)\s+(.+?)(?:[.!?]|$)/i,
     );
     const directMatch = candidate.match(
       /\b(?:find|show)\s+(?:me\s+)?(?:an?\s+)?(?:open|free|available)\s+(?:time|window|slot)\s+(?:to|for)\s+(.+)$/i,
@@ -707,7 +788,7 @@ function createProposalTitle(purpose: string) {
     return "Focused work block";
   }
 
-  return `Plan ${normalized}`.slice(0, 120);
+  return normalized.slice(0, 120);
 }
 
 const weekdayAliases: Record<WeekDay, readonly string[]> = {
@@ -1768,6 +1849,12 @@ function hasSchedulingPlacementIntent(prompt: string) {
     ) ||
     /\b(?:make|find|reserve|block|need)\s+(?:me\s+)?(?:some\s+)?time\s+for\b/i.test(
       prompt,
+    ) ||
+    /\b(?:make|find|reserve|block|need)\s+(?:me\s+)?(?:some\s+)?time\s+to\b/i.test(
+      prompt,
+    ) ||
+    /\b(?:put|add|schedule|plug)\s+(?:it|this|that|them|those)\s+(?:on|into|in)\s+(?:my|the)?\s*(?:schedule|week|calendar)\b/i.test(
+      prompt,
     )
   );
 }
@@ -2097,6 +2184,7 @@ function createEarlyDepartureSchedulingTurn({
   }
 
   const timezone = input.timezone ?? getDefaultTimeZone();
+  const workflowId = `workflow-${Date.now()}-early-departure`;
   const today = getIsoDateInTimeZone(new Date(), timezone);
   const todayDate = parseIsoDate(today);
   const todayDay = todayDate ? getDayFromDate(todayDate) : null;
@@ -2123,21 +2211,27 @@ function createEarlyDepartureSchedulingTurn({
   if (!relatedShift) {
     return {
       context: {
+        appliedRecords: [],
+        batchId: null,
         candidateWindows: [],
         confirmationStatus: "awaiting_window_selection",
         intent: "create_time_block",
+        extractedItems: extractPlanningItems(prompt, input.projects),
         lastUpdatedAt: new Date().toISOString(),
         maximumDurationMinutes: null,
         pendingProposal: null,
+        pendingProposals: [],
         pendingQuestion: null,
         pendingWorkException: null,
         purpose: "MSA work",
         requestedDurationMinutes: null,
+        requestedSessionCount: null,
         selectedDate: today,
         selectedWindowEnd: null,
         selectedWindowId: null,
         selectedWindowStart: null,
         state: "failed",
+        workflowId,
       },
       message:
         "I couldn’t find a recurring work shift for today to shorten. Check Work Schedule, then try this request again.",
@@ -2176,12 +2270,16 @@ function createEarlyDepartureSchedulingTurn({
   if (directBlocker) {
     return {
       context: {
+        appliedRecords: [],
+        batchId: null,
         candidateWindows: [],
         confirmationStatus: "awaiting_window_selection",
         intent: "create_time_block",
+        extractedItems: extractPlanningItems(prompt, input.projects),
         lastUpdatedAt: new Date().toISOString(),
         maximumDurationMinutes: null,
         pendingProposal: null,
+        pendingProposals: [],
         pendingQuestion: null,
         pendingWorkException: {
           date: temporaryException.date,
@@ -2197,11 +2295,13 @@ function createEarlyDepartureSchedulingTurn({
         },
         purpose: "MSA work",
         requestedDurationMinutes: null,
+        requestedSessionCount: null,
         selectedDate: today,
         selectedWindowEnd: null,
         selectedWindowId: null,
         selectedWindowStart: minutesToTimeInput(requestedStartMinutes),
         state: "failed",
+        workflowId,
       },
       message: `Leaving work early would free the afternoon, but ${formatCommitment(
         directBlocker,
@@ -2253,21 +2353,27 @@ function createEarlyDepartureSchedulingTurn({
     title: "Leave work early",
   };
   const context: AssistantSchedulingContext = {
+    appliedRecords: [],
+    batchId: null,
     candidateWindows: [candidateWindow],
     confirmationStatus: durationFits ? "ready_for_review" : "awaiting_duration",
     intent: "create_time_block",
+    extractedItems: extractPlanningItems(prompt, input.projects),
     lastUpdatedAt: new Date().toISOString(),
     maximumDurationMinutes: candidateWindow.durationMinutes,
     pendingProposal: proposal,
+    pendingProposals: [proposal],
     pendingQuestion: durationFits ? null : "How much time should I reserve?",
     pendingWorkException,
     purpose: planningDetails.title,
     requestedDurationMinutes: durationFits ? requestedDurationMinutes : null,
+    requestedSessionCount: null,
     selectedDate: today,
     selectedWindowEnd: proposal.selectedWindowEnd,
     selectedWindowId: candidateWindow.id,
     selectedWindowStart: proposal.startTime,
     state: durationFits ? "awaiting_apply" : "awaiting_duration",
+    workflowId,
   };
 
   return {
@@ -2287,6 +2393,473 @@ function createEarlyDepartureSchedulingTurn({
   };
 }
 
+function selectDistributedWindows(
+  windows: AssistantOpenWindow[],
+  count: number,
+  durationMinutes: number,
+) {
+  const eligible = windows.filter((window) => window.durationMinutes >= durationMinutes);
+  const firstByDate = [...new Map(eligible.map((window) => [window.date, window])).values()];
+
+  if (firstByDate.length >= count) {
+    if (count === 1) return [firstByDate[0]];
+    const selected: AssistantOpenWindow[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const position = Math.round((index * (firstByDate.length - 1)) / (count - 1));
+      const window = firstByDate[position];
+      if (window && !selected.some((candidate) => candidate.id === window.id)) {
+        selected.push(window);
+      }
+    }
+    for (const window of firstByDate) {
+      if (selected.length >= count) break;
+      if (!selected.some((candidate) => candidate.id === window.id)) selected.push(window);
+    }
+    return selected.slice(0, count);
+  }
+
+  return eligible.slice(0, count);
+}
+
+function parseAllDurations(prompt: string) {
+  const matches = [
+    ...prompt.matchAll(
+      /\b(?:half an hour|half hour|\d+\s*(?:minutes?|mins?)|(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*(?:hours?|hrs?))\b/gi,
+    ),
+  ];
+  return matches
+    .map((match) => parseExplicitDurationMinutes(match[0]))
+    .filter((duration): duration is number => Boolean(duration));
+}
+
+function createMultiItemSchedulingTurn({
+  activeContext,
+  input,
+  prompt,
+}: {
+  activeContext?: AssistantSchedulingContext | null;
+  input: AssistantScheduleAnalysisInput;
+  prompt: string;
+}): AssistantSchedulingConversationTurn | null {
+  const isContinuation =
+    activeContext?.state === "awaiting_session_details" &&
+    activeContext.intent === "multi_action_request";
+  const initialItems = isContinuation
+    ? activeContext.extractedItems
+    : extractPlanningItems(prompt, input.projects);
+
+  if (!isContinuation && initialItems.length < 2) return null;
+  if (!isContinuation && !isExplicitMutationRequest(prompt)) return null;
+
+  const missingDurationItems = initialItems.filter((item) =>
+    item.missingFields.includes("duration"),
+  );
+  const suppliedDurations = parseAllDurations(prompt);
+  const canAssignDurations =
+    isContinuation &&
+    suppliedDurations.length > 0 &&
+    (suppliedDurations.length === missingDurationItems.length ||
+      missingDurationItems.length === 1);
+  let durationIndex = 0;
+  const items = initialItems.map((item): ExtractedPlanningItem => {
+    if (!item.missingFields.includes("duration") || !canAssignDurations) return item;
+    const durationMinutes =
+      suppliedDurations.length === 1
+        ? suppliedDurations[0]
+        : suppliedDurations[durationIndex++];
+    return {
+      ...item,
+      durationMinutes,
+      durationSource: "user_explicit",
+      missingFields: item.missingFields.filter((field) => field !== "duration"),
+    };
+  });
+  const missingFields = [...new Set(items.flatMap((item) => item.missingFields))];
+  const workflowId = activeContext?.workflowId ?? `workflow-${Date.now()}-multi`;
+  const batchId = activeContext?.batchId ?? `batch-${Date.now()}`;
+
+  if (missingFields.length > 0) {
+    const question =
+      createConsolidatedClarification(items) ??
+      "Tell me the missing durations in the same order as the items, and I’ll build the plan.";
+    return {
+      context: {
+        appliedRecords: activeContext?.appliedRecords ?? [],
+        batchId,
+        candidateWindows: [],
+        confirmationStatus: "awaiting_session_details",
+        extractedItems: items,
+        intent: "multi_action_request",
+        lastUpdatedAt: new Date().toISOString(),
+        maximumDurationMinutes: null,
+        pendingProposal: null,
+        pendingProposals: [],
+        pendingQuestion: question,
+        pendingWorkException: null,
+        purpose: "Multi-item weekly plan",
+        requestedDurationMinutes: null,
+        requestedSessionCount: null,
+        selectedDate: null,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "awaiting_session_details",
+        workflowId,
+      },
+      message: question,
+      proposal: null,
+    };
+  }
+
+  const expandedItems = items.flatMap((item) =>
+    Array.from({ length: item.frequency?.count ?? 1 }, (_, index) => ({
+      item,
+      sessionIndex: index,
+    })),
+  );
+  const request = createScheduleRequest(
+    "Find open time this week for 30 minutes",
+    input.weekStartDate,
+    [],
+    input.timezone,
+  );
+  const commitments = buildNormalizedScheduleTimeline(input);
+  const windows = validateOpenWindows(
+    calculateOpenWindows({
+      commitments,
+      minimumMinutes: 30,
+      scopes: request.scopes,
+      startMinutes: request.startMinutes,
+    }),
+    request,
+    commitments,
+  );
+  const cursorByWindow = new Map(windows.map((window) => [window.id, window.startMinutes]));
+  const usedDates = new Set<string>();
+  const proposals: AssistantPendingTimeBlockProposal[] = [];
+
+  for (const { item, sessionIndex } of expandedItems) {
+    const durationMinutes = item.durationMinutes ?? 0;
+    const deadlineDay = item.deadline
+      ? weekDays.findIndex((day) =>
+          item.deadline?.toLowerCase().includes(day.toLowerCase()),
+        )
+      : -1;
+    const eligible = windows.filter((window) => {
+      const cursor = cursorByWindow.get(window.id) ?? window.startMinutes;
+      return (
+        cursor + durationMinutes <= window.endMinutes &&
+        (deadlineDay < 0 || weekDays.indexOf(window.day) <= deadlineDay)
+      );
+    });
+    const selected =
+      eligible.find((window) => !usedDates.has(window.date)) ?? eligible[0] ?? null;
+
+    if (!selected) {
+      return {
+        context: {
+          appliedRecords: [],
+          batchId,
+          candidateWindows: windows,
+          confirmationStatus: "awaiting_session_details",
+          extractedItems: items,
+          intent: "multi_action_request",
+          lastUpdatedAt: new Date().toISOString(),
+          maximumDurationMinutes: null,
+          pendingProposal: null,
+          pendingProposals: [],
+          pendingQuestion: "Shorten one item, reduce its frequency, or choose a different week.",
+          pendingWorkException: null,
+          purpose: "Multi-item weekly plan",
+          requestedDurationMinutes: null,
+          requestedSessionCount: null,
+          selectedDate: null,
+          selectedWindowEnd: null,
+          selectedWindowId: null,
+          selectedWindowStart: null,
+          state: "needs_clarification",
+          workflowId,
+        },
+        message:
+          "I could not fit every item into a validated opening before its deadline. Shorten one item, reduce its frequency, or choose a different week. Nothing has been added.",
+        proposal: null,
+      };
+    }
+
+    const startMinutes = cursorByWindow.get(selected.id) ?? selected.startMinutes;
+    cursorByWindow.set(selected.id, startMinutes + durationMinutes);
+    usedDates.add(selected.date);
+    proposals.push({
+      actionType: "create_time_block",
+      batchId,
+      date: selected.date,
+      details: item.purpose ?? item.details ?? `Work on ${item.title}.`,
+      durationMinutes,
+      id: `${workflowId}-proposal-${proposals.length + 1}`,
+      selectedWindowEnd: minutesToTimeInput(selected.endMinutes),
+      sourceConversationId: null,
+      startTime: minutesToTimeInput(startMinutes),
+      status: "ready_for_review",
+      title:
+        (item.frequency?.count ?? 1) > 1
+          ? `${item.title} ${sessionIndex + 1}`
+          : item.title,
+    });
+  }
+
+  return {
+    context: {
+      appliedRecords: [],
+      batchId,
+      candidateWindows: windows,
+      confirmationStatus: "ready_for_review",
+      extractedItems: items,
+      intent: "multi_action_request",
+      lastUpdatedAt: new Date().toISOString(),
+      maximumDurationMinutes: null,
+      pendingProposal: proposals[0] ?? null,
+      pendingProposals: proposals,
+      pendingQuestion: null,
+      pendingWorkException: null,
+      purpose: "Multi-item weekly plan",
+      requestedDurationMinutes: null,
+      requestedSessionCount: proposals.length,
+      selectedDate: proposals[0]?.date ?? null,
+      selectedWindowEnd: proposals[0]?.selectedWindowEnd ?? null,
+      selectedWindowId: null,
+      selectedWindowStart: proposals[0]?.startTime ?? null,
+      state: "awaiting_apply",
+      workflowId,
+    },
+    message: `I drafted ${proposals.length} validated time blocks across the week for review. I placed deadline-driven work first and spread repeated sessions across days where possible. Nothing has been added yet.`,
+    proposal: proposals[0] ?? null,
+  };
+}
+
+function createRecurringSchedulingTurn({
+  activeContext,
+  input,
+  prompt,
+}: {
+  activeContext?: AssistantSchedulingContext | null;
+  input: AssistantScheduleAnalysisInput;
+  prompt: string;
+}): AssistantSchedulingConversationTurn | null {
+  const isContinuation =
+    activeContext?.state === "awaiting_session_details" &&
+    activeContext.intent === "create_multiple_time_blocks";
+  const extractedItems = isContinuation
+    ? activeContext.extractedItems
+    : extractPlanningItems(prompt, input.projects);
+  const isRecurring =
+    isContinuation ||
+    isRecurringPlanningRequest(prompt) ||
+    extractedItems.some((item) => item.frequency?.recurring);
+
+  if (!isRecurring) return null;
+  if (!isContinuation && extractedItems.length !== 1) return null;
+  if (!isContinuation && !isExplicitMutationRequest(prompt) && !/\bfind\s+me\s+(?:some\s+)?time\b/i.test(prompt)) {
+    return null;
+  }
+
+  const item = extractedItems[0];
+  if (!item) return null;
+  const count =
+    parseRequestedSessionCount(prompt) ??
+    activeContext?.requestedSessionCount ??
+    item.frequency?.count ??
+    null;
+  const durationMinutes =
+    parseExplicitDurationMinutes(prompt) ??
+    activeContext?.requestedDurationMinutes ??
+    item.durationMinutes ??
+    null;
+  const purpose = item.title;
+  const workflowId = activeContext?.workflowId ?? `workflow-${Date.now()}-recurring`;
+  const batchId = activeContext?.batchId ?? `batch-${Date.now()}`;
+  const missingFields = [
+    ...(!count ? ["frequency"] : []),
+    ...(!durationMinutes ? ["duration"] : []),
+  ];
+
+  if (missingFields.length > 0) {
+    const pendingItem: ExtractedPlanningItem = {
+      ...item,
+      missingFields,
+      frequency: { count: count ?? undefined, period: "week", recurring: true },
+      ...(durationMinutes
+        ? { durationMinutes, durationSource: "user_explicit" as const }
+        : { durationSource: "unknown" as const }),
+    };
+    const question =
+      createConsolidatedClarification([pendingItem]) ??
+      "How many sessions would you like this week, and how long should each one be?";
+
+    return {
+      context: {
+        appliedRecords: activeContext?.appliedRecords ?? [],
+        batchId,
+        candidateWindows: activeContext?.candidateWindows ?? [],
+        confirmationStatus: "awaiting_session_details",
+        extractedItems: [pendingItem],
+        intent: "create_multiple_time_blocks",
+        lastUpdatedAt: new Date().toISOString(),
+        maximumDurationMinutes: null,
+        pendingProposal: null,
+        pendingProposals: [],
+        pendingQuestion: question,
+        pendingWorkException: null,
+        purpose,
+        requestedDurationMinutes: durationMinutes,
+        requestedSessionCount: count,
+        selectedDate: null,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "awaiting_session_details",
+        workflowId,
+      },
+      message: question,
+      proposal: null,
+    };
+  }
+
+  if (!count || !durationMinutes) {
+    return null;
+  }
+
+  const request = createScheduleRequest(
+    `Find open time this week for ${durationMinutes} minutes`,
+    input.weekStartDate,
+    [],
+    input.timezone,
+  );
+  const commitments = buildNormalizedScheduleTimeline(input);
+  const windows = validateOpenWindows(
+    calculateOpenWindows({
+      commitments,
+      minimumMinutes: durationMinutes,
+      scopes: request.scopes,
+      startMinutes: request.startMinutes,
+    }),
+    request,
+    commitments,
+  );
+  const selected = selectDistributedWindows(windows, count, durationMinutes);
+
+  if (selected.length < count) {
+    return {
+      context: {
+        appliedRecords: activeContext?.appliedRecords ?? [],
+        batchId,
+        candidateWindows: windows,
+        confirmationStatus: "awaiting_session_details",
+        extractedItems: [{ ...item, missingFields: [] }],
+        intent: "create_multiple_time_blocks",
+        lastUpdatedAt: new Date().toISOString(),
+        maximumDurationMinutes: null,
+        pendingProposal: null,
+        pendingProposals: [],
+        pendingQuestion: "Choose fewer sessions, a shorter duration, or a different week.",
+        pendingWorkException: null,
+        purpose,
+        requestedDurationMinutes: durationMinutes,
+        requestedSessionCount: count,
+        selectedDate: null,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "needs_clarification",
+        workflowId,
+      },
+      message: `I found only ${selected.length} non-overlapping opening${selected.length === 1 ? "" : "s"} that can fit ${durationMinutes} minutes. Choose fewer sessions, a shorter duration, or a different week. Nothing has been added.`,
+      proposal: null,
+    };
+  }
+
+  const proposals = selected.map((window, index): AssistantPendingTimeBlockProposal => ({
+    actionType: "create_time_block",
+    batchId,
+    date: window.date,
+    details: item.purpose ?? item.details ?? `Work on ${item.title}.`,
+    durationMinutes,
+    id: `${workflowId}-proposal-${index + 1}`,
+    selectedWindowEnd: minutesToTimeInput(window.endMinutes),
+    sourceConversationId: null,
+    startTime: minutesToTimeInput(window.startMinutes),
+    status: "ready_for_review",
+    title: item.title,
+  }));
+  const scheduleLines = proposals.map((proposal, index) => {
+    const window = selected[index];
+    return `${index + 1}. ${window.day}, ${window.startLabel}-${formatMinutes(
+      window.startMinutes + durationMinutes,
+    )}`;
+  });
+  const message = `I drafted ${count} ${item.title} session${count === 1 ? "" : "s"} for review:\n\n${scheduleLines.join(
+    "\n",
+  )}\n\nI spread them across different days where possible. Nothing has been added yet.`;
+
+  return {
+    context: {
+      appliedRecords: activeContext?.appliedRecords ?? [],
+      batchId,
+      candidateWindows: windows,
+      confirmationStatus: "ready_for_review",
+      extractedItems: [
+        {
+          ...item,
+          durationMinutes,
+          durationSource: "user_explicit",
+          frequency: { count, period: "week", recurring: true },
+          missingFields: [],
+        },
+      ],
+      intent: "create_multiple_time_blocks",
+      lastUpdatedAt: new Date().toISOString(),
+      maximumDurationMinutes: durationMinutes,
+      pendingProposal: proposals[0] ?? null,
+      pendingProposals: proposals,
+      pendingQuestion: null,
+      pendingWorkException: null,
+      purpose,
+      requestedDurationMinutes: durationMinutes,
+      requestedSessionCount: count,
+      selectedDate: proposals[0]?.date ?? null,
+      selectedWindowEnd: proposals[0]?.selectedWindowEnd ?? null,
+      selectedWindowId: selected[0]?.id ?? null,
+      selectedWindowStart: proposals[0]?.startTime ?? null,
+      state: "awaiting_apply",
+      workflowId,
+    },
+    message,
+    proposal: proposals[0] ?? null,
+  };
+}
+
+function createSchedulingStatusTurn(
+  context: AssistantSchedulingContext,
+): AssistantSchedulingConversationTurn {
+  const total = context.pendingProposals.length || (context.pendingProposal ? 1 : 0);
+  const applied = context.appliedRecords.length;
+  let message: string;
+
+  if (applied > 0 && (total === 0 || applied >= total)) {
+    const records = context.appliedRecords
+      .map((record) => `- ${record.date}, ${formatMinutes(parseStartTimeToMinutes(record.startTime) ?? 0)}-${formatMinutes(parseStartTimeToMinutes(record.endTime) ?? 0)} · ${record.title}`)
+      .join("\n");
+    message = `Yes. ${applied} session${applied === 1 ? " was" : "s were"} added to your Weekly Plan:\n\n${records}`;
+  } else if (applied > 0) {
+    message = `Partly. ${applied} of ${total} proposed sessions were added; the remaining ${total - applied} still need approval.`;
+  } else if (context.state === "awaiting_apply" && total > 0) {
+    message = `Not yet. I drafted ${total} session${total === 1 ? "" : "s"}, but ${total === 1 ? "it is" : "they are"} still waiting for your approval.`;
+  } else {
+    message = `No. ${context.purpose} has not been added yet.${context.pendingQuestion ? ` ${context.pendingQuestion}` : ""}`;
+  }
+
+  return { context, message, proposal: context.pendingProposal };
+}
+
 export function advanceAssistantSchedulingConversation({
   activeContext,
   input,
@@ -2301,6 +2874,89 @@ export function advanceAssistantSchedulingConversation({
   recentMessages?: readonly AssistantScheduleMessage[];
 }): AssistantSchedulingConversationTurn | null {
   const now = new Date().toISOString();
+  const workflowId = activeContext?.workflowId ?? `workflow-${Date.now()}`;
+
+  if (activeContext && isAssistantStatusQuestion(prompt)) {
+    return createSchedulingStatusTurn(activeContext);
+  }
+
+  if (
+    activeContext?.state === "awaiting_apply" &&
+    /\b(?:recalculate|different times?|other times?|try again)\b/i.test(prompt)
+  ) {
+    const priorProposalBlocks: WeeklyPlanBlock[] = activeContext.pendingProposals.flatMap(
+      (proposal, index) => {
+        const day = weekDays.find((candidate) =>
+          activeContext.candidateWindows.some(
+            (window) => window.date === proposal.date && window.day === candidate,
+          ),
+        );
+        return day && proposal.durationMinutes
+          ? [
+              {
+                day,
+                estimatedHours: proposal.durationMinutes / 60,
+                id: `recalculation-exclusion-${index}`,
+                plannedTask: proposal.details,
+                projectName: proposal.title,
+                startTime: proposal.startTime,
+              },
+            ]
+          : [];
+      },
+    );
+    const recalculationInput = {
+      ...input,
+      weeklyPlanBlocks: [...input.weeklyPlanBlocks, ...priorProposalBlocks],
+    };
+    const resetContext: AssistantSchedulingContext = {
+      ...activeContext,
+      candidateWindows: [],
+      confirmationStatus: "awaiting_session_details",
+      pendingProposal: null,
+      pendingProposals: [],
+      state: "awaiting_session_details",
+    };
+    const recalculated =
+      activeContext.intent === "multi_action_request"
+        ? createMultiItemSchedulingTurn({
+            activeContext: resetContext,
+            input: recalculationInput,
+            prompt,
+          })
+        : createRecurringSchedulingTurn({
+            activeContext: resetContext,
+            input: recalculationInput,
+            prompt,
+          });
+
+    if (recalculated) {
+      return {
+        ...recalculated,
+        message: `I recalculated the plan using different validated openings. ${recalculated.message}`,
+      };
+    }
+  }
+
+  const multiItemTurn = createMultiItemSchedulingTurn({
+    activeContext,
+    input,
+    prompt,
+  });
+
+  if (multiItemTurn) {
+    return multiItemTurn;
+  }
+
+  const recurringTurn = createRecurringSchedulingTurn({
+    activeContext,
+    input,
+    prompt,
+  });
+
+  if (recurringTurn) {
+    return recurringTurn;
+  }
 
   if (!activeContext) {
     const earlyDepartureTurn = createEarlyDepartureSchedulingTurn({
@@ -2347,22 +3003,28 @@ export function advanceAssistantSchedulingConversation({
 
     if (windows.length === 0) {
       const failedContext: AssistantSchedulingContext = {
+        appliedRecords: [],
+        batchId: null,
         candidateWindows: [],
         confirmationStatus: "awaiting_window_selection",
         intent: isPlacementRequest ? "create_time_block" : "find_open_time",
+        extractedItems: extractPlanningItems(prompt, input.projects),
         lastUpdatedAt: now,
         maximumDurationMinutes: null,
         originalDateBoundary: request.query.timeBoundary,
         pendingProposal: null,
+        pendingProposals: [],
         pendingWorkException: null,
         pendingQuestion: null,
         purpose,
         requestedDurationMinutes: request.durationMinutes,
+        requestedSessionCount: null,
         selectedDate: null,
         selectedWindowEnd: null,
         selectedWindowId: null,
         selectedWindowStart: null,
         state: "failed",
+        workflowId,
       };
 
       return {
@@ -2378,22 +3040,28 @@ export function advanceAssistantSchedulingConversation({
 
     return {
       context: {
+        appliedRecords: [],
+        batchId: null,
         candidateWindows: windows,
         confirmationStatus: "awaiting_window_selection",
         intent: isPlacementRequest ? "create_time_block" : "find_open_time",
+        extractedItems: extractPlanningItems(prompt, input.projects),
         lastUpdatedAt: now,
         maximumDurationMinutes: null,
         originalDateBoundary: request.query.timeBoundary,
         pendingProposal: null,
+        pendingProposals: [],
         pendingWorkException: null,
         pendingQuestion,
         purpose,
         requestedDurationMinutes: request.durationMinutes,
+        requestedSessionCount: null,
         selectedDate: null,
         selectedWindowId: null,
         selectedWindowEnd: null,
         selectedWindowStart: null,
         state: "awaiting_window_selection",
+        workflowId,
       },
       message: `${message}\n\n${pendingQuestion}`,
       proposal: null,
@@ -2426,6 +3094,7 @@ export function advanceAssistantSchedulingConversation({
         lastUpdatedAt: now,
         maximumDurationMinutes: null,
         pendingProposal: null,
+        pendingProposals: [],
         pendingWorkException: null,
         pendingQuestion,
         requestedDurationMinutes: null,
@@ -2529,6 +3198,7 @@ export function advanceAssistantSchedulingConversation({
       lastUpdatedAt: now,
       maximumDurationMinutes,
       pendingProposal: proposal,
+      pendingProposals: [proposal],
       pendingQuestion:
         requestedDuration && requestedDuration <= maximumDurationMinutes
           ? null
@@ -2635,6 +3305,7 @@ export function advanceAssistantSchedulingConversation({
         lastUpdatedAt: now,
         maximumDurationMinutes,
         pendingProposal: proposal,
+        pendingProposals: [proposal],
         pendingQuestion: null,
         requestedDurationMinutes: requestedDuration,
         state: "awaiting_apply",

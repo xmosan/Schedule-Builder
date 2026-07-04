@@ -11,6 +11,7 @@
     "eval:assistant-models": "tsx scripts/assistant-model-eval.ts",
     "start": "next start",
     "test:assistant-workflow": "tsx scripts/assistant-workflow-tests.ts",
+    "test:assistant-intelligence": "tsx scripts/assistant-intelligence-tests.ts",
     "lint": "next lint"
   },
   "dependencies": {

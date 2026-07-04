@@ -11,7 +11,10 @@ import {
   writeLocalAssistantConversation,
   type AssistantConversationSnapshot,
 } from "@/lib/assistant-conversation";
-import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
+import type {
+  AssistantAppliedScheduleRecord,
+  AssistantSchedulingContext,
+} from "@/lib/assistant-schedule-analysis";
 import { TargetIcon } from "@/components/projects/icons";
 import { AssistantClarificationPanel } from "@/components/assistant/assistant-clarification-panel";
 import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
@@ -141,10 +144,18 @@ function getSchedulingQuickReplies(
     ];
   }
 
+  if (context.state === "awaiting_session_details") {
+    return [
+      { id: "sessions-2-30", label: "2 × 30 min", prompt: "Two sessions, 30 minutes each" },
+      { id: "sessions-3-45", label: "3 × 45 min", prompt: "Three sessions, 45 minutes each" },
+      { id: "sessions-4-60", label: "4 × 1 hour", prompt: "Four sessions, one hour each" },
+    ];
+  }
+
   return [];
 }
 const confirmationPromptPattern =
-  /^(yes|yeah|yep|confirm|confirmed|apply|apply it|do it|save it|update it|make the change|alright|all right|ok|okay)(?:[\s,!.].*)?$/i;
+  /^(yes|yeah|yep|sure|please|yes please|confirm|confirmed|apply|apply it|do it|save it|update it|make the change|alright|all right|ok|okay)(?:[\s,!.].*)?$/i;
 const legacyWorkspaceWarningSuffixes = [
   "Temporary schedule changes could not be loaded, so this plan may be incomplete.",
   "Some schedule sources did not load. Suggestions may be incomplete.",
@@ -273,6 +284,63 @@ function isPendingActionState(actionState?: ActionState) {
 
 function isConfirmationPrompt(prompt: string) {
   return confirmationPromptPattern.test(prompt.trim());
+}
+
+function addMinutesToTime(startTime: string, durationHours: number) {
+  const [hours, minutes] = startTime.split(":").map(Number);
+  const total = hours * 60 + minutes + Math.round(durationHours * 60);
+  return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(
+    total % 60,
+  ).padStart(2, "0")}`;
+}
+
+function updateSchedulingContextAfterApply(
+  context: AssistantSchedulingContext | null,
+  results: AssistantApplyResponse["results"],
+) {
+  if (!context) return null;
+
+  const newRecords: AssistantAppliedScheduleRecord[] = results.flatMap((result) => {
+    if (
+      result.status !== "applied" ||
+      !result.createdBlock ||
+      !result.createdDate ||
+      !result.createdBlock.startTime
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        date: result.createdDate,
+        endTime: addMinutesToTime(
+          result.createdBlock.startTime,
+          result.createdBlock.estimatedHours,
+        ),
+        id: result.savedRecordId ?? result.createdBlock.id,
+        proposalId: result.suggestionId,
+        startTime: result.createdBlock.startTime,
+        title: result.createdBlock.projectName,
+      },
+    ];
+  });
+  const appliedRecords = [
+    ...context.appliedRecords,
+    ...newRecords.filter(
+      (record) => !context.appliedRecords.some((existing) => existing.id === record.id),
+    ),
+  ];
+  const proposalCount = context.pendingProposals.length || (context.pendingProposal ? 1 : 0);
+
+  return {
+    ...context,
+    appliedRecords,
+    lastUpdatedAt: new Date().toISOString(),
+    state:
+      proposalCount > 0 && appliedRecords.length >= proposalCount
+        ? ("applied" as const)
+        : context.state,
+  };
 }
 
 function getPendingReviewCount(
@@ -1376,7 +1444,8 @@ export function AssistantPage() {
     activeSchedulingContext,
   );
   const clarificationKind =
-    activeSchedulingContext?.state === "awaiting_duration"
+    activeSchedulingContext?.state === "awaiting_duration" ||
+    activeSchedulingContext?.state === "awaiting_session_details"
       ? "duration"
       : "opening";
   const latestAssistantMessageId = messages.reduce<string | null>(
@@ -2045,7 +2114,9 @@ export function AssistantPage() {
 
       if (result?.status === "applied") {
         addAssistantNotice(result.message || "Suggestion applied.");
-        setActiveSchedulingContext(null);
+        setActiveSchedulingContext((current) =>
+          updateSchedulingContextAfterApply(current, response.results),
+        );
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
       }
@@ -2100,6 +2171,7 @@ export function AssistantPage() {
     const schedulingExpectsInput =
       activeSchedulingContext?.state === "awaiting_window_selection" ||
       activeSchedulingContext?.state === "awaiting_duration" ||
+      activeSchedulingContext?.state === "awaiting_session_details" ||
       activeSchedulingContext?.state === "needs_clarification";
 
     if (isConfirmationPrompt(trimmedPrompt) && !schedulingExpectsInput) {
@@ -2296,7 +2368,9 @@ export function AssistantPage() {
 
       if (result?.status === "applied") {
         addAssistantNotice(result.message || "Suggestion applied.");
-        setActiveSchedulingContext(null);
+        setActiveSchedulingContext((current) =>
+          updateSchedulingContextAfterApply(current, response.results),
+        );
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
         return;
@@ -2350,10 +2424,10 @@ export function AssistantPage() {
       ).length;
 
       if (appliedCount > 0) {
-        addAssistantNotice(
-          `Applied ${appliedCount} approved ${appliedCount === 1 ? "change" : "changes"}.`,
+        addAssistantNotice(response.message);
+        setActiveSchedulingContext((current) =>
+          updateSchedulingContextAfterApply(current, response.results),
         );
-        setActiveSchedulingContext(null);
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
       }

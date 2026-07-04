@@ -15,6 +15,10 @@ const cases = [
   "Lets do wed",
   "sure",
   "one hour",
+  "I need to prepare for weekly halaqahs. Find me time throughout the week to read The Sealed Nectar.",
+  "Three sessions, 45 minutes each.",
+  "Is it on the schedule?",
+  "I have an assignment due Thursday, a work report due Friday, MSA preparation, groceries, and two workouts. Plan them around my week.",
 ];
 
 if (!apiKey || !evaluationModel) {

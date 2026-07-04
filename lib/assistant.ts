@@ -1,4 +1,8 @@
 import type { PlannerType } from "@/lib/onboarding";
+import type {
+  AssistantCompletionStatus,
+  AssistantTurnResult,
+} from "@/lib/assistant-intelligence";
 import {
   createDeterministicScheduleAnswer,
   type AssistantScheduleAnalysisInput,
@@ -107,6 +111,9 @@ export type AssistantContextSourceStatus = {
 
 export type AssistantContextStatus = {
   externalCalendars: AssistantContextSourceStatus;
+  googleCalendar: AssistantContextSourceStatus;
+  importedCalendars: AssistantContextSourceStatus;
+  projects: AssistantContextSourceStatus;
   refreshedAt: string;
   scheduleExceptions: AssistantContextSourceStatus;
   weeklyPlan: AssistantContextSourceStatus;
@@ -180,6 +187,8 @@ export type AssistantSuggestion = {
   relatedWorkShiftId?: string;
   startTime?: string;
   weeklyHours?: number;
+  batchId?: string;
+  workflowId?: string;
 };
 
 export type AssistantPlanReviewResponse = {
@@ -192,6 +201,7 @@ export type AssistantPlanReviewResponse = {
   source: AssistantSource;
   suggestions: AssistantSuggestion[];
   schedulingContext?: AssistantSchedulingContext | null;
+  turnResult?: AssistantTurnResult;
 };
 
 export type AssistantApplyResultStatus = "applied" | "error" | "skipped";
@@ -206,9 +216,12 @@ export type AssistantApplyResult = {
   type: AssistantSuggestionType;
   status: AssistantApplyResultStatus;
   message: string;
+  savedRecordId?: string;
+  workflowId?: string;
 };
 
 export type AssistantApplyResponse = {
+  completionStatus: AssistantCompletionStatus;
   context: AssistantContextSummary;
   message: string;
   results: AssistantApplyResult[];
@@ -738,6 +751,14 @@ function normalizeSuggestion(
       Number.isFinite(candidate.weeklyHours) &&
       candidate.weeklyHours >= 0
         ? Math.min(candidate.weeklyHours, 60)
+        : undefined,
+    batchId:
+      typeof candidate.batchId === "string"
+        ? candidate.batchId.trim().slice(0, 100)
+        : undefined,
+    workflowId:
+      typeof candidate.workflowId === "string"
+        ? candidate.workflowId.trim().slice(0, 100)
         : undefined,
   };
 }

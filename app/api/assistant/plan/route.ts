@@ -28,6 +28,19 @@ import {
   hasDeterministicScheduleQuestionIntent,
   normalizeAssistantSchedulingContext,
 } from "@/lib/assistant-schedule-analysis";
+import { parseAssistantConversationSnapshot } from "@/lib/assistant-conversation";
+import {
+  assistantIntents,
+  assistantTurnOutcomes,
+  classifyAssistantIntent,
+  createAssistantTurnResult,
+  createConsolidatedClarification,
+  extractPlanningItems,
+  isAssistantStatusQuestion,
+  isExplicitMutationRequest,
+  validateAssistantCompletionLanguage,
+  type AssistantTurnOutcome,
+} from "@/lib/assistant-intelligence";
 import {
   fetchPlannerProfileForUser,
   fetchImportedCalendarEventsForUser,
@@ -63,6 +76,123 @@ type AssistantStreamEvent =
   | { type: "message_delta"; delta: string }
   | { type: "final"; response: AssistantPlanReviewResponse }
   | { type: "error"; error: string };
+
+const actionableSuggestionTypes = new Set<AssistantSuggestionType>([
+  "new_project",
+  "update_project",
+  "suggested_scheduled_item",
+  "suggested_weekly_block",
+  "suggested_next_action",
+  "schedule_exception",
+]);
+
+function formatTimeInputLabel(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  const period = hours >= 12 ? "PM" : "AM";
+  const displayHours = hours % 12 || 12;
+  return `${displayHours}:${String(minutes).padStart(2, "0")} ${period}`;
+}
+
+function finalizeAssistantResponse({
+  contextStatus,
+  planningContext,
+  prompt,
+  response,
+}: {
+  contextStatus?: AssistantContextStatus;
+  planningContext: AssistantPlanningContext;
+  prompt: string;
+  response: AssistantPlanReviewResponse;
+}): AssistantPlanReviewResponse {
+  const schedulingContext = response.schedulingContext;
+  const extractedItems =
+    schedulingContext?.extractedItems?.length
+      ? schedulingContext.extractedItems
+      : extractPlanningItems(prompt, planningContext.projects);
+  const missingFields = [
+    ...new Set(extractedItems.flatMap((item) => item.missingFields)),
+  ];
+  const suggestions =
+    isExplicitMutationRequest(prompt) &&
+    !schedulingContext &&
+    missingFields.length > 0
+      ? response.suggestions.filter(
+          (suggestion) => !actionableSuggestionTypes.has(suggestion.type),
+        )
+      : response.suggestions;
+  const actionable = suggestions.filter((suggestion) =>
+    actionableSuggestionTypes.has(suggestion.type),
+  );
+  const completionStatus =
+    schedulingContext?.state === "applied" && schedulingContext.appliedRecords.length > 0
+      ? ("records_applied" as const)
+      : actionable.length > 0 || schedulingContext?.state === "awaiting_apply"
+        ? ("proposal_created" as const)
+        : ("nothing_created" as const);
+  const intent = classifyAssistantIntent(prompt, extractedItems);
+  const workflowState = schedulingContext?.state ?? "idle";
+  let outcome: AssistantTurnOutcome = "direct_answer";
+
+  if (intent === "sync_question") outcome = "sync_guidance";
+  else if (intent === "status_question" && completionStatus === "nothing_created") {
+    outcome = "cannot_confirm";
+  } else if (completionStatus === "records_applied") outcome = "apply_succeeded";
+  else if (schedulingContext?.state === "awaiting_apply") outcome = "proposal_pending_review";
+  else if (actionable.length > 0) outcome = "proposal_ready";
+  else if (
+    schedulingContext?.state === "awaiting_duration" ||
+    schedulingContext?.state === "awaiting_session_details" ||
+    schedulingContext?.state === "needs_clarification"
+  ) {
+    outcome = "clarification_required";
+  } else if (schedulingContext?.state === "awaiting_window_selection") {
+    outcome = "candidate_selection_required";
+  } else if (/\b(?:review|analy[sz]e|overload|priority)\b/i.test(prompt)) {
+    outcome = "analysis";
+  }
+
+  let responseText = response.message;
+  if (
+    isExplicitMutationRequest(prompt) &&
+    completionStatus === "nothing_created" &&
+    !schedulingContext &&
+    missingFields.length > 0
+  ) {
+    responseText =
+      createConsolidatedClarification(extractedItems) ??
+      "I can draft that. How long should the block be?";
+    outcome = "clarification_required";
+  }
+
+  if (isAssistantStatusQuestion(prompt) && !schedulingContext) {
+    responseText =
+      "I can’t confirm that from an identified proposal or saved record. A chat reply or draft alone does not put anything on the schedule.";
+  }
+
+  const guarded = validateAssistantCompletionLanguage(responseText, completionStatus);
+  const turnResult = createAssistantTurnResult({
+    completionStatus,
+    contextStatus,
+    extractedItems,
+    intent,
+    missingFields,
+    outcome,
+    proposalIds: actionable.map((suggestion) => suggestion.id),
+    responseText: guarded.responseText,
+    selectedCandidateId: schedulingContext?.selectedWindowId,
+    uncertaintyNotes: response.dataWarning ? [response.dataWarning] : [],
+    workflowState,
+  });
+
+  return {
+    ...response,
+    actions: suggestions,
+    assistantMessage: guarded.responseText,
+    message: guarded.responseText,
+    suggestions,
+    turnResult,
+  };
+}
 
 const assistantResponseJsonSchema = {
   type: "object",
@@ -195,47 +325,91 @@ const assistantResponseJsonSchema = {
         responseText: { type: "string" },
         intent: {
           type: "string",
-          enum: [
-            "question",
-            "analysis",
-            "planning_change",
-            "sync",
-            "open_time",
-            "greeting",
-            "vague",
-          ],
+          enum: assistantIntents,
+        },
+        outcome: {
+          type: "string",
+          enum: assistantTurnOutcomes,
         },
         workflowTransition: {
           type: "string",
           enum: ["none", "ask_clarification", "propose_actions"],
         },
-        extracted: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            date: { type: "string" },
-            day: { type: "string" },
-            startTime: { type: "string" },
-            durationMinutes: { type: "number" },
+        workflowState: { type: "string" },
+        extractedItems: {
+          type: "array",
+          maxItems: 12,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              id: { type: "string" },
+              type: { type: "string" },
+              title: { type: "string" },
+              durationMinutes: { type: "number" },
+              frequencyCount: { type: "number" },
+              missingFields: { type: "array", items: { type: "string" } },
+              confidence: { type: "number", minimum: 0, maximum: 1 },
+            },
+            required: [
+              "id",
+              "type",
+              "title",
+              "durationMinutes",
+              "frequencyCount",
+              "missingFields",
+              "confidence",
+            ],
           },
-          required: ["title", "date", "day", "startTime", "durationMinutes"],
         },
         missingFields: {
           type: "array",
           items: {
             type: "string",
-            enum: ["title", "date", "day", "startTime", "duration"],
           },
         },
+        proposalIds: { type: "array", items: { type: "string" } },
+        completionStatus: {
+          type: "string",
+          enum: ["nothing_created", "proposal_created", "records_applied"],
+        },
+        selectedCandidateId: { type: "string" },
+        sourceCompleteness: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            projectsLoaded: { type: "boolean" },
+            weeklyPlanLoaded: { type: "boolean" },
+            workScheduleLoaded: { type: "boolean" },
+            scheduleExceptionsLoaded: { type: "boolean" },
+            googleCalendarLoaded: { type: "boolean" },
+            importedCalendarsLoaded: { type: "boolean" },
+          },
+          required: [
+            "projectsLoaded",
+            "weeklyPlanLoaded",
+            "workScheduleLoaded",
+            "scheduleExceptionsLoaded",
+            "googleCalendarLoaded",
+            "importedCalendarsLoaded",
+          ],
+        },
+        uncertaintyNotes: { type: "array", items: { type: "string" } },
         actionCardReady: { type: "boolean" },
       },
       required: [
         "responseText",
         "intent",
+        "outcome",
         "workflowTransition",
-        "extracted",
+        "workflowState",
+        "extractedItems",
         "missingFields",
+        "proposalIds",
+        "completionStatus",
+        "selectedCandidateId",
+        "sourceCompleteness",
+        "uncertaintyNotes",
         "actionCardReady",
       ],
     },
@@ -555,6 +729,32 @@ async function loadPlanningContext(
                 detail: "Not connected",
                 state: "not_connected",
               },
+    googleCalendar: googleSyncConnectionResult.error
+      ? { detail: "Couldn’t verify connection · Retry", state: "failed" }
+      : googleConnection?.status === "connected"
+        ? {
+            detail: "Connected",
+            lastUpdatedAt: googleConnection.last_synced_at,
+            state: "available",
+          }
+        : { detail: "Not connected", state: "not_connected" },
+    importedCalendars: importedEventsResult.error
+      ? { detail: "Couldn’t load · Retry", state: "failed" }
+      : relevantImportedEvents.length > 0
+        ? {
+            detail: `${relevantImportedEvents.length} event${relevantImportedEvents.length === 1 ? "" : "s"} loaded`,
+            lastUpdatedAt: latestImportedAt,
+            state: "available",
+          }
+        : { detail: "No imported events", state: "empty" },
+    projects: projectsResult.error
+      ? { detail: "Couldn’t load · Retry", state: "failed" }
+      : projectsResult.data.length > 0
+        ? {
+            detail: `${projectsResult.data.length} project${projectsResult.data.length === 1 ? "" : "s"} loaded`,
+            state: "available",
+          }
+        : { detail: "No projects", state: "empty" },
     refreshedAt,
     scheduleExceptions: scheduleExceptionsResult.error
       ? {
@@ -657,7 +857,8 @@ function createAiPrompt(
   return [
     "You are Schedule Builder's friendly planning assistant.",
     "Return JSON only matching the provided schema.",
-    "Classify the latest turn in turn.intent and report extracted scheduling fields, missingFields, and actionCardReady.",
+    "Classify the latest turn in the structured turn contract: intent, outcome, workflowState, extractedItems, missingFields, proposalIds, completionStatus, sourceCompleteness, uncertaintyNotes, and actionCardReady.",
+    "Use 0 for unknown numeric extraction fields and an empty string for an unknown selectedCandidateId. Application code will independently validate and override this model interpretation.",
     "Set actionCardReady true only for a clear planning_change request with every required field needed by the proposed action.",
     "Do not calculate availability, conflicts, or open windows. Use only the deterministic schedule data provided below.",
     "If a required field is missing, use workflowTransition ask_clarification, list the missing field, set actionCardReady false, and return zero suggestions.",
@@ -1199,7 +1400,7 @@ export async function POST(request: NextRequest) {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const recentMessages = normalizeRecentMessages(body.recentMessages);
   const timezone = normalizeTimezone(body.timezone);
-  const activeSchedulingContext = normalizeAssistantSchedulingContext(
+  let activeSchedulingContext = normalizeAssistantSchedulingContext(
     body.activeSchedulingContext,
   );
   const threadId =
@@ -1226,6 +1427,36 @@ export async function POST(request: NextRequest) {
     authResult.userId,
     timezone,
   );
+
+  if (!activeSchedulingContext && isAssistantStatusQuestion(prompt) && threadId) {
+    const threadResult = await authResult.supabase
+      .from("assistant_threads")
+      .select("snapshot")
+      .eq("id", threadId)
+      .eq("user_id", authResult.userId)
+      .maybeSingle();
+    const snapshot = parseAssistantConversationSnapshot(threadResult.data?.snapshot);
+    activeSchedulingContext = normalizeAssistantSchedulingContext(
+      snapshot?.activeSchedulingContext,
+    );
+  }
+
+  if (activeSchedulingContext?.appliedRecords.length) {
+    const savedBlockIds = new Set(context.weeklyPlanBlocks.map((block) => block.id));
+    const verifiedRecords = activeSchedulingContext.appliedRecords.filter((record) =>
+      savedBlockIds.has(record.id),
+    );
+    activeSchedulingContext = {
+      ...activeSchedulingContext,
+      appliedRecords: verifiedRecords,
+      state:
+        verifiedRecords.length > 0
+          ? activeSchedulingContext.state
+          : activeSchedulingContext.pendingProposals.length > 0
+            ? "awaiting_apply"
+            : "needs_clarification",
+    };
+  }
   const fallbackResponse = createFallbackAssistantResponse(
     context,
     prompt,
@@ -1258,55 +1489,77 @@ export async function POST(request: NextRequest) {
   });
 
   if (schedulingTurn) {
-    const proposal = schedulingTurn.proposal
-      ? { ...schedulingTurn.proposal, sourceConversationId: threadId }
-      : null;
-    const schedulingContext = proposal
-      ? { ...schedulingTurn.context, pendingProposal: proposal }
-      : schedulingTurn.context;
-    const selectedWindow = proposal
-      ? schedulingTurn.context.candidateWindows.find(
-          (window) =>
-            window.date === proposal.date &&
-            `${String(Math.floor(window.startMinutes / 60)).padStart(2, "0")}:${String(
-              window.startMinutes % 60,
-            ).padStart(2, "0")}` === proposal.startTime,
-        )
-      : null;
-    const timeBlockSuggestions =
-      proposal?.status === "ready_for_review" &&
-      proposal.durationMinutes &&
-      selectedWindow
-        ? [
-            {
-              id: `time-block-${proposal.date}-${proposal.startTime}`,
-              type: "suggested_weekly_block" as const,
-              title: proposal.title,
-              description: `${new Intl.DateTimeFormat("en-US", {
-                month: "long",
-                day: "numeric",
-                weekday: "long",
-                year: "numeric",
-              }).format(new Date(`${proposal.date}T00:00:00`))} from ${
-                selectedWindow.startLabel
-              } for ${proposal.durationMinutes / 60} hour${
-                proposal.durationMinutes === 60 ? "" : "s"
-              }.`,
-              confidence: 0.98,
-              summary: proposal.details,
-              rationale:
-                "This uses the exact opening and duration you confirmed in this conversation.",
-              severity: "important" as const,
-              projectName: proposal.title,
-              plannedTask: proposal.details,
-              day: selectedWindow.day,
-              itemDate: proposal.date,
-              startTime: proposal.startTime,
-              estimatedHours: proposal.durationMinutes / 60,
-              conflictWarnings: [] as string[],
-            },
-          ]
-        : [];
+    const proposals = schedulingTurn.context.pendingProposals.map((proposal) => ({
+      ...proposal,
+      sourceConversationId: threadId,
+    }));
+    const proposal =
+      proposals[0] ??
+      (schedulingTurn.proposal
+        ? { ...schedulingTurn.proposal, sourceConversationId: threadId }
+        : null);
+    const schedulingContext = {
+      ...schedulingTurn.context,
+      pendingProposal: proposal,
+      pendingProposals: proposals.length > 0 ? proposals : proposal ? [proposal] : [],
+    };
+    const timeBlockSuggestions = schedulingContext.pendingProposals.flatMap(
+      (pendingProposal) => {
+        const selectedWindow = schedulingContext.candidateWindows.find(
+          (window) => {
+            const [hours, minutes] = pendingProposal.startTime.split(":").map(Number);
+            const proposalStart = hours * 60 + minutes;
+            return (
+              window.date === pendingProposal.date &&
+              proposalStart >= window.startMinutes &&
+              proposalStart + (pendingProposal.durationMinutes ?? 0) <= window.endMinutes
+            );
+          },
+        );
+
+        if (
+          pendingProposal.status !== "ready_for_review" ||
+          !pendingProposal.durationMinutes ||
+          !selectedWindow
+        ) {
+          return [];
+        }
+
+        return [
+          {
+            id:
+              pendingProposal.id ??
+              `time-block-${pendingProposal.date}-${pendingProposal.startTime}`,
+            type: "suggested_weekly_block" as const,
+            title: pendingProposal.title,
+            description: `${new Intl.DateTimeFormat("en-US", {
+              month: "long",
+              day: "numeric",
+              weekday: "long",
+              year: "numeric",
+            }).format(new Date(`${pendingProposal.date}T00:00:00`))} from ${
+              formatTimeInputLabel(pendingProposal.startTime)
+            } for ${pendingProposal.durationMinutes / 60} hour${
+              pendingProposal.durationMinutes === 60 ? "" : "s"
+            }.`,
+            confidence: 0.98,
+            summary: pendingProposal.details,
+            rationale:
+              "This uses an exact opening and duration validated against the loaded schedule.",
+            severity: "important" as const,
+            projectName: pendingProposal.title,
+            plannedTask: pendingProposal.details,
+            day: selectedWindow.day,
+            itemDate: pendingProposal.date,
+            startTime: pendingProposal.startTime,
+            estimatedHours: pendingProposal.durationMinutes / 60,
+            batchId: pendingProposal.batchId,
+            workflowId: schedulingContext.workflowId,
+            conflictWarnings: [] as string[],
+          },
+        ];
+      },
+    );
     const workException = schedulingContext.pendingWorkException;
     const suggestions = [
       ...(workException && timeBlockSuggestions.length > 0
@@ -1334,17 +1587,51 @@ export async function POST(request: NextRequest) {
         : []),
       ...timeBlockSuggestions,
     ];
-    const response: AssistantPlanReviewResponse = {
-      actions: suggestions,
-      assistantMessage: schedulingTurn.message,
-      context: fallbackWithWarning.context,
+    const response = finalizeAssistantResponse({
       contextStatus,
-      dataWarning: warning,
-      message: schedulingTurn.message,
-      schedulingContext,
-      source: "fallback",
-      suggestions,
-    };
+      planningContext: context,
+      prompt,
+      response: {
+        actions: suggestions,
+        assistantMessage: schedulingTurn.message,
+        context: fallbackWithWarning.context,
+        contextStatus,
+        dataWarning: warning,
+        message: schedulingTurn.message,
+        schedulingContext,
+        source: "fallback",
+        suggestions,
+      },
+    });
+
+    return createNdjsonStream(async (send) => {
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
+    });
+  }
+
+  const extractedItems = extractPlanningItems(prompt, context.projects);
+  const multiItemClarification =
+    extractedItems.length > 1
+      ? createConsolidatedClarification(extractedItems)
+      : null;
+
+  if (multiItemClarification) {
+    const response = finalizeAssistantResponse({
+      contextStatus,
+      planningContext: context,
+      prompt,
+      response: {
+        actions: [],
+        assistantMessage: multiItemClarification,
+        context: fallbackWithWarning.context,
+        contextStatus,
+        dataWarning: warning,
+        message: multiItemClarification,
+        source: "fallback",
+        suggestions: [],
+      },
+    });
 
     return createNdjsonStream(async (send) => {
       await streamFallbackMessage(response.message, send);
@@ -1362,72 +1649,64 @@ export async function POST(request: NextRequest) {
         !shouldGenerateAssistantActionCards(prompt)) ||
       !process.env.OPENAI_API_KEY
     ) {
-      await streamFallbackMessage(fallbackWithWarning.message, send);
-      send({ type: "final", response: fallbackWithWarning });
+      const response = finalizeAssistantResponse({
+        contextStatus,
+        planningContext: context,
+        prompt,
+        response: fallbackWithWarning,
+      });
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
       return;
     }
-
-    let streamedMessage = "";
 
     try {
-      streamedMessage = await streamOpenAiAssistantMessage({
+      const aiResponse = await createOpenAiSuggestions(
+        prompt,
         context,
         profile,
-        prompt,
         recentMessages,
-        send,
+      );
+      const shouldGenerateSuggestions = shouldGenerateAssistantActionCards(prompt);
+      const suggestions = shouldGenerateSuggestions
+        ? preserveFallbackCriticalSuggestions(
+            aiResponse.suggestions,
+            fallbackResponse.suggestions,
+          )
+        : [];
+      const response = finalizeAssistantResponse({
+        contextStatus,
+        planningContext: context,
+        prompt,
+        response: {
+          actions: suggestions,
+          assistantMessage: aiResponse.message,
+          context: fallbackResponse.context,
+          contextStatus,
+          dataWarning: warning,
+          message: aiResponse.message,
+          source: "ai",
+          suggestions,
+        },
       });
+
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
     } catch (error) {
       console.error("Assistant model response failed; using fallback", error);
-      const fallbackMessage = `${fallbackWithWarning.message} I had trouble getting the full assistant response, so I used a simpler planning check for now.`;
-      const fallbackWithError: AssistantPlanReviewResponse = {
-        ...fallbackWithWarning,
-        assistantMessage: fallbackMessage,
-        message: fallbackMessage,
-      };
-
-      await streamFallbackMessage(fallbackMessage, send);
-      send({ type: "final", response: fallbackWithError });
-      return;
-    }
-
-    const shouldGenerateSuggestions = shouldGenerateAssistantActionCards(prompt);
-    let suggestions: AssistantPlanReviewResponse["suggestions"] = [];
-    let finalMessage = streamedMessage;
-
-    if (shouldGenerateSuggestions) {
-      try {
-        const aiResponse = await createOpenAiSuggestions(
-          prompt,
-          context,
-          profile,
-          recentMessages,
-        );
-        suggestions = preserveFallbackCriticalSuggestions(
-          aiResponse.suggestions,
-          fallbackResponse.suggestions,
-        );
-        finalMessage = streamedMessage || aiResponse.message;
-      } catch (error) {
-        const note =
-          " I couldn’t prepare action cards this time, but you can still use the plan above manually.";
-        finalMessage = `${streamedMessage}${note}`;
-        send({ type: "message_delta", delta: note });
-      }
-    }
-
-    send({
-      type: "final",
-      response: {
-        actions: suggestions,
-        assistantMessage: finalMessage,
-        context: fallbackResponse.context,
+      const fallbackWithError = finalizeAssistantResponse({
         contextStatus,
-        dataWarning: warning,
-        message: finalMessage,
-        source: "ai",
-        suggestions,
-      },
-    });
+        planningContext: context,
+        prompt,
+        response: {
+        ...fallbackWithWarning,
+          assistantMessage: fallbackWithWarning.message,
+          message: fallbackWithWarning.message,
+        },
+      });
+
+      await streamFallbackMessage(fallbackWithError.message, send);
+      send({ type: "final", response: fallbackWithError });
+    }
   });
 }

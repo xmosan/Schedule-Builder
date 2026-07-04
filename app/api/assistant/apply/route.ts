@@ -43,6 +43,7 @@ import {
 import {
   formatStartTime,
   normalizeStartTime,
+  parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
   type WeeklyPlanBlock,
@@ -159,6 +160,7 @@ function createResult(
     type: suggestion.type,
     status,
     message,
+    workflowId: suggestion.workflowId,
   };
 }
 
@@ -431,18 +433,22 @@ async function applyScheduledItemSuggestion({
 
   currentScheduledItems.push(result.data);
 
-  return createResult(
-    suggestion,
-    "applied",
-    itemType === "appointment"
-      ? "Appointment added to your schedule."
-      : "Task added to your schedule.",
-  );
+  return {
+    ...createResult(
+      suggestion,
+      "applied",
+      itemType === "appointment"
+        ? "Appointment added to your schedule."
+        : "Task added to your schedule.",
+    ),
+    savedRecordId: result.data.id,
+  };
 }
 
 async function applyWeeklyBlockSuggestion({
   appliedBlockCount,
   currentBlocks,
+  currentScheduledItems,
   importedCalendarEvents,
   suggestion,
   supabase,
@@ -452,6 +458,7 @@ async function applyWeeklyBlockSuggestion({
 }: {
   appliedBlockCount: number;
   currentBlocks: WeeklyPlanBlock[];
+  currentScheduledItems: ScheduledItem[];
   importedCalendarEvents: ImportedCalendarEvent[];
   suggestion: AssistantSuggestion;
   supabase: SupabaseClient;
@@ -495,6 +502,14 @@ async function applyWeeklyBlockSuggestion({
     return createResult(suggestion, "error", "The selected week is invalid.");
   }
 
+  if (suggestion.workflowId && !startTime) {
+    return createResult(
+      suggestion,
+      "error",
+      "This proposal selected an exact opening, so it must keep its validated start time.",
+    );
+  }
+
   const createdDate = getDateForWeekDay(weekStartDate, suggestion.day);
   const effectiveWorkShifts = getEffectiveWorkShiftsForDate(
     workShifts,
@@ -519,6 +534,41 @@ async function applyWeeklyBlockSuggestion({
     estimatedHours: suggestion.estimatedHours,
     ...(startTime ? { startTime } : {}),
   };
+  const candidateStart = parseStartTimeToMinutes(startTime);
+  const candidateEnd =
+    candidateStart === null
+      ? null
+      : candidateStart + suggestion.estimatedHours * 60;
+  const existingWeeklyConflict =
+    candidateStart === null || candidateEnd === null
+      ? null
+      : currentBlocks.find((block) => {
+          if (block.day !== suggestion.day) return false;
+          const blockStart = parseStartTimeToMinutes(block.startTime);
+          if (blockStart === null) return false;
+          const blockEnd = blockStart + block.estimatedHours * 60;
+          return candidateStart < blockEnd && candidateEnd > blockStart;
+        });
+  const existingItemConflict =
+    candidateStart === null || candidateEnd === null
+      ? null
+      : currentScheduledItems.find((item) => {
+          if (item.itemDate !== createdDate) return false;
+          const itemStart = parseStartTimeToMinutes(item.startTime);
+          if (itemStart === null) return false;
+          const itemEnd = itemStart + item.estimatedHours * 60;
+          return candidateStart < itemEnd && candidateEnd > itemStart;
+        });
+
+  if (existingWeeklyConflict || existingItemConflict) {
+    return createResult(
+      suggestion,
+      "error",
+      `That ${suggestion.day} window now overlaps “${
+        existingWeeklyConflict?.projectName ?? existingItemConflict?.title
+      }”. Review the proposal and recalculate before applying.`,
+    );
+  }
   const weekStart = new Date(`${weekStartDate}T00:00:00`);
   const workConflict = getWeeklyPlanWorkConflictForBlock(
     candidateBlock,
@@ -581,6 +631,7 @@ async function applyWeeklyBlockSuggestion({
     createdBlock,
     createdDate,
     planHref: `/plan?week=${encodeURIComponent(weekStartDate)}&date=${encodeURIComponent(createdDate)}&highlight=${encodeURIComponent(createdBlock.id)}`,
+    savedRecordId: createdBlock.id,
   };
 }
 
@@ -972,6 +1023,7 @@ export async function POST(request: NextRequest) {
       const result = await applyWeeklyBlockSuggestion({
         appliedBlockCount,
         currentBlocks,
+        currentScheduledItems,
         importedCalendarEvents,
         suggestion: item.normalized,
         supabase: authResult.supabase,
@@ -1049,12 +1101,19 @@ export async function POST(request: NextRequest) {
   }
 
   const appliedCount = results.filter((result) => result.status === "applied").length;
+  const failedCount = results.filter((result) => result.status !== "applied").length;
+  const appliedMessages = results
+    .filter((result) => result.status === "applied")
+    .map((result) => result.message);
   const context = await loadContextSummary(authResult.supabase, authResult.userId);
   const response: AssistantApplyResponse = {
+    completionStatus: appliedCount > 0 ? "records_applied" : "nothing_created",
     context,
     message:
       appliedCount > 0
-        ? `Applied ${appliedCount} approved ${appliedCount === 1 ? "suggestion" : "suggestions"}.`
+        ? `${failedCount > 0 ? "Partly applied the approved plan." : "Saved the approved plan."} ${appliedMessages.join(
+            " ",
+          )}`
         : "No approved suggestions were applied.",
     results,
   };

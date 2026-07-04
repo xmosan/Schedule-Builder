@@ -35,3 +35,9 @@ The Assistant should answer direct availability and conflict questions with text
 | Scheduling request | `Can you schedule this Friday after work?` | May draft reviewable cards. Does not save automatically. |
 | Sync request | `Sync my plan to Google Calendar.` | Explains manual sync only. Does not sync. |
 | Greeting | `Hello` | Short friendly reply, no report, no cards. |
+| Recurring reading clarification | `Find me time throughout the week to read The Sealed Nectar` | Asks for session count and duration in one question. Does not create one arbitrary block. |
+| Recurring reading batch | Follow with `Three sessions, 45 minutes each` | Produces three exact, non-overlapping, distributed review cards with the real activity title. Nothing is applied. |
+| Pending status | Ask `Is it on the schedule?` before applying | Starts with `Not yet` when proposals exist and `No` when no proposal exists. |
+| Applied status | Apply the batch, then ask `Did you add it?` | Starts with `Yes` and lists only verified saved records. |
+| Multi-item request | Assignment, report, MSA preparation, groceries, two workouts | Extracts all five items, asks one consolidated clarification, then produces a conflict-free batch after durations are supplied. |
+| Pasted task list | Paste bullets from email or another plan | Preserves source text, extracts the planning items, and recalculates times from Schedule Builder context. |

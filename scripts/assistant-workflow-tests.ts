@@ -62,7 +62,7 @@ function runExactMsaWorkflow() {
 
   const ready = advance("one hour", stillMissing);
   assert.equal(ready.context.state, "awaiting_apply");
-  assert.equal(ready.proposal?.title, "Plan MSA meetings");
+  assert.equal(ready.proposal?.title, "MSA meetings");
   assert.equal(ready.proposal?.date, "2026-07-01");
   assert.equal(ready.proposal?.startTime, "08:00");
   assert.equal(ready.proposal?.durationMinutes, 60);
