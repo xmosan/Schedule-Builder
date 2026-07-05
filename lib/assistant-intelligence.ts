@@ -2,6 +2,7 @@ import type { AssistantContextStatus } from "@/lib/assistant";
 import type { Project } from "@/lib/projects";
 import {
   extractSemanticPlanningRequest,
+  removeWeeklyCommitmentPhrase,
   validateSemanticTitle,
 } from "@/lib/assistant-semantics";
 
@@ -121,7 +122,7 @@ const explicitMutationPattern =
 const statusQuestionPattern =
   /\b(?:is it on (?:my|the) schedule|is the [^?.]{1,60} scheduled|did you add (?:it|that|them|those)|was (?:it|that) saved|is the plan applied|did (?:that|those|the) (?:blocks?|sessions?) get created|has (?:it|that) been (?:added|scheduled|saved))\b/i;
 const recurringPattern =
-  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every weekday|every other day|every\s+(?:\d+|one|two|three|four|five|six|seven)\s+days?|next\s+(?:\d+|one|two|three|four|five|six|seven|eight)\s+(?:weeks?|months?)|times? this week|sessions? this week|slots|twice|three times|four times|gradually|recurring)\b/i;
+  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every week|each week|per week|weekly|every weekday|every other day|every\s+(?:\d+|one|two|three|four|five|six|seven)\s+days?|next\s+(?:\d+|one|two|three|four|five|six|seven|eight)\s+(?:weeks?|months?)|times? this week|sessions? this week|slots|twice|three times|four times|gradually|recurring)\b/i;
 const completionClaimPattern =
   /\b(?:you(?:'re| are) all set|it(?:'s| is) scheduled|i (?:added|scheduled|saved|applied|put) (?:it|that|them|those)|it(?:'s| is) on (?:your|the) schedule|your plan has been updated|(?:done|applied|completed)[.!]?\s*$)\b/i;
 const appliedClaimPattern =
@@ -196,17 +197,18 @@ export function parseRequestedSessionCount(prompt: string) {
 }
 
 export function parseExplicitDurationMinutes(prompt: string) {
-  if (/\b(?:half an hour|half hour)\b/i.test(prompt)) {
+  const sessionText = removeWeeklyCommitmentPhrase(prompt);
+  if (/\b(?:half an hour|half hour)\b/i.test(sessionText)) {
     return 30;
   }
 
-  const minuteMatch = prompt.match(/\b(\d+)\s*(?:minutes?|mins?)\b/i);
+  const minuteMatch = sessionText.match(/\b(\d+)\s*(?:minutes?|mins?)\b/i);
   if (minuteMatch) {
     const minutes = Number(minuteMatch[1]);
     return Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : null;
   }
 
-  const hourMatch = prompt.match(
+  const hourMatch = sessionText.match(
     /\b(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*(?:hours?|hrs?)\b/i,
   );
   if (!hourMatch) {

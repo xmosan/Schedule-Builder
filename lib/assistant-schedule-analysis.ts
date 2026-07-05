@@ -30,10 +30,13 @@ import {
 } from "@/lib/assistant-intelligence";
 import {
   acceptRecommendedConstraintResolution,
+  acceptRecommendedWeeklyPattern,
+  calculateWeeklyProposalMinutes,
   extractSemanticPlanningRequest,
   hasUnresolvedConstraintConflict,
   normalizeRecurringSeriesProposal,
   normalizeSemanticPlanningRequest,
+  rejectRecommendedWeeklyPattern,
   type RecurringSeriesProposal,
   type SemanticPlanningRequest,
 } from "@/lib/assistant-semantics";
@@ -41,6 +44,21 @@ import {
 const dayStartDefault = 8 * 60;
 const dayEndDefault = 22 * 60;
 const usefulWindowMinimumMinutes = 30;
+
+function formatSmallNumber(value: number) {
+  return (
+    {
+      1: "one",
+      2: "two",
+      3: "three",
+      4: "four",
+      5: "five",
+      6: "six",
+      7: "seven",
+      8: "eight",
+    } as Record<number, string>
+  )[value] ?? String(value);
+}
 
 const dayNameByIndex: Record<number, WeekDay> = {
   0: "Sunday",
@@ -429,6 +447,7 @@ export function normalizeAssistantSchedulingContext(
 }
 
 export type AssistantScheduleAnalysisInput = {
+  currentDate?: string;
   importedCalendarEvents: ImportedCalendarEvent[];
   projects?: Project[];
   scheduleExceptions?: ScheduleException[];
@@ -910,7 +929,7 @@ function findSelectedWindows(
 }
 
 function isPositiveSchedulingConfirmation(prompt: string) {
-  return /^(?:yes|yeah|yep|sure|please|yes please|sounds good|ok|okay|alright|all right)[\s,!.]*$/i.test(
+  return /^(?:(?:yes|yeah|yep|sure|please|yes please|sounds good|ok|okay|alright|all right)(?:[\s,!.]+(?:let(?:'|’)s do that|do that|go ahead))?|let(?:'|’)s do that|go ahead|draft it|add it|do it|put it on (?:my|the) schedule)[\s,!.]*$/i.test(
     prompt.trim(),
   );
 }
@@ -2789,7 +2808,9 @@ function createRecurringSchedulingTurn({
     Boolean(
       semanticRequest.scheduleInstructions.planningHorizon ||
         semanticRequest.scheduleInstructions.desiredFrequency?.intervalDays ||
-        semanticRequest.scheduleInstructions.maximumWeeklyMinutes,
+        semanticRequest.scheduleInstructions.maximumWeeklyMinutes ||
+        semanticRequest.scheduleInstructions.weeklyMinutes ||
+        semanticRequest.weeklyGoal,
     );
 
   if (!isRecurring) return null;
@@ -2797,7 +2818,8 @@ function createRecurringSchedulingTurn({
   if (
     !isContinuation &&
     !isExplicitMutationRequest(prompt) &&
-    !isExplicitSchedulingRequest(prompt)
+    !isExplicitSchedulingRequest(prompt) &&
+    !semanticRequest.weeklyGoal
   ) {
     return null;
   }
@@ -2818,6 +2840,108 @@ function createRecurringSchedulingTurn({
     },
     workflowId,
   };
+
+  const recommendedWeeklyPattern =
+    semanticRequest.weeklyGoal?.recommendedPattern;
+  if (recommendedWeeklyPattern?.status === "pending") {
+    if (isContinuation && isPositiveSchedulingConfirmation(prompt)) {
+      semanticRequest = acceptRecommendedWeeklyPattern(semanticRequest);
+    } else if (isContinuation && isNegativeSchedulingReply(prompt)) {
+      semanticRequest = rejectRecommendedWeeklyPattern(semanticRequest);
+      const question =
+        "Would you rather use one three-hour session or two ninety-minute sessions?";
+      return {
+        context: {
+          appliedRecords: activeContext?.appliedRecords ?? [],
+          batchId,
+          candidateWindows: [],
+          confirmationStatus: "awaiting_session_details",
+          extractedItems: [
+            {
+              ...item,
+              missingFields: ["session_pattern"],
+              purpose: semanticRequest.activity.purpose ?? item.purpose,
+              title: semanticRequest.activity.title,
+            },
+          ],
+          intent: "create_multiple_time_blocks",
+          lastUpdatedAt: new Date().toISOString(),
+          maximumDurationMinutes: null,
+          pendingProposal: null,
+          pendingProposals: [],
+          pendingQuestion: question,
+          pendingWorkException: null,
+          purpose: semanticRequest.activity.title,
+          requestedDurationMinutes: null,
+          requestedSessionCount: null,
+          selectedDate: null,
+          selectedWindowEnd: null,
+          selectedWindowId: null,
+          selectedWindowStart: null,
+          semanticRequest,
+          seriesProposal: null,
+          state: "awaiting_session_details",
+          workflowId,
+        },
+        message: question,
+        proposal: null,
+      };
+    } else {
+      const weeklyMinutes = semanticRequest.weeklyGoal?.weeklyMinutes ?? 0;
+      const count = recommendedWeeklyPattern.sessionsPerWeek;
+      const duration = recommendedWeeklyPattern.durationMinutes;
+      const formatDuration = (minutes: number) =>
+        minutes === 60
+          ? "one-hour"
+          : minutes === 90
+            ? "ninety-minute"
+            : `${minutes}-minute`;
+      const formatTotal = (minutes: number) =>
+        minutes % 60 === 0
+          ? `${formatSmallNumber(minutes / 60)}-hour`
+          : `${minutes}-minute`;
+      const question =
+        count === 3 && duration === 60
+          ? "I recommend three one-hour reading sessions each week instead of one three-hour block. That should make the preparation easier to maintain. Should I use that pattern?"
+          : `I recommend ${formatSmallNumber(count)} ${formatDuration(duration)} sessions each week instead of one ${formatTotal(weeklyMinutes)} block. That should make the commitment easier to maintain. Should I use that pattern?`;
+      return {
+        context: {
+          appliedRecords: activeContext?.appliedRecords ?? [],
+          batchId,
+          candidateWindows: [],
+          confirmationStatus: "awaiting_session_details",
+          extractedItems: [
+            {
+              ...item,
+              missingFields: ["pattern_confirmation"],
+              purpose: semanticRequest.activity.purpose ?? item.purpose,
+              title: semanticRequest.activity.title,
+            },
+          ],
+          intent: "create_multiple_time_blocks",
+          lastUpdatedAt: new Date().toISOString(),
+          maximumDurationMinutes: null,
+          pendingProposal: null,
+          pendingProposals: [],
+          pendingQuestion: question,
+          pendingWorkException: null,
+          purpose: semanticRequest.activity.title,
+          requestedDurationMinutes: duration,
+          requestedSessionCount: count,
+          selectedDate: null,
+          selectedWindowEnd: null,
+          selectedWindowId: null,
+          selectedWindowStart: null,
+          semanticRequest,
+          seriesProposal: null,
+          state: "needs_clarification",
+          workflowId,
+        },
+        message: question,
+        proposal: null,
+      };
+    }
+  }
 
   if (hasUnresolvedConstraintConflict(semanticRequest)) {
     if (isContinuation && isPositiveSchedulingConfirmation(prompt)) {
@@ -2974,7 +3098,7 @@ function createRecurringSchedulingTurn({
     : 1;
   const baseWeekStart = getWeekStart(input.weekStartDate, input.timezone);
   const configuredStartDate = toIsoDate(baseWeekStart);
-  const today = getIsoDateInTimeZone(
+  const today = input.currentDate ?? getIsoDateInTimeZone(
     new Date(),
     input.timezone ?? getDefaultTimeZone(),
   );
@@ -3124,12 +3248,36 @@ function createRecurringSchedulingTurn({
       ? "Sealed Nectar Reading Plan"
       : `${semanticRequest.activity.title} Plan`,
     totalOccurrences: proposals.length,
+    weeklyTotalMinutes: calculateWeeklyProposalMinutes(proposals, startDate),
     workflowId,
   };
+  if (semanticRequest.weeklyGoal) {
+    semanticRequest = {
+      ...semanticRequest,
+      weeklyGoal: {
+        ...semanticRequest.weeklyGoal,
+        occurrenceProposalIds: proposals.flatMap((proposal) =>
+          proposal.id ? [proposal.id] : [],
+        ),
+        recurrence: {
+          ...semanticRequest.weeklyGoal.recurrence,
+          endDate,
+          numberOfWeeks: horizonWeeks,
+          startDate,
+        },
+      },
+    };
+  }
   const message =
     horizonWeeks > 1
       ? `I found a balanced rhythm across the week and drafted all ${proposals.length} sessions for review.`
-      : `I drafted ${proposals.length} ${semanticRequest.activity.title} session${proposals.length === 1 ? "" : "s"} for review. Nothing has been added yet.`;
+      : semanticRequest.weeklyGoal
+        ? `I drafted ${formatSmallNumber(proposals.length)} weekly ${
+            /sealed nectar/i.test(semanticRequest.activity.title)
+              ? "Sealed Nectar reading"
+              : semanticRequest.activity.title
+          } session${proposals.length === 1 ? "" : "s"} around your schedule.`
+        : `I drafted ${proposals.length} ${semanticRequest.activity.title} session${proposals.length === 1 ? "" : "s"} for review. Nothing has been added yet.`;
 
   return {
     context: {

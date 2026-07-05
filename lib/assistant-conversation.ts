@@ -25,8 +25,10 @@ export type PersistedAssistantActionState = {
 };
 
 export type AssistantConversationSnapshot = {
+  acknowledgedNoticeIds: string[];
   actionStates: Record<string, PersistedAssistantActionState>;
   activeSchedulingContext: AssistantSchedulingContext | null;
+  dismissedNoticeIds: string[];
   messages: PersistedAssistantMessage[];
   openReviewMessages: Record<string, boolean>;
   threadId: string;
@@ -51,8 +53,10 @@ export function createAssistantThreadId() {
 
 export function createEmptyAssistantConversation(): AssistantConversationSnapshot {
   return {
+    acknowledgedNoticeIds: [],
     actionStates: {},
     activeSchedulingContext: null,
+    dismissedNoticeIds: [],
     messages: [],
     openReviewMessages: {},
     threadId: createAssistantThreadId(),
@@ -95,11 +99,21 @@ export function parseAssistantConversationSnapshot(
     .slice(-100);
 
   return {
+    acknowledgedNoticeIds: Array.isArray(candidate.acknowledgedNoticeIds)
+      ? candidate.acknowledgedNoticeIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : [],
     actionStates: candidate.actionStates as Record<
       string,
       PersistedAssistantActionState
     >,
     activeSchedulingContext: candidate.activeSchedulingContext ?? null,
+    dismissedNoticeIds: Array.isArray(candidate.dismissedNoticeIds)
+      ? candidate.dismissedNoticeIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : [],
     messages,
     openReviewMessages: candidate.openReviewMessages as Record<string, boolean>,
     threadId: candidate.threadId,

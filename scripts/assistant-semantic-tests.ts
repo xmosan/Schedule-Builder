@@ -7,6 +7,7 @@ import {
 } from "../lib/assistant-schedule-analysis";
 import {
   createAssistantResponsePlan,
+  createRelevantNoticeId,
   gateAssistantInsights,
   getActionCardControls,
   validateResponsePlan,
@@ -15,6 +16,7 @@ import {
   extractSemanticPlanningRequest,
   inferSemanticActivityTitle,
   isCommandDerivedTitle,
+  parseWeeklyCommitment,
   validateSemanticTitle,
 } from "../lib/assistant-semantics";
 import { buildCalendarDays } from "../lib/calendar";
@@ -26,6 +28,7 @@ import {
 import { weekDays } from "../lib/weekly-plan";
 
 const input: AssistantScheduleAnalysisInput = {
+  currentDate: "2026-07-04",
   importedCalendarEvents: [],
   projects: [],
   scheduleExceptions: [],
@@ -74,6 +77,86 @@ check("Plan it for the next five weeks is rejected as a title", () => {
     "Read The Sealed Nectar",
   );
 });
+
+const weeklyPrompt =
+  "I need to study The Sealed Nectar for at least three hours every week.";
+const weeklySemantic = extractSemanticPlanningRequest({ prompt: weeklyPrompt });
+check("At-least weekly commitment is extracted as 180 minutes", () => {
+  assert.deepEqual(parseWeeklyCommitment(weeklyPrompt), {
+    kind: "minimum",
+    minutes: 180,
+    sourceText: "at least three hours every week",
+  });
+  assert.equal(weeklySemantic.weeklyGoal?.weeklyMinutes, 180);
+});
+check("Weekly total is not misread as one session duration", () =>
+  assert.equal(
+    weeklySemantic.scheduleInstructions.sessionDurationMinutes ?? null,
+    null,
+  ));
+check("Weekly reading receives a three-by-one-hour recommendation", () => {
+  assert.equal(weeklySemantic.weeklyGoal?.recommendedPattern.sessionsPerWeek, 3);
+  assert.equal(weeklySemantic.weeklyGoal?.recommendedPattern.durationMinutes, 60);
+  assert.equal(weeklySemantic.weeklyGoal?.recommendedPattern.status, "pending");
+});
+const weeklyRecommendation = advanceAssistantSchedulingConversation({
+  activeContext: null,
+  input,
+  prompt: weeklyPrompt,
+});
+assert.ok(weeklyRecommendation);
+check("Weekly goal asks exactly one recommendation question", () =>
+  assert.equal(
+    weeklyRecommendation.message,
+    "I recommend three one-hour reading sessions each week instead of one three-hour block. That should make the preparation easier to maintain. Should I use that pattern?",
+  ));
+check("Recommendation does not narrate work shifts or Helpful notes", () => {
+  assert.doesNotMatch(weeklyRecommendation.message, /Monday|Thursday|Helpful notes/i);
+});
+
+const weeklyAcceptancePhrases = [
+  "Yes, let’s do that.",
+  "Let’s do that.",
+  "Sounds good.",
+  "Go ahead.",
+  "Draft it.",
+  "Add it.",
+  "Put it on the schedule.",
+];
+weeklyAcceptancePhrases.forEach((prompt) => {
+  check(`Contextual acceptance creates proposals: ${prompt}`, () => {
+    const turn = advanceAssistantSchedulingConversation({
+      activeContext: weeklyRecommendation.context,
+      input,
+      prompt,
+    });
+    assert.ok(turn);
+    assert.equal(turn.context.pendingProposals.length, 3);
+    assert.equal(turn.context.state, "awaiting_apply");
+    assert.equal(turn.context.semanticRequest?.activity.title, "Read The Sealed Nectar");
+  });
+});
+const weeklyDraft = advanceAssistantSchedulingConversation({
+  activeContext: weeklyRecommendation.context,
+  input,
+  prompt: "Yes, let’s do that.",
+});
+assert.ok(weeklyDraft);
+check("Accepted weekly recommendation creates exact timed proposals", () =>
+  assert.ok(
+    weeklyDraft.context.pendingProposals.every(
+      (proposal) =>
+        proposal.title === "Read The Sealed Nectar" &&
+        proposal.details === "Prepare for the masjid halaqah" &&
+        proposal.durationMinutes === 60 &&
+        /^\d{4}-\d{2}-\d{2}$/.test(proposal.date) &&
+        /^\d{2}:\d{2}$/.test(proposal.startTime),
+    ),
+  ));
+check("Weekly total derives from the proposed occurrences", () =>
+  assert.equal(weeklyDraft.context.seriesProposal?.weeklyTotalMinutes, 180));
+check("Weekly recommendation does not silently create an indefinite series", () =>
+  assert.equal(weeklyDraft.context.seriesProposal?.planningHorizon.weeks, 1));
 
 const requestPrompt =
   "I want to make time to read The Sealed Nectar. Place it on my schedule for the next five weeks. I need at least one hour every two days, but no more than three hours per week. Find time around my schedule and implement it.";
@@ -340,6 +423,11 @@ check("A directly related overlap is retained", () =>
       prompt: "Schedule my Saturday reading",
     }).kept.length,
     1,
+  ));
+check("Actionable notice identity is stable for a workflow and source version", () =>
+  assert.equal(
+    createRelevantNoticeId(realConflict, "weekly-reading"),
+    createRelevantNoticeId({ ...realConflict, id: "regenerated-id" }, "weekly-reading"),
   ));
 
 const recommendedOpenings = createDeterministicScheduleAnswer({

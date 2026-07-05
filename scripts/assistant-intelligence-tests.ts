@@ -29,6 +29,7 @@ import {
 } from "../lib/assistant-workflow";
 
 const input: AssistantScheduleAnalysisInput = {
+  currentDate: "2026-07-04",
   importedCalendarEvents: [],
   projects: [],
   scheduleExceptions: [],

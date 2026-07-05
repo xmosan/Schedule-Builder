@@ -32,6 +32,43 @@ export type ScheduleExceptionDraft = Omit<
   "id" | "insertedAt" | "updatedAt"
 >;
 
+export function getScheduleExceptionLoadStatus(
+  exceptions: ScheduleException[],
+  error: unknown,
+) {
+  if (error) {
+    return {
+      contextStatus: {
+        detail: "Couldn’t load · Retry",
+        state: "failed" as const,
+      },
+      loaded: false,
+      warning:
+        "Temporary schedule changes could not be loaded. Availability answers may be incomplete.",
+    };
+  }
+  if (exceptions.length === 0) {
+    return {
+      contextStatus: {
+        detail: "No temporary changes",
+        state: "empty" as const,
+      },
+      loaded: true,
+      warning: null,
+    };
+  }
+  return {
+    contextStatus: {
+      detail: `${exceptions.length} temporary change${
+        exceptions.length === 1 ? "" : "s"
+      } loaded`,
+      state: "available" as const,
+    },
+    loaded: true,
+    warning: null,
+  };
+}
+
 export function isScheduleExceptionType(
   value: unknown,
 ): value is ScheduleExceptionType {

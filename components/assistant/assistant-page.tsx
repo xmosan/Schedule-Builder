@@ -130,6 +130,18 @@ function getSchedulingQuickReplies(
     context.state === "needs_clarification"
   ) {
     if (
+      context.semanticRequest?.weeklyGoal?.recommendedPattern.status ===
+      "pending"
+    ) {
+      return [
+        {
+          id: "accept-weekly-pattern",
+          label: "Use that pattern",
+          prompt: "Yes, let’s do that",
+        },
+      ];
+    }
+    if (
       context.semanticRequest?.contradictions.some(
         (conflict) => !conflict.resolved,
       )
@@ -309,6 +321,11 @@ function addMinutesToTime(startTime: string, durationHours: number) {
   return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(
     total % 60,
   ).padStart(2, "0")}`;
+}
+
+function formatWeeklyMinutes(minutes: number) {
+  const hours = minutes / 60;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h weekly`;
 }
 
 function updateSchedulingContextAfterApply(
@@ -774,11 +791,13 @@ function ActionCard({
                 <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.day}</span>
               </div>
             )}
-            {isWeeklyBlockSuggestion && suggestion.startTime && (
+            {isWeeklyBlockSuggestion && suggestion.startTime && suggestion.estimatedHours && (
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
-                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Start</span>
+                <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Time</span>
                 <span className="mt-0.5 block font-semibold text-brand-ink">
-                  {formatStartTime(suggestion.startTime)}
+                  {formatStartTime(suggestion.startTime)}–{formatStartTime(
+                    addMinutesToTime(suggestion.startTime, suggestion.estimatedHours),
+                  )}
                 </span>
               </div>
             )}
@@ -788,7 +807,7 @@ function ActionCard({
                 <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.estimatedHours}h</span>
               </div>
             )}
-            {suggestion.weeklyHours !== undefined && (
+            {!isWeeklyBlockSuggestion && suggestion.weeklyHours !== undefined && (
               <div className="rounded-2xl border border-brand-ink/10 bg-brand-ink/[0.025] px-3 py-2">
                 <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/40">Weekly time</span>
                 <span className="mt-0.5 block font-semibold text-brand-ink">{suggestion.weeklyHours}h</span>
@@ -1160,24 +1179,32 @@ function ActionCard({
 }
 
 function ChatBubble({
+  acknowledgedNoticeIds,
   actionStates,
+  dismissedNoticeIds,
   hiddenTrailingPrompt,
   isReviewOpen,
   message,
   onApply,
   onApplyAll,
+  onAcknowledgeNotice,
+  onDismissNotice,
   onIgnore,
   onOpenReview,
   onToggleEdit,
   onUpdateSuggestion,
   reviewableProposalIds,
 }: {
+  acknowledgedNoticeIds: string[];
   actionStates: Record<string, ActionState>;
+  dismissedNoticeIds: string[];
   hiddenTrailingPrompt?: string | null;
   isReviewOpen: boolean;
   message: ChatMessage;
   onApply: (suggestion: AssistantSuggestion) => void;
   onApplyAll: (suggestions: AssistantSuggestion[]) => void;
+  onAcknowledgeNotice: (noticeId: string) => void;
+  onDismissNotice: (noticeId: string) => void;
   onIgnore: (suggestionId: string) => void;
   onOpenReview: (messageId: string) => void;
   onToggleEdit: (suggestion: AssistantSuggestion) => void;
@@ -1222,9 +1249,16 @@ function ChatBubble({
     message.content,
     hiddenTrailingPrompt,
   );
+  const handledNoticeIds = new Set([
+    ...acknowledgedNoticeIds,
+    ...dismissedNoticeIds,
+  ]);
+  const relevantNotices = (
+    message.response?.responsePlan?.needsAttentionItems ?? []
+  ).filter((notice) => !handledNoticeIds.has(notice.id));
   const showsMessageBubble = message.isStreaming || Boolean(displayedContent);
 
-  if (!showsMessageBubble && actions.length === 0) {
+  if (!showsMessageBubble && actions.length === 0 && relevantNotices.length === 0) {
     return null;
   }
 
@@ -1267,6 +1301,43 @@ function ChatBubble({
           </div>
         ) : null}
 
+        {!isUser && relevantNotices.length > 0 ? (
+          <section className="w-full rounded-[20px] border border-brand-coral/20 bg-brand-coral/[0.06] p-4">
+            <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-coral">
+              Needs your attention
+            </h4>
+            <div className="mt-3 grid gap-3">
+              {relevantNotices.map((notice) => (
+                <div key={notice.id}>
+                  <p className="text-sm leading-6 text-brand-ink/75">
+                    {notice.message}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      className="h-8 rounded-full px-3 text-xs font-semibold"
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => onAcknowledgeNotice(notice.id)}
+                    >
+                      Got it
+                    </Button>
+                    <Button
+                      className="h-8 rounded-full px-3 text-xs font-semibold"
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                      onClick={() => onDismissNotice(notice.id)}
+                    >
+                      Dismiss
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {!isUser && !message.isStreaming && actions.length > 0 ? (
           <div
             id={`assistant-review-${message.id}`}
@@ -1292,7 +1363,7 @@ function ChatBubble({
                     </p>
                     {seriesProposal ? (
                       <p className="mt-1 text-xs text-brand-ink/55">
-                        {seriesProposal.planningHorizon.weeks} weeks · {seriesProposal.pattern.sessionsPerWeek} sessions per week · {seriesProposal.pattern.durationMinutes} minutes each · {seriesProposal.totalOccurrences} proposed sessions
+                        {seriesProposal.pattern.sessionsPerWeek} sessions · {seriesProposal.pattern.durationMinutes} minutes each · {formatWeeklyMinutes(seriesProposal.weeklyTotalMinutes)} · {seriesProposal.planningHorizon.weeks === 1 ? "current planning week" : `${seriesProposal.planningHorizon.weeks} weeks`}
                       </p>
                     ) : null}
                     <ul className="mt-2 grid gap-1 text-xs leading-5 text-brand-ink/58">
@@ -1356,7 +1427,7 @@ function ChatBubble({
                   <div className="mb-3 rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.045] p-4">
                     <p className="font-semibold text-brand-ink">{seriesProposal.title}</p>
                     <p className="mt-1 text-xs leading-5 text-brand-ink/58">
-                      {seriesProposal.planningHorizon.weeks} weeks · {seriesProposal.pattern.sessionsPerWeek} sessions per week · {seriesProposal.pattern.durationMinutes} minutes each · {seriesProposal.totalOccurrences} total
+                      {seriesProposal.pattern.sessionsPerWeek} sessions per week · {seriesProposal.pattern.durationMinutes} minutes each · {formatWeeklyMinutes(seriesProposal.weeklyTotalMinutes)} · {seriesProposal.totalOccurrences} total
                     </p>
                     {seriesProposal.totalOccurrences > seriesProposal.pattern.sessionsPerWeek ? (
                       <button
@@ -1466,6 +1537,8 @@ export function AssistantPage() {
   const [actionStates, setActionStates] = useState<Record<string, ActionState>>({});
   const [openReviewMessages, setOpenReviewMessages] = useState<Record<string, boolean>>({});
   const [assistantNotices, setAssistantNotices] = useState<AssistantNotice[]>([]);
+  const [acknowledgedNoticeIds, setAcknowledgedNoticeIds] = useState<string[]>([]);
+  const [dismissedNoticeIds, setDismissedNoticeIds] = useState<string[]>([]);
   const [isClearChatDialogOpen, setIsClearChatDialogOpen] = useState(false);
   const [isClearChatLoading, setIsClearChatLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1549,6 +1622,8 @@ export function AssistantPage() {
       setActionStates({});
       setOpenReviewMessages({});
       setAssistantNotices([]);
+      setAcknowledgedNoticeIds([]);
+      setDismissedNoticeIds([]);
       setError(null);
       setIsClearChatDialogOpen(false);
     } finally {
@@ -1966,6 +2041,8 @@ export function AssistantPage() {
             ),
           );
           setOpenReviewMessages(restoredSnapshot.openReviewMessages);
+          setAcknowledgedNoticeIds(restoredSnapshot.acknowledgedNoticeIds);
+          setDismissedNoticeIds(restoredSnapshot.dismissedNoticeIds);
           setActiveSchedulingContext(
             restoredSnapshot.activeSchedulingContext,
           );
@@ -2030,8 +2107,10 @@ export function AssistantPage() {
     }
 
     const snapshot: AssistantConversationSnapshot = {
+      acknowledgedNoticeIds,
       actionStates,
       activeSchedulingContext,
+      dismissedNoticeIds,
       messages: messages
         .filter((message) => !message.isStreaming)
         .map((message) => ({
@@ -2080,9 +2159,11 @@ export function AssistantPage() {
 
     return () => window.clearTimeout(timeoutId);
   }, [
+    acknowledgedNoticeIds,
     actionStates,
     activeSchedulingContext,
     activeUserId,
+    dismissedNoticeIds,
     hasRestoredConversation,
     messages,
     openReviewMessages,
@@ -2766,7 +2847,9 @@ export function AssistantPage() {
               {messages.map((message) => (
                 <ChatBubble
                   key={message.id}
+                  acknowledgedNoticeIds={acknowledgedNoticeIds}
                   actionStates={actionStates}
+                  dismissedNoticeIds={dismissedNoticeIds}
                   hiddenTrailingPrompt={
                     message.id === latestAssistantMessageId
                       ? activeClarificationQuestion
@@ -2777,6 +2860,16 @@ export function AssistantPage() {
                   onApply={(suggestion) => void applySuggestion(suggestion)}
                   onApplyAll={(suggestions) =>
                     void applyAllSuggestions(suggestions)
+                  }
+                  onAcknowledgeNotice={(noticeId) =>
+                    setAcknowledgedNoticeIds((current) =>
+                      current.includes(noticeId) ? current : [...current, noticeId],
+                    )
+                  }
+                  onDismissNotice={(noticeId) =>
+                    setDismissedNoticeIds((current) =>
+                      current.includes(noticeId) ? current : [...current, noticeId],
+                    )
                   }
                   onIgnore={(suggestionId) => void ignoreSuggestion(suggestionId)}
                   onOpenReview={(messageId) =>

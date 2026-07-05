@@ -45,3 +45,14 @@
 - Constraint contradictions are persisted in workflow context and require an explicit resolution before proposal generation.
 - Multi-week series are expanded into date-specific canonical proposals. Weekly Plan records keep `scheduled_date` and `series_id`, so occurrences render only in their intended weeks.
 - Response plans gate unrelated observations, select a concise mode, and expose raw availability only when the user asks for every option.
+
+## Weekly-commitment follow-up fixes
+
+- “At least three hours every week” previously matched neither the recurring-intent pattern nor the explicit scheduling pattern. The generic response path therefore ran before canonical workflow creation.
+- The duration parser treated the weekly aggregate as one session duration. Weekly commitments are now extracted separately from per-session duration and persisted as `weeklyGoal.weeklyMinutes`.
+- Split-session judgment is persisted as a pending recommendation. A contextual acceptance such as “Yes, let’s do that,” “Draft it,” or “Put it on the schedule” accepts that recommendation and immediately calculates proposals; it cannot trigger another permission question.
+- A recurring goal with no horizon creates review proposals for one rolling planning week and records that bounded horizon. It never silently creates an indefinite series.
+- Series weekly time is calculated from its dated occurrence proposals, not a project’s unrelated `weeklyHours` field.
+- Normal work shifts remain internal constraints. Only a conflict, impossible deadline, missing critical source, or decision-changing issue can enter `Needs your attention`; acknowledgments and dismissals persist with the chat snapshot.
+- The plan route does not construct the generic fallback until deterministic scheduling, clarification, status, and active-workflow paths have all declined the turn, so fallback workload notes cannot run ahead of intent understanding.
+- Empty `schedule_exceptions` results are successful loads. The main schema now includes the table, indexes, trigger, RLS, and ownership policies; an existing production project must still run `supabase/schedule-exceptions.sql` once.

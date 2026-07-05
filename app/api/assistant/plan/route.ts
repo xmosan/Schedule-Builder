@@ -22,6 +22,7 @@ import {
   type AssistantSuggestionType,
 } from "@/lib/assistant";
 import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
+import { getScheduleExceptionLoadStatus } from "@/lib/schedule-exceptions";
 import {
   advanceAssistantSchedulingConversation,
   createAssistantScheduleAnalysisSnapshot,
@@ -103,6 +104,14 @@ function formatTimeInputLabel(value: string) {
   return `${displayHours}:${String(minutes).padStart(2, "0")} ${period}`;
 }
 
+function addMinutesToTimeInput(value: string, durationMinutes: number) {
+  const [hours, minutes] = value.split(":").map(Number);
+  const total = hours * 60 + minutes + durationMinutes;
+  return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(
+    total % 60,
+  ).padStart(2, "0")}`;
+}
+
 function finalizeAssistantResponse({
   contextStatus,
   planningContext,
@@ -146,7 +155,15 @@ function finalizeAssistantResponse({
       : actionable.length > 0 || schedulingContext?.state === "awaiting_apply"
         ? ("proposal_created" as const)
         : ("nothing_created" as const);
-  const intent = classifyAssistantIntent(prompt, extractedItems);
+  const intent = schedulingContext
+    ? schedulingContext.intent === "create_multiple_time_blocks"
+      ? ("create_multiple_time_blocks" as const)
+      : schedulingContext.intent === "multi_action_request"
+        ? ("multi_action_request" as const)
+        : schedulingContext.intent === "find_open_time"
+          ? ("find_open_time" as const)
+          : ("create_time_block" as const)
+    : classifyAssistantIntent(prompt, extractedItems);
   const workflowState = schedulingContext?.state ?? "idle";
   let outcome: AssistantTurnOutcome = "direct_answer";
 
@@ -1103,6 +1120,10 @@ async function loadPlanningContext(
   }
 
   const profile = profileResult.error == null ? profileResult.data : null;
+  const scheduleExceptionLoad = getScheduleExceptionLoadStatus(
+    scheduleExceptionsResult.data,
+    scheduleExceptionsResult.error,
+  );
   const plannerType: PlannerType | "Unknown" = profile
     ? profile.plannerType
     : "Unknown";
@@ -1186,20 +1207,7 @@ async function loadPlanningContext(
           }
         : { detail: "No projects", state: "empty" },
     refreshedAt,
-    scheduleExceptions: scheduleExceptionsResult.error
-      ? {
-          detail: "Couldn’t load · Retry",
-          state: "failed",
-        }
-      : scheduleExceptionsResult.data.length > 0
-        ? {
-            detail: `${scheduleExceptionsResult.data.length} temporary change${scheduleExceptionsResult.data.length === 1 ? "" : "s"} loaded`,
-            state: "available",
-          }
-        : {
-            detail: "No temporary changes",
-            state: "empty",
-          },
+    scheduleExceptions: scheduleExceptionLoad.contextStatus,
     weeklyPlan: weeklyPlanResult.error
       ? {
           detail: "Couldn’t load · Retry",
@@ -1261,9 +1269,8 @@ async function loadPlanningContext(
     profile,
     warning:
       loadErrors.length > 0
-        ? scheduleExceptionsResult.error
-          ? "Temporary schedule changes could not be loaded. Availability answers may be incomplete."
-          : "Some schedule sources did not load. Suggestions may be incomplete."
+        ? scheduleExceptionLoad.warning ??
+          "Some schedule sources did not load. Suggestions may be incomplete."
         : null,
   };
 }
@@ -1896,23 +1903,19 @@ export async function POST(request: NextRequest) {
     activeSchedulingContext = null;
     loadedWorkflow = null;
   }
-  const fallbackResponse = createFallbackAssistantResponse(
-    context,
-    prompt,
-    recentMessages,
-  );
-  const fallbackWithWarning: AssistantPlanReviewResponse = {
-    ...fallbackResponse,
-    assistantMessage: fallbackResponse.message,
+  const baseResponse = createContextOnlyAssistantResponse(context);
+  const baseWithWarning: AssistantPlanReviewResponse = {
+    ...baseResponse,
+    assistantMessage: baseResponse.message,
     contextStatus,
     dataWarning: warning,
-    message: fallbackResponse.message,
+    message: baseResponse.message,
   };
 
   if (isAssistantStatusQuestion(prompt)) {
     const response = loadedWorkflow
       ? createAuthoritativeStatusResponse({
-          baseResponse: fallbackWithWarning,
+          baseResponse: baseWithWarning,
           loaded: loadedWorkflow,
           planningContext: context,
         })
@@ -1921,7 +1924,7 @@ export async function POST(request: NextRequest) {
           planningContext: context,
           prompt,
           response: {
-            ...fallbackWithWarning,
+            ...baseWithWarning,
             actions: [],
             assistantMessage:
               "No. I found no persisted proposal or applied record for this conversation.",
@@ -2004,11 +2007,14 @@ export async function POST(request: NextRequest) {
               day: "numeric",
               weekday: "long",
               year: "numeric",
-            }).format(new Date(`${pendingProposal.date}T00:00:00`))} from ${
+            }).format(new Date(`${pendingProposal.date}T00:00:00`))} · ${
               formatTimeInputLabel(pendingProposal.startTime)
-            } for ${pendingProposal.durationMinutes / 60} hour${
-              pendingProposal.durationMinutes === 60 ? "" : "s"
-            }.`,
+            }–${formatTimeInputLabel(
+              addMinutesToTimeInput(
+                pendingProposal.startTime,
+                pendingProposal.durationMinutes,
+              ),
+            )}.`,
             confidence: 0.98,
             summary: pendingProposal.details,
             rationale:
@@ -2062,7 +2068,7 @@ export async function POST(request: NextRequest) {
       response: {
         actions: suggestions,
         assistantMessage: schedulingTurn.message,
-        context: fallbackWithWarning.context,
+        context: baseWithWarning.context,
         contextStatus,
         dataWarning: warning,
         message: schedulingTurn.message,
@@ -2105,7 +2111,7 @@ export async function POST(request: NextRequest) {
       response: {
         actions: [],
         assistantMessage: multiItemClarification,
-        context: fallbackWithWarning.context,
+        context: baseWithWarning.context,
         contextStatus,
         dataWarning: warning,
         message: multiItemClarification,
@@ -2148,7 +2154,7 @@ export async function POST(request: NextRequest) {
       response: {
         actions: [],
         assistantMessage: message,
-        context: fallbackWithWarning.context,
+        context: baseWithWarning.context,
         contextStatus,
         dataWarning: warning,
         message,
@@ -2176,6 +2182,19 @@ export async function POST(request: NextRequest) {
       send({ type: "final", response });
     });
   }
+
+  const fallbackResponse = createFallbackAssistantResponse(
+    context,
+    prompt,
+    recentMessages,
+  );
+  const fallbackWithWarning: AssistantPlanReviewResponse = {
+    ...fallbackResponse,
+    assistantMessage: fallbackResponse.message,
+    contextStatus,
+    dataWarning: warning,
+    message: fallbackResponse.message,
+  };
 
   return createNdjsonStream(async (send) => {
     if (

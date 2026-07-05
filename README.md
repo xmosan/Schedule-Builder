@@ -28,12 +28,12 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `https://schedule-builder-ruddy.vercel.app`
    - Any Vercel preview URLs you want to test
 7. In Supabase SQL Editor, run the SQL in `supabase/schema.sql`.
-   - This creates `projects`, `weekly_plan_blocks`, `planner_profiles`, `work_shifts`, `imported_calendar_events`, and `google_calendar_connections`.
+   - This creates `projects`, `weekly_plan_blocks`, `planner_profiles`, `work_shifts`, `schedule_exceptions`, `imported_calendar_events`, and `google_calendar_connections`.
    - `planner_profiles` stores onboarding answers and uses Row Level Security so each user only sees their own setup.
    - `work_shifts` stores manual work availability and uses Row Level Security so each user only sees their own shifts.
    - `imported_calendar_events` stores reviewed ICS imports and synced external calendar events. Row Level Security keeps each user's events scoped to their account.
    - `google_calendar_connections` stores server-only Google Calendar OAuth tokens. RLS is enabled with no client policies; app API routes access it with `SUPABASE_SERVICE_ROLE_KEY`.
-   - Run `supabase/assistant-conversations.sql`, `supabase/assistant-workflows.sql`, and `supabase/weekly-plan-occurrences.sql` to enable persisted Assistant threads, canonical proposals, and date-specific recurring-series occurrences.
+   - Run `supabase/assistant-conversations.sql`, `supabase/assistant-workflows.sql`, `supabase/schedule-exceptions.sql`, and `supabase/weekly-plan-occurrences.sql` to enable persisted Assistant threads, canonical proposals, temporary schedule changes, and date-specific recurring-series occurrences.
    - If your existing Supabase project already has the scheduler tables, run the relevant standalone SQL files, including `supabase/assistant-workflows.sql` before deploying the canonical Assistant workflow routes.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.

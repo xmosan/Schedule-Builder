@@ -17,6 +17,21 @@ export type RelevantNotice = {
   requiresDecision: boolean;
 };
 
+export function createRelevantNoticeId(
+  insight: AssistantSuggestion,
+  workflowId = "general",
+  sourceVersion = "v1",
+) {
+  const affectedDate = insight.itemDate ?? insight.exceptionDate ?? insight.day ?? "undated";
+  const affectedItem = insight.projectName ?? insight.title;
+  const stableIdentity = `${affectedDate}:${affectedItem}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 90);
+  return `notice:${workflowId}:${insight.type}:${stableIdentity || "general"}:${sourceVersion}`;
+}
+
 export type AssistantResponsePlan = {
   activityReference?: string;
   maximumDetailLevel: "brief" | "standard" | "expanded";
@@ -87,7 +102,9 @@ function getMode(context: AssistantSchedulingContext | null | undefined) {
   ) {
     return context.semanticRequest?.contradictions.some(
       (conflict) => !conflict.resolved,
-    )
+    ) ||
+      context.semanticRequest?.weeklyGoal?.recommendedPattern.status ===
+        "pending"
       ? ("recommendation" as const)
       : ("clarification" as const);
   }
@@ -125,7 +142,7 @@ export function createAssistantResponsePlan({
   const mode = getMode(context);
   const notices = gateAssistantInsights({ actions, insights, prompt }).kept.map(
     (insight) => ({
-      id: insight.id,
+      id: createRelevantNoticeId(insight, context?.workflowId),
       message: insight.description,
       requiresDecision: true,
     }),

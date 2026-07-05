@@ -9,6 +9,15 @@ import {
 import { getCurrentWeekStart } from "../lib/calendar";
 import { weekDays } from "../lib/weekly-plan";
 import { getUserFacingError } from "../lib/user-facing-error";
+import {
+  getEffectiveWorkShiftsForDate,
+  getScheduleExceptionLoadStatus,
+  type ScheduleException,
+} from "../lib/schedule-exceptions";
+import {
+  createEmptyAssistantConversation,
+  parseAssistantConversationSnapshot,
+} from "../lib/assistant-conversation";
 
 function toIsoDate(date: Date) {
   const year = date.getFullYear();
@@ -194,10 +203,73 @@ function runUserFacingErrorSafetyCases() {
   );
 }
 
+function runScheduleExceptionLoadingCases() {
+  const empty = getScheduleExceptionLoadStatus([], null);
+  assert.equal(empty.loaded, true);
+  assert.equal(empty.contextStatus.state, "empty");
+  assert.equal(empty.warning, null);
+
+  const missingTable = getScheduleExceptionLoadStatus(
+    [],
+    new Error("Could not find schedule_exceptions in the schema cache"),
+  );
+  assert.equal(missingTable.loaded, false);
+  assert.equal(missingTable.contextStatus.state, "failed");
+  assert.doesNotMatch(missingTable.warning ?? "", /schema cache|supabase/i);
+
+  const exception: ScheduleException = {
+    createdBy: "user",
+    date: "2026-07-01",
+    exceptionType: "modify_shift",
+    id: "exception-1",
+    notes: "Leave early",
+    originalEndTime: "17:00",
+    originalStartTime: "08:00",
+    overrideEndTime: "13:00",
+    overrideStartTime: "08:00",
+    relatedWorkShiftId: "shift-1",
+    title: "Leave early",
+  };
+  const shifts = [
+    {
+      day: "Wednesday" as const,
+      endTime: "17:00",
+      id: "shift-1",
+      location: "",
+      notes: "",
+      recurring: true,
+      startTime: "08:00",
+    },
+  ];
+  assert.equal(
+    getEffectiveWorkShiftsForDate(shifts, [exception], "2026-07-01", "Wednesday")[0]
+      ?.endTime,
+    "13:00",
+  );
+  assert.equal(
+    getEffectiveWorkShiftsForDate(shifts, [exception], "2026-07-08", "Wednesday")[0]
+      ?.endTime,
+    "17:00",
+  );
+}
+
+function runNoticePersistenceCases() {
+  const snapshot = createEmptyAssistantConversation();
+  snapshot.acknowledgedNoticeIds = ["notice:workflow:conflict:item:v1"];
+  snapshot.dismissedNoticeIds = ["notice:workflow:deadline:item:v1"];
+  const restored = parseAssistantConversationSnapshot(
+    JSON.parse(JSON.stringify(snapshot)),
+  );
+  assert.deepEqual(restored?.acknowledgedNoticeIds, snapshot.acknowledgedNoticeIds);
+  assert.deepEqual(restored?.dismissedNoticeIds, snapshot.dismissedNoticeIds);
+}
+
 runExactMsaWorkflow();
 runCorrectionAndValidationCases();
 runUnavailableAndBoundaryCases();
 runEarlyDepartureWorkflow();
 runUserFacingErrorSafetyCases();
+runScheduleExceptionLoadingCases();
+runNoticePersistenceCases();
 
-console.log("Assistant workflow tests passed (5 suites, 30 assertions).\n");
+console.log("Assistant workflow tests passed (7 suites).\n");

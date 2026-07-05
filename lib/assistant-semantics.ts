@@ -19,6 +19,7 @@ export type PlanningConstraint = {
   code:
     | "minimum_session_duration"
     | "maximum_weekly_minutes"
+    | "weekly_commitment"
     | "recurrence_interval"
     | "planning_horizon"
     | "deadline"
@@ -84,8 +85,29 @@ export type SemanticPlanningRequest = {
     preferredDays?: string[];
     preferredTimes?: string[];
     sessionDurationMinutes?: number;
+    weeklyMinutes?: number;
   };
+  weeklyGoal?: WeeklyRecurringGoal;
   workflowId: string;
+};
+
+export type WeeklyRecurringGoal = {
+  activityTitle: string;
+  occurrenceProposalIds: string[];
+  purpose?: string;
+  recommendedPattern: {
+    durationMinutes: number;
+    rationale: string;
+    sessionsPerWeek: number;
+    status: "pending" | "accepted" | "rejected";
+  };
+  recurrence: {
+    endDate?: string;
+    frequency: "weekly";
+    numberOfWeeks?: number;
+    startDate?: string;
+  };
+  weeklyMinutes: number;
 };
 
 export type RecurringSeriesProposal = {
@@ -108,6 +130,7 @@ export type RecurringSeriesProposal = {
   status: "pending" | "partially_applied" | "applied" | "rejected";
   title: string;
   totalOccurrences: number;
+  weeklyTotalMinutes: number;
   workflowId: string;
 };
 
@@ -251,14 +274,75 @@ function inferPurpose(prompt: string, title: string, previousPurpose?: string) {
 }
 
 function parseDurationMinutes(prompt: string) {
+  const withoutWeeklyCommitment = removeWeeklyCommitmentPhrase(prompt);
   if (/\bhalf (?:an )?hour\b/i.test(prompt)) return 30;
-  const minutes = prompt.match(/\b(\d+)\s*(?:minutes?|mins?)\b/i);
+  const minutes = withoutWeeklyCommitment.match(/\b(\d+)\s*(?:minutes?|mins?)\b/i);
   if (minutes) return Number(minutes[1]);
-  const hours = prompt.match(
+  const hours = withoutWeeklyCommitment.match(
     /\b(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*(?:hours?|hrs?)\b/i,
   );
   const value = parseNumber(hours?.[1]);
   return value ? Math.round(value * 60) : null;
+}
+
+const weeklyCommitmentPattern =
+  /\b(?:(at least|minimum(?: of)?|no less than|up to|no more than|at most|maximum(?: of)?|about|around|roughly)\s+)?(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*(hours?|hrs?|minutes?|mins?)\s*(?:each|per|every|a)\s+week\b|\b(?:(at least|minimum(?: of)?|no less than|up to|no more than|at most|maximum(?: of)?|about|around|roughly)\s+)?(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*(hours?|hrs?|minutes?|mins?)\s+weekly\b/i;
+
+export type WeeklyCommitment = {
+  kind: "minimum" | "maximum" | "target";
+  minutes: number;
+  sourceText: string;
+};
+
+export function parseWeeklyCommitment(prompt: string): WeeklyCommitment | null {
+  const match = prompt.match(weeklyCommitmentPattern);
+  if (!match) return null;
+  const qualifier = (match[1] ?? match[4] ?? "").toLowerCase();
+  const amount = parseNumber(match[2] ?? match[5]);
+  const unit = match[3] ?? match[6];
+  if (!amount || !unit) return null;
+  const kind = /up to|no more|at most|maximum/.test(qualifier)
+    ? "maximum"
+    : /at least|minimum|no less/.test(qualifier)
+      ? "minimum"
+      : "target";
+  return {
+    kind,
+    minutes: /min/i.test(unit) ? Math.round(amount) : Math.round(amount * 60),
+    sourceText: match[0],
+  };
+}
+
+export function removeWeeklyCommitmentPhrase(prompt: string) {
+  return prompt.replace(weeklyCommitmentPattern, " ");
+}
+
+function recommendWeeklyPattern(
+  weeklyMinutes: number,
+  itemType: SemanticPlanningItemType,
+) {
+  const splitFriendly = [
+    "reading",
+    "study",
+    "preparation",
+    "recurring_activity",
+    "time_block_series",
+    "workout",
+  ].includes(itemType);
+  const sessionsPerWeek = splitFriendly && weeklyMinutes >= 180
+    ? 3
+    : splitFriendly && weeklyMinutes >= 120
+      ? 2
+      : 1;
+  return {
+    durationMinutes: Math.ceil(weeklyMinutes / sessionsPerWeek / 5) * 5,
+    rationale:
+      sessionsPerWeek > 1
+        ? "Shorter sessions are easier to maintain than one long block."
+        : "One session covers the weekly commitment without unnecessary splitting.",
+    sessionsPerWeek,
+    status: "pending" as const,
+  };
 }
 
 function parsePlanningHorizon(prompt: string) {
@@ -353,14 +437,29 @@ export function extractSemanticPlanningRequest({
   workflowId?: string;
 }): SemanticPlanningRequest {
   const title = inferSemanticActivityTitle(prompt, previous?.activity.title);
+  const weeklyCommitment = parseWeeklyCommitment(prompt);
+  const previousWeeklyMinutes = previous?.weeklyGoal?.weeklyMinutes ??
+    previous?.scheduleInstructions.weeklyMinutes;
+  const weeklyMinutes = weeklyCommitment?.kind === "maximum"
+    ? previousWeeklyMinutes
+    : weeklyCommitment?.minutes ?? previousWeeklyMinutes;
   const planningHorizon = parsePlanningHorizon(prompt) ?? previous?.scheduleInstructions.planningHorizon;
   const intervalDays = parseIntervalDays(prompt) ?? previous?.scheduleInstructions.desiredFrequency?.intervalDays;
   const sessionCount = parseSessionsPerWeek(prompt) ?? previous?.scheduleInstructions.desiredFrequency?.count;
   const durationMinutes = parseDurationMinutes(prompt) ?? previous?.scheduleInstructions.sessionDurationMinutes;
   const maximumWeeklyMinutes =
-    parseMaximumWeeklyMinutes(prompt) ?? previous?.scheduleInstructions.maximumWeeklyMinutes;
-  const hasRecurringInstructions = Boolean(planningHorizon || intervalDays || sessionCount);
+    parseMaximumWeeklyMinutes(prompt) ??
+    (weeklyCommitment?.kind === "maximum" ? weeklyCommitment.minutes : null) ??
+    previous?.scheduleInstructions.maximumWeeklyMinutes;
+  const hasRecurringInstructions = Boolean(
+    planningHorizon || intervalDays || sessionCount || weeklyMinutes,
+  );
   const purpose = inferPurpose(prompt, title, previous?.activity.purpose);
+  const itemType = inferItemType(prompt, title, hasRecurringInstructions);
+  const previousPattern = previous?.weeklyGoal?.recommendedPattern;
+  const recommendedPattern = weeklyMinutes
+    ? previousPattern ?? recommendWeeklyPattern(weeklyMinutes, itemType)
+    : undefined;
   const constraints: PlanningConstraint[] = [];
   if (planningHorizon) {
     constraints.push({
@@ -390,6 +489,13 @@ export function extractSemanticPlanningRequest({
       fields: ["maximumWeeklyMinutes"],
     });
   }
+  if (weeklyMinutes) {
+    constraints.push({
+      code: "weekly_commitment",
+      description: `${weeklyMinutes} minutes per week`,
+      fields: ["weeklyMinutes"],
+    });
+  }
 
   const contradictions: ConstraintConflict[] = [];
   if (intervalDays && durationMinutes && maximumWeeklyMinutes) {
@@ -417,8 +523,13 @@ export function extractSemanticPlanningRequest({
   }
 
   const missingFields = [
-    ...(hasRecurringInstructions && !durationMinutes ? ["duration"] : []),
-    ...(hasRecurringInstructions && !intervalDays && !sessionCount ? ["frequency"] : []),
+    ...(weeklyMinutes && recommendedPattern?.status === "pending"
+      ? ["pattern_confirmation"]
+      : []),
+    ...(hasRecurringInstructions && !weeklyMinutes && !durationMinutes ? ["duration"] : []),
+    ...(hasRecurringInstructions && !weeklyMinutes && !intervalDays && !sessionCount
+      ? ["frequency"]
+      : []),
     ...(contradictions.length > 0 ? ["constraint_resolution"] : []),
   ];
   const resolvedWorkflowId = workflowId ?? previous?.workflowId ?? `workflow-${Date.now()}`;
@@ -433,7 +544,7 @@ export function extractSemanticPlanningRequest({
     },
     constraints,
     contradictions,
-    itemType: inferItemType(prompt, title, hasRecurringInstructions),
+    itemType,
     missingFields,
     relatedProject: findRelatedProject(projects, title, prompt),
     requestId: requestId ?? previous?.requestId ?? `request-${Date.now()}`,
@@ -449,9 +560,89 @@ export function extractSemanticPlanningRequest({
       minimumSessionDurationMinutes: durationMinutes,
       planningHorizon,
       sessionDurationMinutes: durationMinutes,
+      weeklyMinutes,
     },
+    ...(weeklyMinutes && recommendedPattern
+      ? {
+          weeklyGoal: {
+            activityTitle: title,
+            occurrenceProposalIds:
+              previous?.weeklyGoal?.occurrenceProposalIds ?? [],
+            purpose,
+            recommendedPattern,
+            recurrence: {
+              frequency: "weekly" as const,
+              ...(planningHorizon?.unit === "week"
+                ? { numberOfWeeks: planningHorizon.count }
+                : {}),
+            },
+            weeklyMinutes,
+          },
+        }
+      : {}),
     workflowId: resolvedWorkflowId,
   };
+}
+
+export function acceptRecommendedWeeklyPattern(
+  request: SemanticPlanningRequest,
+) {
+  const pattern = request.weeklyGoal?.recommendedPattern;
+  if (!request.weeklyGoal || !pattern || pattern.status !== "pending") {
+    return request;
+  }
+  return {
+    ...request,
+    missingFields: request.missingFields.filter(
+      (field) => field !== "pattern_confirmation",
+    ),
+    scheduleInstructions: {
+      ...request.scheduleInstructions,
+      desiredFrequency: {
+        count: pattern.sessionsPerWeek,
+        period: "week" as const,
+      },
+      sessionDurationMinutes: pattern.durationMinutes,
+    },
+    weeklyGoal: {
+      ...request.weeklyGoal,
+      recommendedPattern: {
+        ...pattern,
+        status: "accepted" as const,
+      },
+    },
+  };
+}
+
+export function rejectRecommendedWeeklyPattern(
+  request: SemanticPlanningRequest,
+) {
+  if (!request.weeklyGoal) return request;
+  return {
+    ...request,
+    weeklyGoal: {
+      ...request.weeklyGoal,
+      recommendedPattern: {
+        ...request.weeklyGoal.recommendedPattern,
+        status: "rejected" as const,
+      },
+    },
+  };
+}
+
+export function calculateWeeklyProposalMinutes(
+  proposals: Array<{ date: string; durationMinutes: number | null }>,
+  startDate: string,
+) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return proposals.reduce((total, proposal) => {
+    const date = new Date(`${proposal.date}T00:00:00`);
+    return date >= start && date < end
+      ? total + (proposal.durationMinutes ?? 0)
+      : total;
+  }, 0);
 }
 
 export function acceptRecommendedConstraintResolution(
@@ -563,5 +754,11 @@ export function normalizeRecurringSeriesProposal(
   ) {
     return null;
   }
-  return candidate as RecurringSeriesProposal;
+  return {
+    ...(candidate as RecurringSeriesProposal),
+    weeklyTotalMinutes:
+      typeof candidate.weeklyTotalMinutes === "number"
+        ? candidate.weeklyTotalMinutes
+        : candidate.pattern.sessionsPerWeek * candidate.pattern.durationMinutes,
+  };
 }
