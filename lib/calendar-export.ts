@@ -160,10 +160,14 @@ export function generateWeeklyPlanIcs(
     .map((block, index) => ({
       block,
       index,
+      dateKey: block.scheduledDate ?? "",
       dayOffset: weekDays.indexOf(block.day),
       startMinutes: parseStartTimeToMinutes(block.startTime),
     }))
     .sort((first, second) => {
+      if (first.dateKey !== second.dateKey) {
+        return first.dateKey.localeCompare(second.dateKey);
+      }
       if (first.dayOffset !== second.dayOffset) {
         return first.dayOffset - second.dayOffset;
       }
@@ -203,14 +207,21 @@ export function generateWeeklyPlanIcs(
       return;
     }
 
-    const eventDate = addDays(weekStartDate, dayOffset);
+    const eventDate = block.scheduledDate
+      ? parseDateInput(block.scheduledDate)
+      : addDays(weekStartDate, dayOffset);
+    if (!eventDate) {
+      warnings.push(`Skipped "${block.projectName}" because its date is invalid.`);
+      return;
+    }
     const explicitStartMinutes = parseStartTimeToMinutes(block.startTime);
+    const dayKey = block.scheduledDate ?? block.day;
     const startMinutes =
-      explicitStartMinutes ?? nextStartByDay.get(block.day) ?? defaultDayStartMinutes;
+      explicitStartMinutes ?? nextStartByDay.get(dayKey) ?? defaultDayStartMinutes;
     const endMinutes = startMinutes + durationMinutes;
 
     if (explicitStartMinutes === null) {
-      nextStartByDay.set(block.day, endMinutes);
+      nextStartByDay.set(dayKey, endMinutes);
     }
 
     const startDate = setMinutesFromStartOfDay(eventDate, startMinutes);

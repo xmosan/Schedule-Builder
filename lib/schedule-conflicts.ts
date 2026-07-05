@@ -260,7 +260,13 @@ export function weeklyPlanBlockOverlapsImportedEvent(
     return false;
   }
 
-  const blockDate = getWeekDateForDay(block.day, weekStart);
+  const scheduledDate = block.scheduledDate
+    ? new Date(`${block.scheduledDate}T00:00:00`)
+    : null;
+  const blockDate =
+    scheduledDate && !Number.isNaN(scheduledDate.getTime())
+      ? scheduledDate
+      : getWeekDateForDay(block.day, weekStart);
   const eventStart = new Date(event.startsAt);
 
   if (Number.isNaN(eventStart.getTime())) {

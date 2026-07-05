@@ -56,6 +56,11 @@ import {
   type LoadedAssistantWorkflow,
 } from "@/lib/assistant-workflow-store";
 import {
+  createAssistantResponsePlan,
+  gateAssistantInsights,
+  validateResponsePlan,
+} from "@/lib/assistant-presentation";
+import {
   fetchPlannerProfileForUser,
   fetchImportedCalendarEventsForUser,
   fetchProjectsForUser,
@@ -126,9 +131,15 @@ function finalizeAssistantResponse({
         )
       : response.suggestions;
   const actionable = suggestions.filter(isAssistantMutationSuggestion);
-  const insights = suggestions.filter(
+  const ungatedInsights = suggestions.filter(
     (suggestion) => !isAssistantMutationSuggestion(suggestion),
   );
+  const insightGate = gateAssistantInsights({
+    actions: actionable,
+    insights: ungatedInsights,
+    prompt,
+  });
+  const insights = insightGate.kept;
   const completionStatus =
     schedulingContext?.state === "applied" && schedulingContext.appliedRecords.length > 0
       ? ("records_applied" as const)
@@ -175,7 +186,27 @@ function finalizeAssistantResponse({
       "No. I found no persisted proposal or applied record for this conversation.";
   }
 
+  const responsePlan = createAssistantResponsePlan({
+    actions: actionable,
+    context: schedulingContext,
+    insights,
+    message: responseText,
+    prompt,
+  });
+  const responseValidation = validateResponsePlan(
+    responsePlan,
+    schedulingContext?.semanticRequest,
+  );
+  responseText = responsePlan.primaryMessage;
   const guarded = validateAssistantCompletionLanguage(responseText, completionStatus);
+  if (insightGate.suppressed.length > 0 || !responseValidation.valid) {
+    logAssistantDiagnostic("response_relevance_validated", {
+      fallbackPath: responseValidation.problems.join(",") || "none",
+      proposalCount: actionable.length,
+      responseValidation: responseValidation.valid ? "passed" : "replaced",
+      suppressedNoteCount: insightGate.suppressed.length,
+    });
+  }
   const turnResult = createAssistantTurnResult({
     completionStatus,
     contextStatus,
@@ -196,22 +227,35 @@ function finalizeAssistantResponse({
     assistantMessage: guarded.responseText,
     insights,
     message: guarded.responseText,
+    responsePlan: {
+      ...responsePlan,
+      primaryMessage: guarded.responseText,
+    },
     suggestions: insights,
     turnResult,
   };
 }
 
 type AssistantDiagnostic = {
+  activityTitle?: string;
   candidateCount?: number;
   extractedItemCount?: number;
   fallbackPath?: string;
   intent?: string;
+  itemType?: string;
   missingFields?: string[];
   nextState?: string;
   persistenceResult?: string;
   previousState?: string;
   proposalCount?: number;
+  purpose?: string;
+  recurrence?: string;
+  responseLength?: number;
   responseValidation?: string;
+  suppressedNoteCount?: number;
+  planningHorizon?: string;
+  constraintConflictCount?: number;
+  proposalSeriesCount?: number;
   threadId?: string | null;
   workflowId?: string | null;
 };
@@ -416,14 +460,36 @@ async function persistCanonicalWorkflowResponse({
   const completionStatus = loaded.workflow.completionStatus;
   const guarded = validateAssistantCompletionLanguage(response.message, completionStatus);
   logAssistantDiagnostic("workflow_persisted", {
+    activityTitle: loaded.workflow.context?.semanticRequest?.activity.title,
     candidateCount: loaded.workflow.context?.candidateWindows.length ?? 0,
+    constraintConflictCount:
+      loaded.workflow.context?.semanticRequest?.contradictions.length ?? 0,
     extractedItemCount: loaded.workflow.extractedItems.length,
     intent: loaded.workflow.intent,
+    itemType: loaded.workflow.context?.semanticRequest?.itemType,
     missingFields: loaded.workflow.missingFields,
     nextState: loaded.workflow.state,
     persistenceResult: "persisted",
     previousState: previous?.workflow.state ?? "none",
     proposalCount: pendingProposals.length,
+    proposalSeriesCount:
+      loaded.workflow.context?.seriesProposal?.totalOccurrences ?? 0,
+    purpose: loaded.workflow.context?.semanticRequest?.activity.purpose,
+    recurrence: loaded.workflow.context?.semanticRequest?.scheduleInstructions
+      .desiredFrequency
+      ? JSON.stringify(
+          loaded.workflow.context.semanticRequest.scheduleInstructions
+            .desiredFrequency,
+        )
+      : undefined,
+    planningHorizon: loaded.workflow.context?.semanticRequest
+      ?.scheduleInstructions.planningHorizon
+      ? JSON.stringify(
+          loaded.workflow.context.semanticRequest.scheduleInstructions
+            .planningHorizon,
+        )
+      : undefined,
+    responseLength: guarded.responseText.length,
     responseValidation: guarded.mismatch ? "replaced" : "passed",
     threadId,
     workflowId,
@@ -474,10 +540,12 @@ function createAuthoritativeStatusResponse({
     loaded.proposals,
   );
   const title =
+    loaded.workflow.context?.semanticRequest?.activity.title ??
     loaded.workflow.extractedItems[0]?.title ??
     loaded.workflow.context?.purpose ??
     "The requested item";
   let message: string;
+  const series = loaded.workflow.context?.seriesProposal;
 
   if (applied.length > 0 && pending.length === 0) {
     const lines = applied
@@ -489,15 +557,17 @@ function createAuthoritativeStatusResponse({
             proposal.startTime,
           )}–${formatTimeInputLabel(proposal.endTime)}`,
       );
-    message = `Yes. ${applied.length} ${title} session${
-      applied.length === 1 ? " was" : "s were"
-    } added${lines.length > 0 ? `:\n\n${lines.join("\n")}` : "."}`;
+    message = series && applied.length > 5
+      ? `Yes. ${applied.length} ${title} sessions were added across ${series.planningHorizon.weeks} weeks.`
+      : `Yes. ${applied.length} ${title} session${
+          applied.length === 1 ? " was" : "s were"
+        } added${lines.length > 0 ? `:\n\n${lines.join("\n")}` : "."}`;
   } else if (applied.length > 0 && pending.length > 0) {
     message = `Partly. ${applied.length} session${
       applied.length === 1 ? " was" : "s were"
     } added, and ${pending.length} ${pending.length === 1 ? "is" : "are"} still awaiting approval.`;
   } else if (pending.length > 0) {
-    message = `Not yet. ${pending.length === 1 ? "The session is" : `The ${pending.length} sessions are`} waiting for your approval.`;
+    message = `Not yet. ${pending.length === 1 ? `The ${title} session is` : `The ${pending.length} ${title} sessions are`} waiting for your approval.`;
   } else {
     const missing = loaded.workflow.missingFields;
     message = `No. ${title} has not been added yet.${
@@ -1231,7 +1301,7 @@ function createAiPrompt(
     "Do not create suggestion cards for every response.",
     "Return zero suggestions for direct questions, analysis/review requests, Google sync status questions, and open-time searches unless the user clearly asks to change the plan.",
     "Only generate suggestion cards when the user clearly asks to create, add, move, update, schedule, plan, or generate blocks/projects.",
-    "For 'find open time' requests, list open windows in the message and ask whether the user wants to turn one into a time block. Return zero suggestions unless they asked to create blocks.",
+    "For 'find open time' requests, recommend the strongest one or two patterns. List every opening only when the user explicitly asks for all openings. Return zero suggestions unless they asked to create blocks.",
     "Limit suggestions to 2-4 high-quality items by default.",
     "Return at most 2 warning-style suggestions.",
     "Avoid duplicate or near-duplicate cards.",
@@ -1468,7 +1538,7 @@ function createAssistantMessagePrompt(
     "If the user asks a normal question, answer it first.",
     "If the user asks for analysis, sync status, or open time, answer directly and do not promise action cards.",
     "Only mention review cards when the user clearly asks to create, add, move, update, schedule, plan, or generate blocks/projects.",
-    "For 'find open time' requests, list open windows or likely openings and ask whether the user wants to turn one into a time block.",
+    "For 'find open time' requests, recommend the strongest one or two patterns. Show every opening only when the user explicitly asks for all options.",
     "For questions about tasks or appointments, answer from scheduledItems context and do not create cards unless the user asks to add or schedule something.",
     "If the user asks to add an exact-date task, appointment, reminder, or errand, say you can draft it for review. Never say it was saved.",
     "If work shifts exist, treat them as blocked time and reference them naturally for planning requests.",

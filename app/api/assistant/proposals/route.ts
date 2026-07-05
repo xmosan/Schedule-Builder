@@ -2,10 +2,16 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
   loadAssistantWorkflowById,
+  persistAssistantWorkflow,
   updateAssistantProposalResults,
 } from "@/lib/assistant-workflow-store";
 import { getUserFacingError } from "@/lib/user-facing-error";
-import { getCanonicalPendingProposals } from "@/lib/assistant-workflow";
+import {
+  createCanonicalProposal,
+  getCanonicalPendingProposals,
+} from "@/lib/assistant-workflow";
+import type { AssistantSuggestion } from "@/lib/assistant";
+import { validateSemanticTitle } from "@/lib/assistant-semantics";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +71,7 @@ export async function PATCH(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as {
     action?: unknown;
     proposalId?: unknown;
+    suggestion?: unknown;
     workflowId?: unknown;
   };
   const workflowId =
@@ -72,9 +79,13 @@ export async function PATCH(request: NextRequest) {
   const proposalId =
     typeof body.proposalId === "string" ? body.proposalId.trim() : "";
 
-  if (body.action !== "reject" || !workflowId || !proposalId) {
+  if (
+    (body.action !== "reject" && body.action !== "update") ||
+    !workflowId ||
+    !proposalId
+  ) {
     return NextResponse.json(
-      { error: "Send a workflowId, proposalId, and reject action." },
+      { error: "Send a workflowId, proposalId, and a supported action." },
       { status: 400 },
     );
   }
@@ -99,6 +110,109 @@ export async function PATCH(request: NextRequest) {
       { error: "That proposal is missing or has already been handled." },
       { status: 409 },
     );
+  }
+
+  if (body.action === "update") {
+    if (typeof body.suggestion !== "object" || body.suggestion === null) {
+      return NextResponse.json(
+        { error: "Send the updated proposal details." },
+        { status: 400 },
+      );
+    }
+    let candidateSuggestion = {
+      ...(body.suggestion as AssistantSuggestion),
+      batchId: proposal.batchId ?? undefined,
+      id: proposal.id,
+      workflowId,
+    };
+    if (candidateSuggestion.type === "suggested_weekly_block") {
+      const title = validateSemanticTitle(
+        candidateSuggestion.projectName ?? candidateSuggestion.title,
+        loaded.data.workflow.context?.semanticRequest,
+      );
+      if (!title) {
+        return NextResponse.json(
+          { error: "Use a title that describes the activity, not a scheduling command." },
+          { status: 400 },
+        );
+      }
+      candidateSuggestion = {
+        ...candidateSuggestion,
+        projectName: title,
+        title,
+      };
+    }
+    const rebuilt = createCanonicalProposal(candidateSuggestion);
+    if (!rebuilt) {
+      return NextResponse.json(
+        { error: "The edited proposal is incomplete or invalid." },
+        { status: 400 },
+      );
+    }
+    const updatedProposal = {
+      ...rebuilt,
+      approvalStatus: proposal.approvalStatus,
+      batchId: proposal.batchId,
+      createdAt: proposal.createdAt,
+    };
+    const context = loaded.data.workflow.context;
+    const timeBlock = updatedProposal.timeBlock;
+    const nextWorkflow = {
+      ...loaded.data.workflow,
+      context:
+        context && timeBlock
+          ? {
+              ...context,
+              pendingProposal:
+                context.pendingProposal?.id === proposalId
+                  ? {
+                      ...context.pendingProposal,
+                      date: timeBlock.date,
+                      details: timeBlock.details ?? "",
+                      durationMinutes: timeBlock.durationMinutes,
+                      selectedWindowEnd: timeBlock.endTime,
+                      startTime: timeBlock.startTime,
+                      title: timeBlock.title,
+                    }
+                  : context.pendingProposal,
+              pendingProposals: context.pendingProposals.map((pending) =>
+                pending.id === proposalId
+                  ? {
+                      ...pending,
+                      date: timeBlock.date,
+                      details: timeBlock.details ?? "",
+                      durationMinutes: timeBlock.durationMinutes,
+                      selectedWindowEnd: timeBlock.endTime,
+                      startTime: timeBlock.startTime,
+                      title: timeBlock.title,
+                    }
+                  : pending,
+              ),
+            }
+          : context,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    const persisted = await persistAssistantWorkflow(
+      authResult.supabase,
+      nextWorkflow,
+      loaded.data.proposals.map((candidate) =>
+        candidate.id === proposalId ? updatedProposal : candidate,
+      ),
+      loaded.data.batch,
+    );
+    console.info("assistant_workflow", {
+      event: "proposal_updated",
+      persistenceResult: persisted.error ? "failed" : "persisted",
+      proposalId,
+      workflowId,
+    });
+    if (persisted.error || !persisted.data) {
+      return NextResponse.json(
+        { error: "The edited proposal could not be saved." },
+        { status: 500 },
+      );
+    }
+    return NextResponse.json(persisted.data);
   }
 
   const updated = await updateAssistantProposalResults(

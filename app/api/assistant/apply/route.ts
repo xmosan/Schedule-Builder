@@ -64,7 +64,7 @@ import { getCanonicalPendingProposals } from "@/lib/assistant-workflow";
 
 export const dynamic = "force-dynamic";
 
-const maxApprovedSuggestions = 8;
+const maxApprovedSuggestions = 120;
 
 type ProjectRow = {
   user_id: string;
@@ -537,6 +537,8 @@ async function applyWeeklyBlockSuggestion({
     projectName,
     plannedTask,
     estimatedHours: suggestion.estimatedHours,
+    ...(suggestion.itemDate ? { scheduledDate: suggestion.itemDate } : {}),
+    ...(suggestion.batchId ? { seriesId: suggestion.batchId } : {}),
     ...(startTime ? { startTime } : {}),
   };
   const candidateStart = parseStartTimeToMinutes(startTime);
@@ -549,6 +551,12 @@ async function applyWeeklyBlockSuggestion({
       ? null
       : currentBlocks.find((block) => {
           if (block.day !== suggestion.day) return false;
+          if (
+            block.scheduledDate &&
+            block.scheduledDate !== createdDate
+          ) {
+            return false;
+          }
           const blockStart = parseStartTimeToMinutes(block.startTime);
           if (blockStart === null) return false;
           const blockEnd = blockStart + block.estimatedHours * 60;
@@ -1211,16 +1219,26 @@ export async function POST(request: NextRequest) {
   }
 
   const context = await loadContextSummary(authResult.supabase, authResult.userId);
+  const series = workflowUpdate.data.workflow.context?.seriesProposal;
+  const activityTitle =
+    workflowUpdate.data.workflow.context?.semanticRequest?.activity.title ??
+    "requested";
+  const activityReference = /read the sealed nectar/i.test(activityTitle)
+    ? "Sealed Nectar reading"
+    : activityTitle;
+  const applyMessage =
+    appliedCount > 0 && series && proposalIds.length > 5
+      ? failedCount > 0
+        ? `Partly. ${appliedCount} ${activityReference} sessions were added, and ${failedCount} still need attention.`
+        : `Yes. Added ${appliedCount} ${activityReference} sessions across the next ${series.planningHorizon.weeks} weeks.`
+      : appliedCount > 0
+        ? `${failedCount > 0 ? "Partly." : "Yes."} ${appliedMessages.join(" ")}`
+        : "No. I couldn’t apply the approved sessions. No success confirmation was recorded.";
   const response: AssistantApplyResponse = {
     canonicalProposals: workflowUpdate.data.proposals,
     completionStatus: workflowUpdate.data.workflow.completionStatus,
     context,
-    message:
-      appliedCount > 0
-        ? `${failedCount > 0 ? "Partly." : "Yes."} ${appliedMessages.join(
-            " ",
-          )}`
-        : "No. I couldn’t apply the approved sessions. No success confirmation was recorded.",
+    message: applyMessage,
     proposalBatch: workflowUpdate.data.batch,
     results,
     workflow: workflowUpdate.data.workflow,

@@ -28,6 +28,15 @@ import {
   parseRequestedSessionCount,
   type ExtractedPlanningItem,
 } from "@/lib/assistant-intelligence";
+import {
+  acceptRecommendedConstraintResolution,
+  extractSemanticPlanningRequest,
+  hasUnresolvedConstraintConflict,
+  normalizeRecurringSeriesProposal,
+  normalizeSemanticPlanningRequest,
+  type RecurringSeriesProposal,
+  type SemanticPlanningRequest,
+} from "@/lib/assistant-semantics";
 
 const dayStartDefault = 8 * 60;
 const dayEndDefault = 22 * 60;
@@ -46,6 +55,32 @@ const dayNameByIndex: Record<number, WeekDay> = {
 const dayPatternByDay = new Map(
   weekDays.map((day) => [day, new RegExp(`\\b${day}\\b`, "i")]),
 );
+const monthIndexByName: Record<string, number> = {
+  apr: 3,
+  april: 3,
+  aug: 7,
+  august: 7,
+  dec: 11,
+  december: 11,
+  feb: 1,
+  february: 1,
+  jan: 0,
+  january: 0,
+  jul: 6,
+  july: 6,
+  jun: 5,
+  june: 5,
+  mar: 2,
+  march: 2,
+  may: 4,
+  nov: 10,
+  november: 10,
+  oct: 9,
+  october: 9,
+  sep: 8,
+  sept: 8,
+  september: 8,
+};
 
 function getDefaultTimeZone() {
   try {
@@ -203,6 +238,8 @@ export type AssistantSchedulingContext = {
   purpose: string;
   requestedDurationMinutes: number | null;
   requestedSessionCount: number | null;
+  semanticRequest?: SemanticPlanningRequest | null;
+  seriesProposal?: RecurringSeriesProposal | null;
   selectedDate: string | null;
   selectedWindowId: string | null;
   selectedWindowEnd: string | null;
@@ -278,6 +315,7 @@ export function normalizeAssistantSchedulingContext(
     candidateWindows.length === 0 &&
     candidate.state !== "failed" &&
     candidate.state !== "awaiting_session_details" &&
+    candidate.state !== "needs_clarification" &&
     candidate.state !== "applied"
   ) {
     return null;
@@ -309,7 +347,7 @@ export function normalizeAssistantSchedulingContext(
         )
       : [],
     batchId: typeof candidate.batchId === "string" ? candidate.batchId : null,
-    candidateWindows: candidateWindows.slice(0, 28),
+    candidateWindows: candidateWindows.slice(0, 120),
     confirmationStatus: candidate.confirmationStatus,
     intent:
       candidate.intent === "find_open_time"
@@ -366,6 +404,8 @@ export function normalizeAssistantSchedulingContext(
       candidate.requestedSessionCount > 0
         ? candidate.requestedSessionCount
         : null,
+    semanticRequest: normalizeSemanticPlanningRequest(candidate.semanticRequest),
+    seriesProposal: normalizeRecurringSeriesProposal(candidate.seriesProposal),
     selectedDate:
       typeof candidate.selectedDate === "string" ? candidate.selectedDate : null,
     selectedWindowId:
@@ -532,10 +572,13 @@ function toIsoDate(date: Date) {
 
 function getWeekStart(weekStartDate?: string, timezone = getDefaultTimeZone()) {
   if (weekStartDate) {
-    const parsed = new Date(`${weekStartDate}T00:00:00`);
+    const match = weekStartDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const parsed = match
+      ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+      : new Date(Number.NaN);
 
     if (!Number.isNaN(parsed.getTime())) {
-      return toLocalDate(parsed);
+      return parsed;
     }
   }
 
@@ -548,6 +591,12 @@ function getWeekStart(weekStartDate?: string, timezone = getDefaultTimeZone()) {
 
 function getDayFromDate(date: Date): WeekDay {
   return dayNameByIndex[date.getDay()];
+}
+
+function getMondayForDate(date: Date) {
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + (date.getDay() === 0 ? -6 : 1 - date.getDay()));
+  return monday;
 }
 
 function getDateScopeForDay(day: WeekDay, weekStart: Date): DateScope {
@@ -939,6 +988,27 @@ function parseDateScopes(
   timezone = getDefaultTimeZone(),
 ) {
   const lowerPrompt = prompt.toLowerCase();
+  const isoDateMatch = prompt.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (isoDateMatch) {
+    const date = parseIsoDate(isoDateMatch[1]);
+    if (date) return [{ date: isoDateMatch[1], day: getDayFromDate(date) }];
+  }
+  const explicitDateMatch = prompt.match(
+    /\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i,
+  );
+  if (explicitDateMatch) {
+    const month = monthIndexByName[explicitDateMatch[1].toLowerCase()];
+    const dayOfMonth = Number(explicitDateMatch[2]);
+    const year = Number(explicitDateMatch[3]) || weekStart.getFullYear();
+    const date = new Date(year, month, dayOfMonth);
+    if (
+      date.getFullYear() === year &&
+      date.getMonth() === month &&
+      date.getDate() === dayOfMonth
+    ) {
+      return [{ date: toIsoDate(date), day: getDayFromDate(date) }];
+    }
+  }
   const mentionedDays = weekDays.filter((day) =>
     dayPatternByDay.get(day)?.test(prompt),
   );
@@ -1455,7 +1525,8 @@ export function buildNormalizedScheduleTimeline({
       return;
     }
 
-    const date = getDateScopeForDay(block.day, weekStart).date;
+    const date =
+      block.scheduledDate ?? getDateScopeForDay(block.day, weekStart).date;
 
     commitments.push(
       ...addCommitmentSegments({
@@ -1980,6 +2051,23 @@ function createOpenTimeAnswer({
   const countLabel = `${windows.length} useful opening${
     windows.length === 1 ? "" : "s"
   }`;
+  const requestsEveryOpening =
+    /\b(?:show|list|see)\s+(?:me\s+)?(?:all|every)(?:\s+\w+){0,3}\s+(?:openings?|options?|slots?|windows?)\b|\bwhen am i free\b/i.test(
+      prompt,
+    );
+
+  if (!requestsEveryOpening) {
+    const recommended = windows.slice(0, 3);
+    const labels = recommended.map(
+      (window) =>
+        `${window.day} ${formatWindowLabel(window)}`,
+    );
+    const recommendation =
+      labels.length === 1
+        ? labels[0]
+        : `${labels.slice(0, -1).join(", ")}, or ${labels[labels.length - 1]}`;
+    return `The strongest ${recommended.length === 1 ? "opening is" : "options are"} ${recommendation}.${durationNote}${missingContextNote}`;
+  }
 
   return `I found ${countLabel} after checking ${sourceSummary}:\n\n${formatOpenWindowList(
     windows,
@@ -2093,6 +2181,36 @@ function createBlockingAnswer({
   const missingContextNote = createMissingContextNote(loadWarning);
   const constraintNote = createConstraintNote(request);
   const allDayNote = createAllDayNote(getAllDayNotes(commitments, request.scopes));
+
+  if (request.isPointCheck && request.scopes.length === 1) {
+    const scope = request.scopes[0];
+    const date = parseIsoDate(scope.date);
+    const dateLabel = date
+      ? new Intl.DateTimeFormat("en-US", {
+          day: "numeric",
+          month: "long",
+          weekday: "long",
+        }).format(date)
+      : scope.date;
+    if (blockers.length === 0) {
+      return `You do not have anything scheduled at ${formatMinutes(
+        request.startMinutes,
+      )} on ${dateLabel}.${missingContextNote}`;
+    }
+    if (blockers.length === 1) {
+      const { commitment } = blockers[0];
+      return `You have “${commitment.title}” scheduled from ${formatMinutes(
+        commitment.startMinutes ?? request.startMinutes,
+      )}–${formatMinutes(
+        commitment.endMinutes ?? request.endMinutes,
+      )}.`;
+    }
+    return `You have ${blockers.length} items at ${formatMinutes(
+      request.startMinutes,
+    )} on ${dateLabel}: ${blockers
+      .map(({ commitment }) => `“${commitment.title}”`)
+      .join(", ")}.`;
+  }
 
   if (blockers.length === 0) {
     return `I do not see anything blocking ${formatScopeList(request.scopes)} ${
@@ -2404,6 +2522,9 @@ function selectDistributedWindows(
 
   if (firstByDate.length >= count) {
     if (count === 1) return [firstByDate[0]];
+    if (count === 3 && firstByDate.length >= 6) {
+      return [firstByDate[1], firstByDate[3], firstByDate[5]];
+    }
     const selected: AssistantOpenWindow[] = [];
     for (let index = 0; index < count; index += 1) {
       const position = Math.round((index * (firstByDate.length - 1)) / (count - 1));
@@ -2647,15 +2768,29 @@ function createRecurringSchedulingTurn({
   prompt: string;
 }): AssistantSchedulingConversationTurn | null {
   const isContinuation =
-    activeContext?.state === "awaiting_session_details" &&
-    activeContext.intent === "create_multiple_time_blocks";
+    activeContext?.intent === "create_multiple_time_blocks" &&
+    (activeContext.state === "awaiting_session_details" ||
+      activeContext.state === "needs_clarification");
   const extractedItems = isContinuation
     ? activeContext.extractedItems
     : extractPlanningItems(prompt, input.projects);
+  let semanticRequest = isContinuation && activeContext.semanticRequest
+    ? activeContext.semanticRequest
+    : extractSemanticPlanningRequest({
+        previous: activeContext?.semanticRequest,
+        projects: input.projects,
+        prompt,
+        workflowId: activeContext?.workflowId,
+      });
   const isRecurring =
     isContinuation ||
     isRecurringPlanningRequest(prompt) ||
-    extractedItems.some((item) => item.frequency?.recurring);
+    extractedItems.some((item) => item.frequency?.recurring) ||
+    Boolean(
+      semanticRequest.scheduleInstructions.planningHorizon ||
+        semanticRequest.scheduleInstructions.desiredFrequency?.intervalDays ||
+        semanticRequest.scheduleInstructions.maximumWeeklyMinutes,
+    );
 
   if (!isRecurring) return null;
   if (!isContinuation && extractedItems.length !== 1) return null;
@@ -2669,19 +2804,111 @@ function createRecurringSchedulingTurn({
 
   const item = extractedItems[0];
   if (!item) return null;
+  const workflowId = activeContext?.workflowId ?? semanticRequest.workflowId;
+  const batchId = activeContext?.batchId ?? `batch-${Date.now()}`;
+  semanticRequest = {
+    ...semanticRequest,
+    activity: {
+      ...semanticRequest.activity,
+      purpose: semanticRequest.activity.purpose ?? item.purpose,
+      title:
+        semanticRequest.activity.title === "Planning item"
+          ? item.title
+          : semanticRequest.activity.title,
+    },
+    workflowId,
+  };
+
+  if (hasUnresolvedConstraintConflict(semanticRequest)) {
+    if (isContinuation && isPositiveSchedulingConfirmation(prompt)) {
+      semanticRequest = acceptRecommendedConstraintResolution(semanticRequest);
+    } else {
+      const conflict = semanticRequest.contradictions.find(
+        (candidate) => !candidate.resolved,
+      );
+      const recommendation = conflict?.resolutionOptions[0];
+      const horizon = semanticRequest.scheduleInstructions.planningHorizon;
+      const horizonCount = horizon
+        ? ({ 2: "two", 3: "three", 4: "four", 5: "five" } as Record<
+            number,
+            string
+          >)[horizon.count] ?? String(horizon.count)
+        : null;
+      const horizonLabel = horizon
+        ? `${horizonCount}-${horizon.unit}`
+        : "recurring";
+      const activityReference = /sealed nectar/i.test(
+        semanticRequest.activity.title,
+      )
+        ? "reading rhythm for halaqah preparation"
+        : `rhythm for ${semanticRequest.activity.title}`;
+      const question = `Got it—you want a steady ${horizonLabel} ${activityReference}. ${
+        conflict?.message ?? "The requested rhythm conflicts with the weekly limit."
+      } I recommend ${recommendation?.label ?? "a lower weekly frequency"} instead. Should I use that rhythm?`;
+
+      return {
+        context: {
+          appliedRecords: activeContext?.appliedRecords ?? [],
+          batchId,
+          candidateWindows: [],
+          confirmationStatus: "awaiting_session_details",
+          extractedItems: [
+            {
+              ...item,
+              durationMinutes:
+                semanticRequest.scheduleInstructions.sessionDurationMinutes ??
+                item.durationMinutes,
+              durationSource: semanticRequest.scheduleInstructions.sessionDurationMinutes
+                ? "user_explicit"
+                : item.durationSource,
+              missingFields: ["constraint_resolution"],
+              purpose:
+                semanticRequest.activity.purpose ?? item.purpose,
+              title: semanticRequest.activity.title,
+            },
+          ],
+          intent: "create_multiple_time_blocks",
+          lastUpdatedAt: new Date().toISOString(),
+          maximumDurationMinutes: null,
+          pendingProposal: null,
+          pendingProposals: [],
+          pendingQuestion: question,
+          pendingWorkException: null,
+          purpose: semanticRequest.activity.title,
+          requestedDurationMinutes:
+            semanticRequest.scheduleInstructions.sessionDurationMinutes ?? null,
+          requestedSessionCount: null,
+          selectedDate: null,
+          selectedWindowEnd: null,
+          selectedWindowId: null,
+          selectedWindowStart: null,
+          semanticRequest,
+          seriesProposal: null,
+          state: "needs_clarification",
+          workflowId,
+        },
+        message: question,
+        proposal: null,
+      };
+    }
+  }
+
+  const intervalDays =
+    semanticRequest.scheduleInstructions.desiredFrequency?.intervalDays;
   const count =
     parseRequestedSessionCount(prompt) ??
+    semanticRequest.scheduleInstructions.desiredFrequency?.count ??
+    (intervalDays ? Math.ceil(7 / intervalDays) : null) ??
     activeContext?.requestedSessionCount ??
     item.frequency?.count ??
     null;
   const durationMinutes =
     parseExplicitDurationMinutes(prompt) ??
+    semanticRequest.scheduleInstructions.sessionDurationMinutes ??
     activeContext?.requestedDurationMinutes ??
     item.durationMinutes ??
     null;
-  const purpose = item.title;
-  const workflowId = activeContext?.workflowId ?? `workflow-${Date.now()}-recurring`;
-  const batchId = activeContext?.batchId ?? `batch-${Date.now()}`;
+  const purpose = semanticRequest.activity.title;
   const missingFields = [
     ...(!count ? ["frequency"] : []),
     ...(!durationMinutes ? ["duration"] : []),
@@ -2691,6 +2918,8 @@ function createRecurringSchedulingTurn({
     const pendingItem: ExtractedPlanningItem = {
       ...item,
       missingFields,
+      purpose: semanticRequest.activity.purpose ?? item.purpose,
+      title: semanticRequest.activity.title,
       frequency: { count: count ?? undefined, period: "week", recurring: true },
       ...(durationMinutes
         ? { durationMinutes, durationSource: "user_explicit" as const }
@@ -2721,6 +2950,8 @@ function createRecurringSchedulingTurn({
         selectedWindowEnd: null,
         selectedWindowId: null,
         selectedWindowStart: null,
+        semanticRequest,
+        seriesProposal: null,
         state: "awaiting_session_details",
         workflowId,
       },
@@ -2733,83 +2964,178 @@ function createRecurringSchedulingTurn({
     return null;
   }
 
-  const request = createScheduleRequest(
-    `Find open time this week for ${durationMinutes} minutes`,
-    input.weekStartDate,
-    [],
-    input.timezone,
+  const horizon = semanticRequest.scheduleInstructions.planningHorizon;
+  const horizonWeeks = horizon
+    ? horizon.unit === "month"
+      ? horizon.count * 4
+      : horizon.unit === "day"
+        ? Math.max(1, Math.ceil(horizon.count / 7))
+        : horizon.count
+    : 1;
+  const baseWeekStart = getWeekStart(input.weekStartDate, input.timezone);
+  const configuredStartDate = toIsoDate(baseWeekStart);
+  const today = getIsoDateInTimeZone(
+    new Date(),
+    input.timezone ?? getDefaultTimeZone(),
   );
-  const commitments = buildNormalizedScheduleTimeline(input);
-  const windows = validateOpenWindows(
-    calculateOpenWindows({
-      commitments,
-      minimumMinutes: durationMinutes,
-      scopes: request.scopes,
-      startMinutes: request.startMinutes,
-    }),
-    request,
-    commitments,
-  );
-  const selected = selectDistributedWindows(windows, count, durationMinutes);
+  const horizonStartDate = today > configuredStartDate ? today : configuredStartDate;
+  const horizonStart = parseIsoDate(horizonStartDate) ?? baseWeekStart;
+  const allWindows: AssistantOpenWindow[] = [];
+  const selected: AssistantOpenWindow[] = [];
 
-  if (selected.length < count) {
-    return {
-      context: {
-        appliedRecords: activeContext?.appliedRecords ?? [],
-        batchId,
-        candidateWindows: windows,
-        confirmationStatus: "awaiting_session_details",
-        extractedItems: [{ ...item, missingFields: [] }],
-        intent: "create_multiple_time_blocks",
-        lastUpdatedAt: new Date().toISOString(),
-        maximumDurationMinutes: null,
-        pendingProposal: null,
-        pendingProposals: [],
-        pendingQuestion: "Choose fewer sessions, a shorter duration, or a different week.",
-        pendingWorkException: null,
-        purpose,
-        requestedDurationMinutes: durationMinutes,
-        requestedSessionCount: count,
-        selectedDate: null,
-        selectedWindowEnd: null,
-        selectedWindowId: null,
-        selectedWindowStart: null,
-        state: "needs_clarification",
-        workflowId,
-      },
-      message: `I found only ${selected.length} non-overlapping opening${selected.length === 1 ? "" : "s"} that can fit ${durationMinutes} minutes. Choose fewer sessions, a shorter duration, or a different week. Nothing has been added.`,
-      proposal: null,
-    };
+  for (let periodIndex = 0; periodIndex < horizonWeeks; periodIndex += 1) {
+    const periodStart = addDays(horizonStart, periodIndex * 7);
+    const periodEnd = addDays(periodStart, 6);
+    const periodStartIso = toIsoDate(periodStart);
+    const periodEndIso = toIsoDate(periodEnd);
+    const calendarWeekStarts = [
+      toIsoDate(getMondayForDate(periodStart)),
+      toIsoDate(getMondayForDate(periodEnd)),
+    ].filter((value, index, values) => values.indexOf(value) === index);
+    const periodWindows = calendarWeekStarts.flatMap((weekStartDate) => {
+      const weekInput: AssistantScheduleAnalysisInput = {
+        ...input,
+        weekStartDate,
+      };
+      const request = createScheduleRequest(
+        `Find open time this week for ${durationMinutes} minutes`,
+        weekStartDate,
+        [],
+        input.timezone,
+      );
+      const commitments = buildNormalizedScheduleTimeline(weekInput);
+      return validateOpenWindows(
+        calculateOpenWindows({
+          commitments,
+          minimumMinutes: durationMinutes,
+          scopes: request.scopes,
+          startMinutes: request.startMinutes,
+        }),
+        request,
+        commitments,
+      );
+    });
+    const windows = [
+      ...new Map(periodWindows.map((window) => [window.id, window])).values(),
+    ]
+      .filter(
+        (window) =>
+          window.date >= periodStartIso && window.date <= periodEndIso,
+      )
+      .sort(
+        (first, second) =>
+          first.date.localeCompare(second.date) ||
+          first.startMinutes - second.startMinutes,
+      );
+    const firstByDate = [
+      ...new Map(windows.map((window) => [window.date, window])).values(),
+    ].filter((window) => window.durationMinutes >= durationMinutes);
+    const periodSelection =
+      count === 3 && firstByDate.length >= 6
+        ? [firstByDate[0], firstByDate[3], firstByDate[5]]
+        : selectDistributedWindows(windows, count, durationMinutes);
+    allWindows.push(...windows);
+    selected.push(...periodSelection);
+
+    if (periodSelection.length < count) {
+      return {
+        context: {
+          appliedRecords: activeContext?.appliedRecords ?? [],
+          batchId,
+          candidateWindows: allWindows,
+          confirmationStatus: "awaiting_session_details",
+          extractedItems: [{ ...item, missingFields: [] }],
+          intent: "create_multiple_time_blocks",
+          lastUpdatedAt: new Date().toISOString(),
+          maximumDurationMinutes: null,
+          pendingProposal: null,
+          pendingProposals: [],
+          pendingQuestion:
+            "Choose fewer sessions, a shorter duration, or a different horizon.",
+          pendingWorkException: null,
+          purpose,
+          requestedDurationMinutes: durationMinutes,
+          requestedSessionCount: count,
+          selectedDate: null,
+          selectedWindowEnd: null,
+          selectedWindowId: null,
+          selectedWindowStart: null,
+          semanticRequest,
+          seriesProposal: null,
+          state: "needs_clarification",
+          workflowId,
+        },
+        message: `I couldn’t fit the full ${horizonWeeks}-week rhythm into reliable openings. Choose fewer sessions, a shorter duration, or a different horizon. Nothing has been added.`,
+        proposal: null,
+      };
+    }
   }
 
   const proposals = selected.map((window, index): AssistantPendingTimeBlockProposal => ({
     actionType: "create_time_block",
     batchId,
     date: window.date,
-    details: item.purpose ?? item.details ?? `Work on ${item.title}.`,
+    details:
+      semanticRequest.activity.purpose ??
+      item.purpose ??
+      item.details ??
+      `Work on ${semanticRequest.activity.title}.`,
     durationMinutes,
     id: `${workflowId}-proposal-${index + 1}`,
     selectedWindowEnd: minutesToTimeInput(window.endMinutes),
     sourceConversationId: null,
     startTime: minutesToTimeInput(window.startMinutes),
     status: "ready_for_review",
-    title: item.title,
+    title: semanticRequest.activity.title,
   }));
-  const scheduleLines = proposals.map((proposal, index) => {
-    const window = selected[index];
-    return `${index + 1}. ${window.day}, ${window.startLabel}-${formatMinutes(
-      window.startMinutes + durationMinutes,
-    )}`;
-  });
-  const message = `I drafted ${count} ${item.title} session${count === 1 ? "" : "s"} for review:\n\n${scheduleLines.join(
-    "\n",
-  )}\n\nI spread them across different days where possible. Nothing has been added yet.`;
+  const startDate = horizonStartDate;
+  const endDate = toIsoDate(addDays(horizonStart, horizonWeeks * 7 - 1));
+  const firstWeek = selected.slice(0, count);
+  const seriesProposal: RecurringSeriesProposal = {
+    assumptions: semanticRequest.contradictions
+      .filter((conflict) => conflict.resolved)
+      .map(
+        () =>
+          `Used ${count} sessions per week to respect the weekly maximum.`,
+      ),
+    conflicts: semanticRequest.contradictions,
+    id: `series-${workflowId}`,
+    occurrenceProposalIds: proposals.flatMap((proposal) =>
+      proposal.id ? [proposal.id] : [],
+    ),
+    pattern: {
+      durationMinutes,
+      preferredWeekdays: [...new Set(firstWeek.map((window) => window.day))].sort(
+        (first, second) => weekDays.indexOf(first) - weekDays.indexOf(second),
+      ),
+      sessionsPerWeek: count,
+      typicalTimes: firstWeek.map((window) =>
+        minutesToTimeInput(window.startMinutes),
+      ),
+    },
+    planningHorizon: {
+      endDate,
+      startDate,
+      weeks: horizonWeeks,
+    },
+    purpose: semanticRequest.activity.purpose,
+    status: "pending",
+    title: /sealed nectar/i.test(semanticRequest.activity.title)
+      ? "Sealed Nectar Reading Plan"
+      : `${semanticRequest.activity.title} Plan`,
+    totalOccurrences: proposals.length,
+    workflowId,
+  };
+  const message =
+    horizonWeeks > 1
+      ? `I found a balanced rhythm across the week and drafted all ${proposals.length} sessions for review.`
+      : `I drafted ${proposals.length} ${semanticRequest.activity.title} session${proposals.length === 1 ? "" : "s"} for review. Nothing has been added yet.`;
 
   return {
     context: {
       appliedRecords: activeContext?.appliedRecords ?? [],
       batchId,
-      candidateWindows: windows,
+      candidateWindows: allWindows,
       confirmationStatus: "ready_for_review",
       extractedItems: [
         {
@@ -2818,6 +3144,8 @@ function createRecurringSchedulingTurn({
           durationSource: "user_explicit",
           frequency: { count, period: "week", recurring: true },
           missingFields: [],
+          purpose: semanticRequest.activity.purpose ?? item.purpose,
+          title: semanticRequest.activity.title,
         },
       ],
       intent: "create_multiple_time_blocks",
@@ -2834,6 +3162,8 @@ function createRecurringSchedulingTurn({
       selectedWindowEnd: proposals[0]?.selectedWindowEnd ?? null,
       selectedWindowId: selected[0]?.id ?? null,
       selectedWindowStart: proposals[0]?.startTime ?? null,
+      semanticRequest,
+      seriesProposal,
       state: "awaiting_apply",
       workflowId,
     },
@@ -2904,6 +3234,7 @@ export function advanceAssistantSchedulingConversation({
                 id: `recalculation-exclusion-${index}`,
                 plannedTask: proposal.details,
                 projectName: proposal.title,
+                scheduledDate: proposal.date,
                 startTime: proposal.startTime,
               },
             ]
@@ -3004,7 +3335,16 @@ export function advanceAssistantSchedulingConversation({
       recentMessages,
     });
 
-    const purpose = inferPlanningPurpose(prompt, recentMessages);
+    const semanticRequest = extractSemanticPlanningRequest({
+      projects: input.projects,
+      prompt,
+      workflowId,
+    });
+    const inferredPurpose = inferPlanningPurpose(prompt, recentMessages);
+    const purpose =
+      semanticRequest.activity.title !== "Planning item"
+        ? semanticRequest.activity.title
+        : inferredPurpose;
 
     if (windows.length === 0) {
       const failedContext: AssistantSchedulingContext = {
@@ -3028,6 +3368,8 @@ export function advanceAssistantSchedulingConversation({
         selectedWindowEnd: null,
         selectedWindowId: null,
         selectedWindowStart: null,
+        semanticRequest,
+        seriesProposal: null,
         state: "failed",
         workflowId,
       };
@@ -3065,6 +3407,8 @@ export function advanceAssistantSchedulingConversation({
         selectedWindowId: null,
         selectedWindowEnd: null,
         selectedWindowStart: null,
+        semanticRequest,
+        seriesProposal: null,
         state: "awaiting_window_selection",
         workflowId,
       },
@@ -3192,7 +3536,11 @@ export function advanceAssistantSchedulingConversation({
         requestedDuration && requestedDuration <= maximumDurationMinutes
         ? "ready_for_review"
         : "needs_duration",
-      title: createProposalTitle(activeContext.purpose),
+      title:
+        activeContext.semanticRequest?.activity.title &&
+        activeContext.semanticRequest.activity.title !== "Planning item"
+          ? activeContext.semanticRequest.activity.title
+          : createProposalTitle(activeContext.purpose),
     };
     const nextContext: AssistantSchedulingContext = {
       ...activeContext,

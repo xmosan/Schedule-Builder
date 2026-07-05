@@ -43,6 +43,7 @@ type WeeklyPlanBlockRow = {
   estimated_hours: number;
   planned_task: string;
   project_name: string;
+  scheduled_date: string | null;
   start_time: string | null;
 };
 
@@ -127,6 +128,9 @@ function mapWeeklyPlanRowToBlock(row: WeeklyPlanBlockRow): WeeklyPlanBlock {
   if (startTime) {
     block.startTime = startTime;
   }
+  if (row.scheduled_date) {
+    block.scheduledDate = row.scheduled_date;
+  }
 
   return block;
 }
@@ -138,6 +142,7 @@ function createBlockSnapshot(block: WeeklyPlanBlock) {
     id: block.id,
     plannedTask: block.plannedTask,
     projectName: block.projectName,
+    scheduledDate: block.scheduledDate ?? "",
     startTime: block.startTime ?? "",
   };
 }
@@ -304,7 +309,7 @@ export async function POST(request: NextRequest) {
         serviceClient
           .from("weekly_plan_blocks")
           .select(
-            "block_id, day, project_name, planned_task, estimated_hours, start_time",
+            "block_id, day, project_name, planned_task, estimated_hours, start_time, scheduled_date",
           )
           .eq("user_id", userId)
           .in("block_id", blockIds),
@@ -479,7 +484,8 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        const eventDate = getBlockEventDate(weekStartDate, block.day);
+        const eventDate =
+          block.scheduledDate ?? getBlockEventDate(weekStartDate, block.day);
         const startsAt = `${eventDate}T${startTime}:00`;
         const endsAt = addMinutesToLocalDateTime(
           eventDate,

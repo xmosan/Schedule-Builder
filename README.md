@@ -33,7 +33,7 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `work_shifts` stores manual work availability and uses Row Level Security so each user only sees their own shifts.
    - `imported_calendar_events` stores reviewed ICS imports and synced external calendar events. Row Level Security keeps each user's events scoped to their account.
    - `google_calendar_connections` stores server-only Google Calendar OAuth tokens. RLS is enabled with no client policies; app API routes access it with `SUPABASE_SERVICE_ROLE_KEY`.
-   - Run `supabase/assistant-conversations.sql` and `supabase/assistant-workflows.sql` to enable persisted Assistant threads, workflow state, proposal batches, and the canonical review queue.
+   - Run `supabase/assistant-conversations.sql`, `supabase/assistant-workflows.sql`, and `supabase/weekly-plan-occurrences.sql` to enable persisted Assistant threads, canonical proposals, and date-specific recurring-series occurrences.
    - If your existing Supabase project already has the scheduler tables, run the relevant standalone SQL files, including `supabase/assistant-workflows.sql` before deploying the canonical Assistant workflow routes.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.
@@ -207,6 +207,7 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 - `supabase/schema.sql` contains the database tables and RLS policies required for sync.
 - `supabase/imported-calendar-events.sql` contains the standalone migration for ICS imported calendar events.
 - `supabase/assistant-workflows.sql` contains the canonical Assistant workflow, proposal-batch, proposal, RLS, and atomic persistence schema.
+- `supabase/weekly-plan-occurrences.sql` adds exact occurrence dates and series IDs for multi-week Weekly Plan blocks.
 
 ## Notes
 

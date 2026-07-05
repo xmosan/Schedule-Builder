@@ -413,7 +413,11 @@ export function buildCalendarDays({
 
   const days = weekDates.map((weekDate) => {
     const dayPlanBlocks = planBlocks
-      .filter((block) => block.day === weekDate.day)
+      .filter((block) =>
+        block.scheduledDate
+          ? block.scheduledDate === weekDate.isoDate
+          : block.day === weekDate.day,
+      )
       .sort((first, second) => {
         const firstStart = parseStartTimeToMinutes(first.startTime);
         const secondStart = parseStartTimeToMinutes(second.startTime);
@@ -515,9 +519,13 @@ export function buildCalendarMonth({
     }
 
     const weekDate = currentWeekDatesByIso.get(monthDay.isoDate);
+    const datedPlanBlocks = planBlocks.filter(
+      (block) => block.scheduledDate === monthDay.isoDate,
+    );
     const dayPlanBlocks = weekDate
-      ? planBlocks
-          .filter((block) => block.day === weekDate.day)
+      ? [...datedPlanBlocks, ...planBlocks.filter(
+          (block) => !block.scheduledDate && block.day === weekDate.day,
+        )]
           .sort((first, second) => {
             const firstStart = parseStartTimeToMinutes(first.startTime);
             const secondStart = parseStartTimeToMinutes(second.startTime);
@@ -536,7 +544,7 @@ export function buildCalendarMonth({
 
             return first.projectName.localeCompare(second.projectName);
           })
-      : [];
+      : datedPlanBlocks;
 
     const dayWorkShifts = getEffectiveWorkShiftsForDate(
       workShifts,

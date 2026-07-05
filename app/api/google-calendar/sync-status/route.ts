@@ -13,6 +13,7 @@ type WeeklyPlanBlockRow = {
   estimated_hours: number;
   planned_task: string;
   project_name: string;
+  scheduled_date: string | null;
   start_time: string | null;
 };
 
@@ -74,6 +75,7 @@ function createBlockSnapshot(block: WeeklyPlanBlockRow) {
     id: block.block_id,
     plannedTask: block.planned_task,
     projectName: block.project_name,
+    scheduledDate: block.scheduled_date ?? "",
     startTime: normalizeStartTime(block.start_time ?? "") ?? "",
   };
 }
@@ -148,7 +150,7 @@ export async function GET(request: NextRequest) {
       const { data: blockRows, error: blockRowsError } = await serviceClient
         .from("weekly_plan_blocks")
         .select(
-          "block_id, day, project_name, planned_task, estimated_hours, start_time",
+          "block_id, day, project_name, planned_task, estimated_hours, start_time, scheduled_date",
         )
         .eq("user_id", userId)
         .in("block_id", syncedBlockIds);

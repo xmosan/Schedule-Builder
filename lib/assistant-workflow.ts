@@ -6,6 +6,7 @@ import type {
   ExtractedPlanningItem,
 } from "@/lib/assistant-intelligence";
 import { parseStartTimeToMinutes, weekDays } from "@/lib/weekly-plan";
+import { isCommandDerivedTitle } from "@/lib/assistant-semantics";
 
 export const schedulingWorkflowStates = [
   "idle",
@@ -165,6 +166,9 @@ export function validateMutationSuggestion(suggestion: AssistantSuggestion) {
       !suggestion.projectName.trim()
     ) {
       return "Time-block title is required.";
+    }
+    if (isCommandDerivedTitle(suggestion.projectName)) {
+      return "Time-block title must describe the activity, not the scheduling command.";
     }
     if (
       typeof suggestion.itemDate !== "string" ||
@@ -373,6 +377,17 @@ export function deriveAssistantWorkflowAfterProposalUpdates(
                 : [];
             }),
             lastUpdatedAt: now,
+            seriesProposal: workflow.context.seriesProposal
+              ? {
+                  ...workflow.context.seriesProposal,
+                  status:
+                    !hasPendingProposals && hasAppliedProposals
+                      ? "applied"
+                      : hasAppliedProposals
+                        ? "partially_applied"
+                        : "pending",
+                }
+              : null,
             state:
               !hasPendingProposals && hasAppliedProposals
                 ? "applied"

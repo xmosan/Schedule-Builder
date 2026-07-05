@@ -61,6 +61,8 @@ type WeeklyPlanBlockRow = {
   planned_task: string;
   estimated_hours: number;
   start_time?: string | null;
+  scheduled_date?: string | null;
+  series_id?: string | null;
 };
 
 type PlannerProfileRow = {
@@ -144,6 +146,17 @@ function isMissingWeeklyPlanStartTimeColumn(error: unknown) {
   return (
     typeof candidate.message === "string" &&
     candidate.message.includes("start_time") &&
+    (candidate.message.includes("weekly_plan_blocks") ||
+      candidate.code === "PGRST204")
+  );
+}
+
+function isMissingWeeklyPlanOccurrenceColumns(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    typeof candidate.message === "string" &&
+    /scheduled_date|series_id/.test(candidate.message) &&
     (candidate.message.includes("weekly_plan_blocks") ||
       candidate.code === "PGRST204")
   );
@@ -258,6 +271,12 @@ function mapWeeklyPlanRowToBlock(row: WeeklyPlanBlockRow): WeeklyPlanBlock {
   if (startTime) {
     block.startTime = startTime;
   }
+  if (row.scheduled_date) {
+    block.scheduledDate = row.scheduled_date;
+  }
+  if (row.series_id) {
+    block.seriesId = row.series_id;
+  }
 
   return block;
 }
@@ -276,6 +295,8 @@ function mapWeeklyPlanBlockToRow(
     planned_task: block.plannedTask,
     estimated_hours: block.estimatedHours,
     start_time: block.startTime ?? null,
+    scheduled_date: block.scheduledDate ?? null,
+    series_id: block.seriesId ?? null,
   };
 }
 
@@ -283,7 +304,7 @@ function mapWeeklyPlanBlockToLegacyRow(
   userId: string,
   block: WeeklyPlanBlock,
   index: number,
-): Omit<WeeklyPlanBlockRow, "start_time"> {
+): Omit<WeeklyPlanBlockRow, "start_time" | "scheduled_date" | "series_id"> {
   return {
     user_id: userId,
     block_id: block.id,
@@ -293,6 +314,16 @@ function mapWeeklyPlanBlockToLegacyRow(
     planned_task: block.plannedTask,
     estimated_hours: block.estimatedHours,
   };
+}
+
+function mapWeeklyPlanBlockToPreOccurrenceRow(
+  userId: string,
+  block: WeeklyPlanBlock,
+  index: number,
+): Omit<WeeklyPlanBlockRow, "scheduled_date" | "series_id"> {
+  const { scheduled_date: _scheduledDate, series_id: _seriesId, ...row } =
+    mapWeeklyPlanBlockToRow(userId, block, index);
+  return row;
 }
 
 function mapPlannerProfileRowToProfile(row: PlannerProfileRow): PlannerProfile {
@@ -591,12 +622,25 @@ export async function fetchWeeklyPlanBlocksForUser(
     supabase
       .from("weekly_plan_blocks")
       .select(
-        "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours, start_time",
+        "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours, start_time, scheduled_date, series_id",
       )
       .eq("user_id", userId)
       .order("sort_index", { ascending: true }),
     "Loading weekly plan from Supabase",
   );
+
+  if (isMissingWeeklyPlanOccurrenceColumns(result.error)) {
+    result = await withSupabaseTimeout(
+      supabase
+        .from("weekly_plan_blocks")
+        .select(
+          "user_id, block_id, sort_index, day, project_name, planned_task, estimated_hours, start_time",
+        )
+        .eq("user_id", userId)
+        .order("sort_index", { ascending: true }),
+      "Loading weekly plan from Supabase",
+    );
+  }
 
   if (isMissingWeeklyPlanStartTimeColumn(result.error)) {
     result = await withSupabaseTimeout(
@@ -656,6 +700,22 @@ export async function replaceWeeklyPlanBlocksForUser(
     "Saving weekly plan to Supabase",
   );
 
+  if (
+    isMissingWeeklyPlanOccurrenceColumns(upsertError) &&
+    !planBlocks.some((block) => block.scheduledDate || block.seriesId)
+  ) {
+    const retryResult = await withSupabaseTimeout(
+      supabase.from("weekly_plan_blocks").upsert(
+        planBlocks.map((block, index) =>
+          mapWeeklyPlanBlockToPreOccurrenceRow(userId, block, index),
+        ),
+        { onConflict: "user_id,block_id" },
+      ),
+      "Saving weekly plan to Supabase",
+    );
+    upsertError = retryResult.error;
+  }
+
   if (isMissingWeeklyPlanStartTimeColumn(upsertError)) {
     usedLegacyStartTimeFallback = true;
     const retryResult = await withSupabaseTimeout(
@@ -706,12 +766,25 @@ export async function createWeeklyPlanBlockForUser(
   block: WeeklyPlanBlock,
   sortIndex: number,
 ) {
-  const result = await withSupabaseTimeout(
+  let result = await withSupabaseTimeout(
     supabase.from("weekly_plan_blocks").insert(
       mapWeeklyPlanBlockToRow(userId, block, sortIndex),
     ),
     "Saving weekly plan block to Supabase",
   );
+
+  if (
+    isMissingWeeklyPlanOccurrenceColumns(result.error) &&
+    !block.scheduledDate &&
+    !block.seriesId
+  ) {
+    result = await withSupabaseTimeout(
+      supabase.from("weekly_plan_blocks").insert(
+        mapWeeklyPlanBlockToPreOccurrenceRow(userId, block, sortIndex),
+      ),
+      "Saving weekly plan block to Supabase",
+    );
+  }
 
   return { data: result.error ? null : block, error: result.error };
 }

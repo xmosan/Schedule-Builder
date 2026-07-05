@@ -1,5 +1,9 @@
 import type { AssistantContextStatus } from "@/lib/assistant";
 import type { Project } from "@/lib/projects";
+import {
+  extractSemanticPlanningRequest,
+  validateSemanticTitle,
+} from "@/lib/assistant-semantics";
 
 export const assistantTurnOutcomes = [
   "direct_answer",
@@ -117,7 +121,7 @@ const explicitMutationPattern =
 const statusQuestionPattern =
   /\b(?:is it on (?:my|the) schedule|is the [^?.]{1,60} scheduled|did you add (?:it|that|them|those)|was (?:it|that) saved|is the plan applied|did (?:that|those|the) (?:blocks?|sessions?) get created|has (?:it|that) been (?:added|scheduled|saved))\b/i;
 const recurringPattern =
-  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every weekday|every other day|times? this week|sessions? this week|slots|twice|three times|four times|gradually|recurring)\b/i;
+  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every weekday|every other day|every\s+(?:\d+|one|two|three|four|five|six|seven)\s+days?|next\s+(?:\d+|one|two|three|four|five|six|seven|eight)\s+(?:weeks?|months?)|times? this week|sessions? this week|slots|twice|three times|four times|gradually|recurring)\b/i;
 const completionClaimPattern =
   /\b(?:you(?:'re| are) all set|it(?:'s| is) scheduled|i (?:added|scheduled|saved|applied|put) (?:it|that|them|those)|it(?:'s| is) on (?:your|the) schedule|your plan has been updated|(?:done|applied|completed)[.!]?\s*$)\b/i;
 const appliedClaimPattern =
@@ -319,9 +323,22 @@ export function matchProjectsForText(projects: Project[], text: string) {
 }
 
 export function extractPlanningItems(prompt: string, projects: Project[] = []) {
-  const recurring = isRecurringPlanningRequest(prompt);
-  const sharedCount = parseRequestedSessionCount(prompt);
-  const sharedDuration = parseExplicitDurationMinutes(prompt);
+  const semantic = extractSemanticPlanningRequest({ projects, prompt });
+  const recurring =
+    isRecurringPlanningRequest(prompt) ||
+    semantic.itemType === "time_block_series";
+  const sharedCount =
+    parseRequestedSessionCount(prompt) ??
+    semantic.scheduleInstructions.desiredFrequency?.count ??
+    (semantic.scheduleInstructions.desiredFrequency?.intervalDays
+      ? Math.ceil(
+          7 / semantic.scheduleInstructions.desiredFrequency.intervalDays,
+        )
+      : null);
+  const sharedDuration =
+    parseExplicitDurationMinutes(prompt) ??
+    semantic.scheduleInstructions.sessionDurationMinutes ??
+    null;
   const segments = splitPlanningSegments(prompt).filter(
     (segment) =>
       !/:$/.test(segment) &&
@@ -334,7 +351,12 @@ export function extractPlanningItems(prompt: string, projects: Project[] = []) {
 
   return candidates.slice(0, 12).map((segment, index): ExtractedPlanningItem => {
     const type = inferItemType(segment);
-    const title = inferTitle(segment, type);
+    const inferredTitle =
+      candidates.length === 1
+        ? semantic.activity.title
+        : inferTitle(segment, type);
+    const title =
+      validateSemanticTitle(inferredTitle, semantic) ?? inferTitle(segment, type);
     const deadline = inferDeadline(segment);
     const matches = matchProjectsForText(projects, `${title} ${segment}`);
     const clearMatch = matches[0]?.confidence >= 0.82 ? matches[0] : null;
@@ -368,7 +390,7 @@ export function extractPlanningItems(prompt: string, projects: Project[] = []) {
             relatedProjectName: clearMatch.project.name,
           }
         : {}),
-      purpose: inferPurpose(prompt, title),
+      purpose: semantic.activity.purpose ?? inferPurpose(prompt, title),
       title,
       type: recurring && type === "unknown" ? "recurring_activity" : type,
     };

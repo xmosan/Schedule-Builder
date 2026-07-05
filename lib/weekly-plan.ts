@@ -25,6 +25,8 @@ export type WeeklyPlanBlock = {
   plannedTask: string;
   estimatedHours: number;
   startTime?: string;
+  scheduledDate?: string;
+  seriesId?: string;
 };
 
 export type WeeklyPlanBlockDraft = {
@@ -33,6 +35,8 @@ export type WeeklyPlanBlockDraft = {
   plannedTask: string;
   estimatedHours: string;
   startTime?: string;
+  scheduledDate?: string;
+  seriesId?: string;
 };
 
 function isWeekDay(value: unknown): value is WeekDay {
@@ -88,6 +92,9 @@ function isWeeklyPlanBlock(value: unknown): value is WeeklyPlanBlock {
     candidate.startTime == null ||
     candidate.startTime === "" ||
     normalizeStartTime(candidate.startTime) !== null;
+  const hasValidScheduledDate =
+    candidate.scheduledDate == null ||
+    /^\d{4}-\d{2}-\d{2}$/.test(candidate.scheduledDate);
 
   return (
     typeof candidate.id === "string" &&
@@ -98,7 +105,8 @@ function isWeeklyPlanBlock(value: unknown): value is WeeklyPlanBlock {
     typeof candidate.estimatedHours === "number" &&
     Number.isFinite(candidate.estimatedHours) &&
     candidate.estimatedHours > 0 &&
-    hasValidStartTime
+    hasValidStartTime &&
+    hasValidScheduledDate
   );
 }
 
@@ -128,6 +136,12 @@ export function createWeeklyPlanBlock(
 
   if (startTime) {
     block.startTime = startTime;
+  }
+  if (draft.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(draft.scheduledDate)) {
+    block.scheduledDate = draft.scheduledDate;
+  }
+  if (draft.seriesId?.trim()) {
+    block.seriesId = draft.seriesId.trim();
   }
 
   return block;

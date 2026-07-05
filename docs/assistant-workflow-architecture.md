@@ -38,3 +38,10 @@
 - `visible count = pendingProposalIds = persisted pending rows = review queue count`.
 - A response cannot claim completion unless `completionStatus` and saved records support it.
 - No proposal can apply without review approval and server-side revalidation.
+
+## Semantic and recurring-series layer
+
+- `lib/assistant-semantics.ts` separates activity title and purpose from scheduling commands, horizon, interval, duration, and weekly limits.
+- Constraint contradictions are persisted in workflow context and require an explicit resolution before proposal generation.
+- Multi-week series are expanded into date-specific canonical proposals. Weekly Plan records keep `scheduled_date` and `series_id`, so occurrences render only in their intended weeks.
+- Response plans gate unrelated observations, select a concise mode, and expose raw availability only when the user asks for every option.

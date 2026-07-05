@@ -8,6 +8,7 @@ import type {
   ProposalBatch,
   SchedulingWorkflowContext,
 } from "@/lib/assistant-workflow";
+import type { AssistantResponsePlan } from "@/lib/assistant-presentation";
 import {
   createDeterministicScheduleAnswer,
   type AssistantScheduleAnalysisInput,
@@ -210,6 +211,7 @@ export type AssistantPlanReviewResponse = {
   canonicalProposals?: CanonicalAssistantProposal[];
   insights?: AssistantSuggestion[];
   proposalBatch?: ProposalBatch | null;
+  responsePlan?: AssistantResponsePlan;
   workflow?: SchedulingWorkflowContext | null;
 };
 
@@ -258,6 +260,7 @@ export type AssistantGoogleSyncBlock = {
   id: string;
   plannedTask: string;
   projectName: string;
+  scheduledDate: string | null;
   startTime: string | null;
   warnings: string[];
 };
@@ -280,7 +283,7 @@ export type AssistantGoogleSyncContext = {
 
 const maxDefaultAssistantCards = 4;
 const maxDefaultWarningCards = 2;
-const importedEventLookaheadDays = 30;
+const importedEventLookaheadDays = 90;
 
 const greetingPattern = /^(hey|hello|hi|salam|assalamu alaikum|yo|sup|good morning|good afternoon|good evening)[\s!.?]*$/i;
 const vaguePromptPattern = /^(anything|whatever|what now|now what|help|idk|i don't know|not sure|surprise me)[\s!.?]*$/i;
@@ -1686,7 +1689,7 @@ export function getRelevantImportedCalendarEvents(
       (first, second) =>
         new Date(first.startsAt).getTime() - new Date(second.startsAt).getTime(),
     )
-    .slice(0, 80);
+    .slice(0, 200);
 }
 
 function formatMinutesAsClock(totalMinutes: number) {
@@ -2001,6 +2004,7 @@ function createGoogleSyncBlock(
     id: block.id,
     plannedTask: block.plannedTask,
     projectName: block.projectName,
+    scheduledDate: block.scheduledDate ?? null,
     startTime: block.startTime ?? null,
     warnings,
   };
@@ -2013,6 +2017,7 @@ function createGoogleSyncBlockSnapshot(block: WeeklyPlanBlock) {
     id: block.id,
     plannedTask: block.plannedTask,
     projectName: block.projectName,
+    scheduledDate: block.scheduledDate ?? "",
     startTime: block.startTime ?? "",
   };
 }
@@ -2034,6 +2039,7 @@ function googleSyncSnapshotMatches(
     candidate.id === expected.id &&
     candidate.plannedTask === expected.plannedTask &&
     candidate.projectName === expected.projectName &&
+    (candidate.scheduledDate ?? "") === expected.scheduledDate &&
     (candidate.startTime ?? "") === expected.startTime
   );
 }
@@ -2838,7 +2844,7 @@ function createNoObviousFindingsMessage({
 
   if (planWeekPromptPattern.test(prompt)) {
     return topProject
-      ? `For this week, I’d anchor around ${topProject.name} first, then keep the rest light so the plan stays realistic. ${lightPlanningDayText} look like the easiest places to add structure. Want me to create the actual blocks?`
+      ? `${topProject.name} is the clearest priority. ${lightPlanningDayText} have the best room for it. Want me to draft the blocks?`
       : `I don’t see active projects to build a week around yet. Add one project, and I’ll help shape it into a weekly plan.`;
   }
 
@@ -3238,13 +3244,13 @@ export function createFallbackAssistantResponse(
       : planWeekPromptPattern.test(prompt) && workScheduleSummary
       ? `Since you work ${workScheduleSummary}${
           importedCalendarText ? ` and have ${importedCalendarText}` : ""
-        }, I’d keep project work on ${lightPlanningDayText} or outside those commitments. I picked a few small blocks so the week stays realistic instead of crowded.`
+        }, I’d place project work on ${lightPlanningDayText} or outside those commitments.`
       : planWeekPromptPattern.test(prompt) && importedCalendarText
-      ? `I’ll treat your ${importedCalendarText} as fixed calendar commitments, then build the week around ${lightPlanningDayText}. I picked a few small blocks so the plan stays realistic.`
+      ? `I’ll keep your ${importedCalendarText} fixed and use the clearest openings around ${lightPlanningDayText}.`
       : planWeekPromptPattern.test(prompt)
       ? "For this week, I’d anchor the plan around your highest-priority active projects and keep the blocks small enough that the schedule still feels doable."
       : suggestions.length > 0
-      ? "Absolutely — I’d keep this focused. I picked the highest-impact next steps first so your plan stays realistic instead of crowded."
+      ? "I found a few items that may need a decision."
       : "Tell me what feels most important, and I’ll help turn it into a simple plan.";
 
   return createAssistantResponseFromSuggestions({

@@ -129,6 +129,22 @@ function getSchedulingQuickReplies(
     context.state === "awaiting_window_selection" ||
     context.state === "needs_clarification"
   ) {
+    if (
+      context.semanticRequest?.contradictions.some(
+        (conflict) => !conflict.resolved,
+      )
+    ) {
+      const recommendation = context.semanticRequest.contradictions
+        .find((conflict) => !conflict.resolved)
+        ?.resolutionOptions[0]?.label;
+      return [
+        {
+          id: "accept-recommended-rhythm",
+          label: recommendation ? `Use ${recommendation}` : "Use that rhythm",
+          prompt: "Yes",
+        },
+      ];
+    }
     return context.candidateWindows.map((window) => ({
       id: window.id,
       label: window.label,
@@ -567,7 +583,7 @@ function ActionCard({
         ? "Project or title"
         : "Project";
   const detailItems = [
-    suggestion.rationale ? { label: "Why this helps", value: suggestion.rationale } : null,
+    suggestion.rationale ? { label: "Reason", value: suggestion.rationale } : null,
     suggestion.plannedTask
       ? { label: isWeeklyBlockSuggestion || isScheduledItemSuggestion ? "Details" : "Task", value: suggestion.plannedTask }
       : null,
@@ -935,6 +951,29 @@ function ActionCard({
                 </select>
               </label>
             )}
+            {isWeeklyBlockSuggestion && suggestion.itemDate !== undefined && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Date</span>
+                <input
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-1.5 text-sm"
+                  type="date"
+                  value={suggestion.itemDate ?? ""}
+                  onChange={(event) => {
+                    const nextDate = event.target.value;
+                    const date = new Date(`${nextDate}T00:00:00`);
+                    if (!nextDate || Number.isNaN(date.getTime())) {
+                      onUpdate({ itemDate: nextDate });
+                      return;
+                    }
+                    const dayIndex = date.getDay() === 0 ? 6 : date.getDay() - 1;
+                    onUpdate({
+                      day: weekDays[dayIndex],
+                      itemDate: nextDate,
+                    });
+                  }}
+                />
+              </label>
+            )}
             {suggestion.estimatedHours !== undefined && (
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold text-brand-ink/60">Hours</span>
@@ -1046,6 +1085,7 @@ function ActionCard({
           </div>
         ) : null}
 
+        {!isFinished ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {isActionableSuggestion(suggestion) ? (
             <>
@@ -1069,7 +1109,7 @@ function ActionCard({
                       ? "Apply one-day change"
                     : "Apply"}
               </Button>
-              {isEditableSuggestion(suggestion) && !suggestion.workflowId && (
+              {isEditableSuggestion(suggestion) && (
                 <Button
                   className="h-9 rounded-full px-4 text-xs font-semibold active:scale-[0.98]"
                   disabled={isFinished || actionState.status === "applying"}
@@ -1113,6 +1153,7 @@ function ActionCard({
             </>
           )}
         </div>
+        ) : null}
       </article>
     </div>
   );
@@ -1139,7 +1180,7 @@ function ChatBubble({
   onApplyAll: (suggestions: AssistantSuggestion[]) => void;
   onIgnore: (suggestionId: string) => void;
   onOpenReview: (messageId: string) => void;
-  onToggleEdit: (suggestionId: string) => void;
+  onToggleEdit: (suggestion: AssistantSuggestion) => void;
   onUpdateSuggestion: (
     messageId: string,
     suggestionId: string,
@@ -1150,6 +1191,8 @@ function ChatBubble({
   const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [showAllSeriesOccurrences, setShowAllSeriesOccurrences] =
+    useState(false);
   const isUser = message.role === "user";
   const reviewableIdSet = new Set(reviewableProposalIds);
   const actions = getActions(message.response).filter((suggestion) =>
@@ -1165,10 +1208,12 @@ function ChatBubble({
   const insightActions = visibleActions.filter(
     (suggestion) => !isActionableSuggestion(suggestion),
   );
-  const pendingInsightActions = insightActions.filter((suggestion) =>
-    isPendingActionState(actionStates[suggestion.id]),
-  );
   const visibleActionCount = pendingActionableActions.length;
+  const seriesProposal = message.response?.schedulingContext?.seriesProposal;
+  const displayedActionableActions =
+    seriesProposal && !showAllSeriesOccurrences
+      ? actionableActions.slice(0, seriesProposal.pattern.sessionsPerWeek)
+      : actionableActions;
   const hasHandledAllSuggestions = actions.length > 0 && visibleActionCount === 0;
   const selectedActions = pendingActionableActions.filter((suggestion) =>
     selectedActionIds.has(suggestion.id),
@@ -1239,9 +1284,17 @@ function ChatBubble({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-brand-ink">
-                      Proposed plan · {visibleActionCount}{" "}
-                      {visibleActionCount === 1 ? "change" : "changes"}
+                      {seriesProposal
+                        ? seriesProposal.title
+                        : `Proposed plan · ${visibleActionCount} ${
+                            visibleActionCount === 1 ? "change" : "changes"
+                          }`}
                     </p>
+                    {seriesProposal ? (
+                      <p className="mt-1 text-xs text-brand-ink/55">
+                        {seriesProposal.planningHorizon.weeks} weeks · {seriesProposal.pattern.sessionsPerWeek} sessions per week · {seriesProposal.pattern.durationMinutes} minutes each · {seriesProposal.totalOccurrences} proposed sessions
+                      </p>
+                    ) : null}
                     <ul className="mt-2 grid gap-1 text-xs leading-5 text-brand-ink/58">
                       {pendingActionableActions.slice(0, 3).map((suggestion) => (
                         <li key={suggestion.id} className="truncate">
@@ -1292,13 +1345,34 @@ function ChatBubble({
                         variant="outline"
                         onClick={() => onApplyAll(pendingActionableActions)}
                       >
-                        Apply all
+                      {seriesProposal
+                        ? `Apply series (${pendingActionableActions.length})`
+                        : "Apply all"}
                       </Button>
                     ) : null}
                   </div>
                 </div>
+                {seriesProposal ? (
+                  <div className="mb-3 rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.045] p-4">
+                    <p className="font-semibold text-brand-ink">{seriesProposal.title}</p>
+                    <p className="mt-1 text-xs leading-5 text-brand-ink/58">
+                      {seriesProposal.planningHorizon.weeks} weeks · {seriesProposal.pattern.sessionsPerWeek} sessions per week · {seriesProposal.pattern.durationMinutes} minutes each · {seriesProposal.totalOccurrences} total
+                    </p>
+                    {seriesProposal.totalOccurrences > seriesProposal.pattern.sessionsPerWeek ? (
+                      <button
+                        className="mt-3 text-xs font-semibold text-brand-teal"
+                        type="button"
+                        onClick={() => setShowAllSeriesOccurrences((current) => !current)}
+                      >
+                        {showAllSeriesOccurrences
+                          ? "Show first week"
+                          : `View all ${seriesProposal.totalOccurrences} sessions`}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
-                  {actionableActions.map((suggestion, index) => (
+                  {displayedActionableActions.map((suggestion, index) => (
                     <ActionCard
                       key={suggestion.id}
                       actionState={
@@ -1324,7 +1398,7 @@ function ChatBubble({
                           return next;
                         })
                       }
-                      onToggleEdit={() => onToggleEdit(suggestion.id)}
+                      onToggleEdit={() => onToggleEdit(suggestion)}
                       onUpdate={(patch) =>
                         onUpdateSuggestion(message.id, suggestion.id, patch)
                       }
@@ -1343,11 +1417,8 @@ function ChatBubble({
               <section>
                 <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
                   <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
-                    Helpful notes
+                    Needs your attention
                   </h4>
-                  <span className="text-xs text-brand-ink/40">
-                      {pendingInsightActions.length} remaining
-                  </span>
                 </div>
                 <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
                   {insightActions.map((suggestion, index) => (
@@ -1364,7 +1435,7 @@ function ChatBubble({
                       onApply={() => onApply(suggestion)}
                       onIgnore={() => onIgnore(suggestion.id)}
                       onSelectionChange={() => undefined}
-                      onToggleEdit={() => onToggleEdit(suggestion.id)}
+                      onToggleEdit={() => onToggleEdit(suggestion)}
                       onUpdate={(patch) =>
                         onUpdateSuggestion(message.id, suggestion.id, patch)
                       }
@@ -1749,6 +1820,42 @@ export function AssistantPage() {
         typeof payload.error === "string"
           ? payload.error
           : "The proposal could not be removed.";
+      throw new Error(apiError);
+    }
+    return payload as { workflow: SchedulingWorkflowContext };
+  }
+
+  async function requestUpdateProposal(suggestion: AssistantSuggestion) {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw new Error(sessionError.message);
+    const accessToken = data.session?.access_token;
+    if (!accessToken) throw new Error("Sign in before changing a proposal.");
+    if (!activeWorkflow?.workflowId) {
+      throw new Error("This proposal is not linked to a persisted workflow.");
+    }
+    const apiResponse = await fetch("/api/assistant/proposals", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "update",
+        proposalId: suggestion.id,
+        suggestion,
+        workflowId: activeWorkflow.workflowId,
+      }),
+    });
+    const payload: unknown = await apiResponse.json().catch(() => null);
+    if (!apiResponse.ok) {
+      const apiError =
+        typeof payload === "object" &&
+        payload !== null &&
+        "error" in payload &&
+        typeof payload.error === "string"
+          ? payload.error
+          : "The edited proposal could not be saved.";
       throw new Error(apiError);
     }
     return payload as { workflow: SchedulingWorkflowContext };
@@ -2512,21 +2619,31 @@ export function AssistantPage() {
     }
   }
 
-  function toggleEdit(suggestionId: string) {
-    setActionStates((current) => {
-      const existing = current[suggestionId] ?? {
-        editing: false,
-        status: "pending" as ActionStatus,
-      };
+  async function toggleEdit(suggestion: AssistantSuggestion) {
+    const existing = actionStates[suggestion.id] ?? {
+      editing: false,
+      status: "pending" as ActionStatus,
+    };
+    if (!existing.editing) {
+      updateActionState(suggestion.id, { editing: true, message: undefined });
+      return;
+    }
 
-      return {
-        ...current,
-        [suggestionId]: {
-          ...existing,
-          editing: !existing.editing,
-        },
-      };
-    });
+    try {
+      const response = await requestUpdateProposal(suggestion);
+      setActiveWorkflow(response.workflow);
+      setActiveSchedulingContext(response.workflow.context);
+      updateActionState(suggestion.id, {
+        editing: false,
+        message: "Proposal updated.",
+      });
+    } catch (editError) {
+      updateActionState(suggestion.id, {
+        editing: true,
+        message: getErrorMessage(editError),
+        status: "error",
+      });
+    }
   }
 
   return (
@@ -2668,7 +2785,7 @@ export function AssistantPage() {
                       [messageId]: true,
                     }))
                   }
-                  onToggleEdit={toggleEdit}
+                  onToggleEdit={(suggestion) => void toggleEdit(suggestion)}
                   onUpdateSuggestion={updateSuggestion}
                   reviewableProposalIds={activeWorkflow?.pendingProposalIds ?? []}
                 />

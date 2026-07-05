@@ -200,8 +200,13 @@ function getBlockIdentityKey({
   day,
   plannedTask,
   projectName,
-}: Pick<WeeklyPlanBlock, "day" | "plannedTask" | "projectName">) {
+  scheduledDate,
+}: Pick<
+  WeeklyPlanBlock,
+  "day" | "plannedTask" | "projectName" | "scheduledDate"
+>) {
   return [
+    scheduledDate ?? "recurring",
     day,
     normalizeBlockPart(projectName),
     normalizeBlockPart(plannedTask),
@@ -325,6 +330,14 @@ function formatBlockDayDate(day: WeekDay, weekStartValue: string) {
   return `${day}, ${formatShortDate(date)}`;
 }
 
+function formatPlanBlockDate(block: WeeklyPlanBlock, weekStartValue: string) {
+  if (block.scheduledDate) {
+    const date = parseDateInput(block.scheduledDate);
+    return date ? `${block.day}, ${formatShortDate(date)}` : block.day;
+  }
+  return formatBlockDayDate(block.day, weekStartValue);
+}
+
 function formatSyncedEventRange(startsAt: string, endsAt: string) {
   const startDate = new Date(startsAt);
   const endDate = new Date(endsAt);
@@ -422,6 +435,13 @@ function weeklyPlanBlocksOverlap(
   secondBlock: WeeklyPlanBlock,
 ) {
   if (firstBlock.id === secondBlock.id || firstBlock.day !== secondBlock.day) {
+    return false;
+  }
+  if (
+    firstBlock.scheduledDate &&
+    secondBlock.scheduledDate &&
+    firstBlock.scheduledDate !== secondBlock.scheduledDate
+  ) {
     return false;
   }
 
@@ -2845,10 +2865,7 @@ export function WeeklyPlanSection({
                             ]
                           : [];
                     const googleEventLink = getBlockGoogleEventLink(block);
-                    const blockDayDate = formatBlockDayDate(
-                      block.day,
-                      exportWeekStart,
-                    );
+                    const blockDayDate = formatPlanBlockDate(block, exportWeekStart);
 
                     return (
                       <div
@@ -2962,10 +2979,7 @@ export function WeeklyPlanSection({
                   <div className="mt-4 grid gap-3">
                     {alreadySyncedSyncBlocks.map((block) => {
                       const googleEventLink = getBlockGoogleEventLink(block);
-                      const blockDayDate = formatBlockDayDate(
-                        block.day,
-                        exportWeekStart,
-                      );
+                      const blockDayDate = formatPlanBlockDate(block, exportWeekStart);
 
                       return (
                         <div
@@ -3033,10 +3047,7 @@ export function WeeklyPlanSection({
                   <div className="mt-4 grid gap-3">
                     {needsAttentionSyncBlocks.map((block) => {
                       const googleEventLink = getBlockGoogleEventLink(block);
-                      const blockDayDate = formatBlockDayDate(
-                        block.day,
-                        exportWeekStart,
-                      );
+                      const blockDayDate = formatPlanBlockDate(block, exportWeekStart);
                       const timeLabel =
                         parseStartTimeToMinutes(block.startTime) !== null
                           ? formatStartTime(block.startTime)
@@ -3119,10 +3130,7 @@ export function WeeklyPlanSection({
                   </div>
                   <div className="mt-4 grid gap-3">
                     {flexibleSyncBlocks.map((block) => {
-                      const blockDayDate = formatBlockDayDate(
-                        block.day,
-                        exportWeekStart,
-                      );
+                      const blockDayDate = formatPlanBlockDate(block, exportWeekStart);
 
                       return (
                         <div
@@ -3279,7 +3287,7 @@ export function WeeklyPlanSection({
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <p className="text-xs font-bold uppercase tracking-[0.12em] text-brand-ink/42">
-                            {formatBlockDayDate(block.day, exportWeekStart)}
+                            {formatPlanBlockDate(block, exportWeekStart)}
                           </p>
                           <p className="mt-1 text-sm font-semibold text-brand-ink">
                             {block.projectName}
@@ -3350,8 +3358,8 @@ export function WeeklyPlanSection({
                   </div>
                   <div className="mt-3 rounded-[18px] border border-brand-ink/8 bg-white/75 p-3">
                     <p className="text-xs font-bold uppercase tracking-[0.12em] text-brand-ink/42">
-                      {formatBlockDayDate(
-                        googleSyncMaintenanceConfirmation.block.day,
+                      {formatPlanBlockDate(
+                        googleSyncMaintenanceConfirmation.block,
                         exportWeekStart,
                       )}
                     </p>
