@@ -18,6 +18,7 @@ import type {
 import { TargetIcon } from "@/components/projects/icons";
 import { AssistantClarificationPanel } from "@/components/assistant/assistant-clarification-panel";
 import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
+import { AssistantProposalSeries } from "@/components/assistant/assistant-proposal-series";
 import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -195,7 +196,7 @@ const suggestionTypeLabels: Record<AssistantSuggestionType, string> = {
   new_project: "Project draft",
   update_project: "Project edit",
   suggested_scheduled_item: "Task / appointment",
-  suggested_weekly_block: "Schedule idea",
+  suggested_weekly_block: "Proposed",
   suggested_next_action: "Next action",
   schedule_exception: "One-day work change",
   workload_warning: "Workload note",
@@ -321,11 +322,6 @@ function addMinutesToTime(startTime: string, durationHours: number) {
   return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(
     total % 60,
   ).padStart(2, "0")}`;
-}
-
-function formatWeeklyMinutes(minutes: number) {
-  const hours = minutes / 60;
-  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h weekly`;
 }
 
 function updateSchedulingContextAfterApply(
@@ -502,7 +498,7 @@ function getWorkflowStatus({
   }
 
   if (pendingReviewCount > 0) {
-    return `${pendingReviewCount} ${pendingReviewCount === 1 ? "change" : "changes"} ready to review`;
+    return `${pendingReviewCount} ${pendingReviewCount === 1 ? "change" : "changes"} ready`;
   }
 
   if (context?.state === "calculating_availability") {
@@ -1193,7 +1189,9 @@ function ChatBubble({
   onOpenReview,
   onToggleEdit,
   onUpdateSuggestion,
-  reviewableProposalIds,
+  appliedProposalIds,
+  pendingProposalIds,
+  workflowProposalIds,
 }: {
   acknowledgedNoticeIds: string[];
   actionStates: Record<string, ActionState>;
@@ -1213,35 +1211,64 @@ function ChatBubble({
     suggestionId: string,
     patch: Partial<AssistantSuggestion>,
   ) => void;
-  reviewableProposalIds: string[];
+  appliedProposalIds: string[];
+  pendingProposalIds: string[];
+  workflowProposalIds: string[];
 }) {
-  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [showAllSeriesOccurrences, setShowAllSeriesOccurrences] =
-    useState(false);
   const isUser = message.role === "user";
-  const reviewableIdSet = new Set(reviewableProposalIds);
-  const actions = getActions(message.response).filter((suggestion) =>
-    reviewableIdSet.has(suggestion.id),
+  const workflowProposalIdSet = new Set(workflowProposalIds);
+  const hasCanonicalProposalIds = workflowProposalIdSet.size > 0;
+  const actions = getActions(message.response).filter(
+    (suggestion) =>
+      !isActionableSuggestion(suggestion) ||
+      !hasCanonicalProposalIds ||
+      workflowProposalIdSet.has(suggestion.id),
   );
   const visibleActions = actions.filter((suggestion) =>
     isActionVisible(actionStates[suggestion.id]),
   );
   const actionableActions = visibleActions.filter(isActionableSuggestion);
-  const pendingActionableActions = actionableActions.filter((suggestion) =>
-    isPendingActionState(actionStates[suggestion.id]),
+  const pendingProposalIdSet = new Set(pendingProposalIds);
+  const appliedProposalIdSet = new Set(appliedProposalIds);
+  const pendingActionableActions = actionableActions.filter(
+    (suggestion) =>
+      pendingProposalIdSet.has(suggestion.id) &&
+      isPendingActionState(actionStates[suggestion.id]),
   );
   const insightActions = visibleActions.filter(
     (suggestion) => !isActionableSuggestion(suggestion),
   );
+  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const initializedSelectionIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const newlyPendingIds = pendingActionableActions
+      .map((suggestion) => suggestion.id)
+      .filter((id) => !initializedSelectionIds.current.has(id));
+
+    if (newlyPendingIds.length === 0) {
+      return;
+    }
+
+    newlyPendingIds.forEach((id) => initializedSelectionIds.current.add(id));
+    setSelectedActionIds((current) => {
+      const next = new Set(current);
+      newlyPendingIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [pendingActionableActions]);
+
   const visibleActionCount = pendingActionableActions.length;
   const seriesProposal = message.response?.schedulingContext?.seriesProposal;
-  const displayedActionableActions =
-    seriesProposal && !showAllSeriesOccurrences
-      ? actionableActions.slice(0, seriesProposal.pattern.sessionsPerWeek)
-      : actionableActions;
-  const hasHandledAllSuggestions = actions.length > 0 && visibleActionCount === 0;
+  const appliedActionCount = actionableActions.filter((suggestion) =>
+    appliedProposalIdSet.has(suggestion.id),
+  ).length;
+  const hasHandledAllSuggestions =
+    actions.length > 0 &&
+    visibleActionCount === 0 &&
+    appliedActionCount === 0;
   const selectedActions = pendingActionableActions.filter((suggestion) =>
     selectedActionIds.has(suggestion.id),
   );
@@ -1269,14 +1296,23 @@ function ChatBubble({
           <TargetIcon className="h-4 w-4 text-brand-teal" />
         </div>
       ) : null}
-      <div className={cn("flex max-w-[90%] flex-col gap-2 sm:max-w-[82%]", isUser ? "items-end" : "items-start")}>
+      <div
+        className={cn(
+          "flex flex-col gap-2",
+          isUser
+            ? "max-w-[90%] items-end sm:max-w-[82%]"
+            : actions.length > 0
+              ? "min-w-0 flex-1 items-start"
+              : "max-w-[92%] items-start sm:max-w-[82%]",
+        )}
+      >
         {showsMessageBubble ? (
           <div
             className={cn(
-              "rounded-[22px] px-4 py-3 sm:px-5 sm:py-3.5",
+              "px-1 py-1.5",
               isUser
-                ? "bg-brand-ink text-white shadow-sm"
-                : "border border-brand-ink/5 bg-white text-brand-ink shadow-sm",
+                ? "rounded-[22px] bg-brand-ink px-4 py-3 text-white shadow-sm sm:px-5 sm:py-3.5"
+                : "text-brand-ink",
             )}
           >
             {message.isStreaming && !message.content ? (
@@ -1350,22 +1386,42 @@ function ChatBubble({
               </div>
             ) : null}
 
-            {!hasHandledAllSuggestions && !isReviewOpen ? (
+            {seriesProposal && actionableActions.length > 0 ? (
+              <AssistantProposalSeries
+                actionStates={actionStates}
+                appliedProposalIds={appliedProposalIds}
+                pendingProposalIds={pendingProposalIds}
+                selectedProposalIds={selectedActionIds}
+                series={seriesProposal}
+                suggestions={actionableActions}
+                onApplySelected={onApplyAll}
+                onIgnore={onIgnore}
+                onSelectionChange={(suggestionId, selected) =>
+                  setSelectedActionIds((current) => {
+                    const next = new Set(current);
+
+                    if (selected) next.add(suggestionId);
+                    else next.delete(suggestionId);
+
+                    return next;
+                  })
+                }
+                onToggleEdit={onToggleEdit}
+                onUpdate={(suggestionId, patch) =>
+                  onUpdateSuggestion(message.id, suggestionId, patch)
+                }
+              />
+            ) : null}
+
+            {!seriesProposal && !hasHandledAllSuggestions && !isReviewOpen ? (
               <div className="animate-assistant-card rounded-[22px] border border-brand-teal/14 bg-brand-teal/[0.045] p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-brand-ink">
-                      {seriesProposal
-                        ? seriesProposal.title
-                        : `Proposed plan · ${visibleActionCount} ${
-                            visibleActionCount === 1 ? "change" : "changes"
-                          }`}
+                      {`Proposed plan · ${visibleActionCount} ${
+                        visibleActionCount === 1 ? "change" : "changes"
+                      }`}
                     </p>
-                    {seriesProposal ? (
-                      <p className="mt-1 text-xs text-brand-ink/55">
-                        {seriesProposal.pattern.sessionsPerWeek} sessions · {seriesProposal.pattern.durationMinutes} minutes each · {formatWeeklyMinutes(seriesProposal.weeklyTotalMinutes)} · {seriesProposal.planningHorizon.weeks === 1 ? "current planning week" : `${seriesProposal.planningHorizon.weeks} weeks`}
-                      </p>
-                    ) : null}
                     <ul className="mt-2 grid gap-1 text-xs leading-5 text-brand-ink/58">
                       {pendingActionableActions.slice(0, 3).map((suggestion) => (
                         <li key={suggestion.id} className="truncate">
@@ -1386,12 +1442,12 @@ function ChatBubble({
               </div>
             ) : null}
 
-            {isReviewOpen && actionableActions.length > 0 ? (
+            {!seriesProposal && isReviewOpen && actionableActions.length > 0 ? (
               <section>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
-                      Suggested next steps
+                      Proposed changes
                     </h4>
                     <span className="text-xs text-brand-ink/40">
                       {pendingActionableActions.length} remaining
@@ -1416,34 +1472,13 @@ function ChatBubble({
                         variant="outline"
                         onClick={() => onApplyAll(pendingActionableActions)}
                       >
-                      {seriesProposal
-                        ? `Apply series (${pendingActionableActions.length})`
-                        : "Apply all"}
+                        Apply all
                       </Button>
                     ) : null}
                   </div>
                 </div>
-                {seriesProposal ? (
-                  <div className="mb-3 rounded-[20px] border border-brand-teal/15 bg-brand-teal/[0.045] p-4">
-                    <p className="font-semibold text-brand-ink">{seriesProposal.title}</p>
-                    <p className="mt-1 text-xs leading-5 text-brand-ink/58">
-                      {seriesProposal.pattern.sessionsPerWeek} sessions per week · {seriesProposal.pattern.durationMinutes} minutes each · {formatWeeklyMinutes(seriesProposal.weeklyTotalMinutes)} · {seriesProposal.totalOccurrences} total
-                    </p>
-                    {seriesProposal.totalOccurrences > seriesProposal.pattern.sessionsPerWeek ? (
-                      <button
-                        className="mt-3 text-xs font-semibold text-brand-teal"
-                        type="button"
-                        onClick={() => setShowAllSeriesOccurrences((current) => !current)}
-                      >
-                        {showAllSeriesOccurrences
-                          ? "Show first week"
-                          : `View all ${seriesProposal.totalOccurrences} sessions`}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
                 <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
-                  {displayedActionableActions.map((suggestion, index) => (
+                  {actionableActions.map((suggestion, index) => (
                     <ActionCard
                       key={suggestion.id}
                       actionState={
@@ -1564,6 +1599,10 @@ export function AssistantPage() {
   }, [prompt]);
 
   const hasMessages = messages.length > 0;
+  const hasSubstantiveUserMessage = messages.some(
+    (message) => message.role === "user" && message.content.trim().length > 0,
+  );
+  const isTrueEmptyState = !hasSubstantiveUserMessage;
   const showsPlanningContext = status !== "signed_out";
   const examplePrompts = getExamplePrompts(context?.plannerType);
   const isBusy = isSubmitting || status === "loading";
@@ -1595,6 +1634,12 @@ export function AssistantPage() {
     isSubmitting,
     pendingReviewCount,
   });
+  const showsActiveClarification =
+    hasSubstantiveUserMessage &&
+    !isSubmitting &&
+    pendingReviewCount === 0 &&
+    schedulingQuickReplies.length > 0 &&
+    Boolean(activeClarificationQuestion);
 
   async function clearConversationHistory() {
     setIsClearChatLoading(true);
@@ -2570,6 +2615,7 @@ export function AssistantPage() {
       );
     } finally {
       setIsSubmitting(false);
+      window.requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }
 
@@ -2801,16 +2847,17 @@ export function AssistantPage() {
       <div
         className={cn(
           "grid min-h-0 flex-1 gap-4",
-          showsPlanningContext && "xl:grid-cols-[minmax(0,1fr)_260px]",
+          showsPlanningContext &&
+            "xl:grid-cols-[minmax(0,1fr)_minmax(280px,32%)]",
         )}
       >
         <section
           aria-label="Assistant conversation"
-          className="order-last flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/66 shadow-[0_22px_58px_rgba(18,32,47,0.085)] backdrop-blur-sm xl:order-first"
+          className="order-last flex min-h-0 flex-col overflow-hidden rounded-[26px] bg-white/62 shadow-[0_20px_52px_rgba(18,32,47,0.075)] backdrop-blur-sm xl:order-first"
         >
           <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-              {!hasMessages ? (
+              {isTrueEmptyState ? (
                 <div className="flex min-h-[42vh] flex-col items-center justify-center py-6 text-center">
                   <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-teal text-white shadow-[0_14px_32px_rgba(15,118,110,0.18)]">
                     <TargetIcon
@@ -2880,11 +2927,13 @@ export function AssistantPage() {
                   }
                   onToggleEdit={(suggestion) => void toggleEdit(suggestion)}
                   onUpdateSuggestion={updateSuggestion}
-                  reviewableProposalIds={activeWorkflow?.pendingProposalIds ?? []}
+                  appliedProposalIds={activeWorkflow?.appliedProposalIds ?? []}
+                  pendingProposalIds={activeWorkflow?.pendingProposalIds ?? []}
+                  workflowProposalIds={activeWorkflow?.proposalIds ?? []}
                 />
               ))}
 
-              {hasMessages && schedulingQuickReplies.length > 0 ? (
+              {showsActiveClarification ? (
                 <AssistantClarificationPanel
                   key={`${activeSchedulingContext?.lastUpdatedAt ?? "clarification"}-${clarificationKind}`}
                   choices={schedulingQuickReplies}

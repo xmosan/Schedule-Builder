@@ -138,7 +138,7 @@ textarea {
   }
 
   .animate-assistant-card {
-    animation: assistant-card-in 300ms ease both;
+    animation: assistant-card-in 260ms ease both;
   }
 
   .animate-assistant-details {

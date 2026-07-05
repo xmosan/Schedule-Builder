@@ -13,6 +13,7 @@
     "test:assistant-workflow": "tsx scripts/assistant-workflow-tests.ts",
     "test:assistant-intelligence": "tsx scripts/assistant-intelligence-tests.ts",
     "test:assistant-semantics": "tsx scripts/assistant-semantic-tests.ts",
+    "test:assistant-ui": "tsx scripts/assistant-ui-tests.tsx",
     "lint": "next lint"
   },
   "dependencies": {
