@@ -2793,14 +2793,12 @@ function createRecurringSchedulingTurn({
   const extractedItems = isContinuation
     ? activeContext.extractedItems
     : extractPlanningItems(prompt, input.projects);
-  let semanticRequest = isContinuation && activeContext.semanticRequest
-    ? activeContext.semanticRequest
-    : extractSemanticPlanningRequest({
-        previous: activeContext?.semanticRequest,
-        projects: input.projects,
-        prompt,
-        workflowId: activeContext?.workflowId,
-      });
+  let semanticRequest = extractSemanticPlanningRequest({
+    previous: activeContext?.semanticRequest,
+    projects: input.projects,
+    prompt,
+    workflowId: activeContext?.workflowId,
+  });
   const isRecurring =
     isContinuation ||
     isRecurringPlanningRequest(prompt) ||
@@ -3106,6 +3104,23 @@ function createRecurringSchedulingTurn({
   const horizonStart = parseIsoDate(horizonStartDate) ?? baseWeekStart;
   const allWindows: AssistantOpenWindow[] = [];
   const selected: AssistantOpenWindow[] = [];
+  const shouldKeepWeeklyPattern =
+    horizonWeeks > 1 ||
+    Boolean(
+      semanticRequest.weeklyGoal?.recommendedPattern.consistentWeeklyTime,
+    );
+  let stableWeeklyPattern: Array<{
+    day: WeekDay;
+    startMinutes: number;
+  }> | null = null;
+  const preferredDays = new Set(
+    semanticRequest.scheduleInstructions.preferredDays?.filter(
+      (day): day is WeekDay => weekDays.includes(day as WeekDay),
+    ) ?? [],
+  );
+  const preferredStartMinutes = parseStartTimeToMinutes(
+    semanticRequest.scheduleInstructions.preferredTimes?.[0],
+  );
 
   for (let periodIndex = 0; periodIndex < horizonWeeks; periodIndex += 1) {
     const periodStart = addDays(horizonStart, periodIndex * 7);
@@ -3154,10 +3169,80 @@ function createRecurringSchedulingTurn({
     const firstByDate = [
       ...new Map(windows.map((window) => [window.date, window])).values(),
     ].filter((window) => window.durationMinutes >= durationMinutes);
-    const periodSelection =
-      count === 3 && firstByDate.length >= 6
-        ? [firstByDate[0], firstByDate[3], firstByDate[5]]
-        : selectDistributedWindows(windows, count, durationMinutes);
+    let periodSelection: AssistantOpenWindow[];
+    if (shouldKeepWeeklyPattern && stableWeeklyPattern) {
+      periodSelection = stableWeeklyPattern.flatMap((pattern) => {
+        const matchingWindow = windows.find(
+          (window) =>
+            window.day === pattern.day &&
+            pattern.startMinutes >= window.startMinutes &&
+            pattern.startMinutes + durationMinutes <= window.endMinutes,
+        );
+        return matchingWindow
+          ? [
+              createAssistantOpenWindow({
+                date: matchingWindow.date,
+                day: matchingWindow.day,
+                endMinutes: matchingWindow.endMinutes,
+                startMinutes: pattern.startMinutes,
+              }),
+            ]
+          : [];
+      });
+    } else {
+      const preferredWindow = windows.find(
+        (window) =>
+          preferredDays.has(window.day) &&
+          (preferredStartMinutes === null ||
+            (preferredStartMinutes >= window.startMinutes &&
+              preferredStartMinutes + durationMinutes <= window.endMinutes)),
+      );
+      const adjustedPreferredWindow = preferredWindow
+        ? createAssistantOpenWindow({
+            date: preferredWindow.date,
+            day: preferredWindow.day,
+            endMinutes: preferredWindow.endMinutes,
+            startMinutes:
+              preferredStartMinutes === null
+                ? preferredWindow.startMinutes
+                : preferredStartMinutes,
+          })
+        : null;
+      const remainingWindows = adjustedPreferredWindow
+        ? windows.filter(
+            (window) => window.date !== adjustedPreferredWindow.date,
+          )
+        : windows;
+      const remainingCount = count - (adjustedPreferredWindow ? 1 : 0);
+      const distributed =
+        remainingCount === 3 && firstByDate.length >= 6
+          ? [firstByDate[0], firstByDate[3], firstByDate[5]]
+          : selectDistributedWindows(
+              remainingWindows,
+              remainingCount,
+              durationMinutes,
+            );
+      periodSelection = adjustedPreferredWindow
+        ? [adjustedPreferredWindow, ...distributed]
+        : distributed;
+      if (shouldKeepWeeklyPattern && periodSelection.length === count) {
+        stableWeeklyPattern = periodSelection.map((window) => ({
+          day: window.day,
+          startMinutes: window.startMinutes,
+        }));
+      }
+    }
+    periodSelection.sort(
+      (first, second) =>
+        first.date.localeCompare(second.date) ||
+        first.startMinutes - second.startMinutes,
+    );
+    if (shouldKeepWeeklyPattern && periodIndex === 0) {
+      stableWeeklyPattern = periodSelection.map((window) => ({
+        day: window.day,
+        startMinutes: window.startMinutes,
+      }));
+    }
     allWindows.push(...windows);
     selected.push(...periodSelection);
 
@@ -3216,12 +3301,22 @@ function createRecurringSchedulingTurn({
   const endDate = toIsoDate(addDays(horizonStart, horizonWeeks * 7 - 1));
   const firstWeek = selected.slice(0, count);
   const seriesProposal: RecurringSeriesProposal = {
-    assumptions: semanticRequest.contradictions
-      .filter((conflict) => conflict.resolved)
-      .map(
-        () =>
-          `Used ${count} sessions per week to respect the weekly maximum.`,
-      ),
+    assumptions: [
+      ...semanticRequest.contradictions
+        .filter((conflict) => conflict.resolved)
+        .map(
+          () =>
+            `Used ${count} sessions per week to respect the weekly maximum.`,
+        ),
+      ...(horizon?.minimumCount && horizon.maximumCount
+        ? [
+            `Used ${horizon.maximumCount} weeks from the requested ${horizon.minimumCount}-${horizon.maximumCount} week range.`,
+          ]
+        : []),
+      ...(shouldKeepWeeklyPattern && horizonWeeks > 1
+        ? ["Kept the same weekday and start time in each week."]
+        : []),
+    ],
     conflicts: semanticRequest.contradictions,
     id: `series-${workflowId}`,
     occurrenceProposalIds: proposals.flatMap((proposal) =>
@@ -3270,7 +3365,13 @@ function createRecurringSchedulingTurn({
   }
   const message =
     horizonWeeks > 1
-      ? `I found a balanced rhythm across the week and drafted all ${proposals.length} sessions for review.`
+      ? count === 1 && durationMinutes === 180
+        ? `I drafted one three-hour Sealed Nectar reading block at the same day and time each week for ${formatSmallNumber(horizonWeeks)} weeks. Nothing has been added yet.`
+        : `I drafted all ${proposals.length} ${
+            /sealed nectar/i.test(semanticRequest.activity.title)
+              ? "Sealed Nectar reading"
+              : semanticRequest.activity.title
+          } sessions across ${formatSmallNumber(horizonWeeks)} weeks, keeping the weekly pattern consistent. Nothing has been added yet.`
       : semanticRequest.weeklyGoal
         ? `I drafted ${formatSmallNumber(proposals.length)} weekly ${
             /sealed nectar/i.test(semanticRequest.activity.title)

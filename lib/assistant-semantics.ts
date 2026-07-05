@@ -80,6 +80,8 @@ export type SemanticPlanningRequest = {
     minimumSessionDurationMinutes?: number;
     planningHorizon?: {
       count: number;
+      maximumCount?: number;
+      minimumCount?: number;
       unit: "day" | "week" | "month";
     };
     preferredDays?: string[];
@@ -96,8 +98,10 @@ export type WeeklyRecurringGoal = {
   occurrenceProposalIds: string[];
   purpose?: string;
   recommendedPattern: {
+    consistentWeeklyTime?: boolean;
     durationMinutes: number;
     rationale: string;
+    singleContiguousBlock?: boolean;
     sessionsPerWeek: number;
     status: "pending" | "accepted" | "rejected";
   };
@@ -148,14 +152,23 @@ const numberWords: Record<string, number> = {
 };
 
 const commandOnlyPattern =
-  /^(?:(?:please\s+)?(?:plan|schedule|add|put|place|find time|make time|implement|move|create|do)\b|(?:it|this|that)\b|(?:for\s+)?(?:the\s+)?next\s+\w+\s+(?:days?|weeks?|months?))[^a-z0-9]*$/i;
+  /^(?:(?:please\s+)?(?:(?:plan|schedule|add|put|place|implement|move|create|draft|do)(?:\s+(?:it|this|that))?|find time|make time|go ahead)\b|(?:it|this|that)\b|(?:for\s+)?(?:the\s+)?next\s+\w+\s+(?:days?|weeks?|months?))[^a-z0-9]*$/i;
 const commandLanguagePattern =
-  /\b(?:plan|schedule|add|put|place|find time|make time|implement|move|create|do it)\b/i;
+  /\b(?:plan|schedule|add|put|place|find time|make time|implement|move|create|draft it|do it|go ahead)\b/i;
 
 function parseNumber(value: string | undefined) {
   if (!value) return null;
   const parsed = Number(value) || numberWords[value.toLowerCase()];
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function normalizePlanningLanguage(prompt: string) {
+  return prompt
+    .replace(/\beveryweek\b/gi, "every week")
+    .replace(/\bperweek\b/gi, "per week")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function formatSmallNumber(value: number) {
@@ -199,7 +212,7 @@ export function isCommandDerivedTitle(title: string) {
   return (
     !normalized ||
     commandOnlyPattern.test(normalized) ||
-    (/^(?:plan|schedule|add|put|place|find|make|implement|move|create)\b/i.test(
+    (/^(?:plan|schedule|add|put|place|find|make|implement|move|create|draft)\b/i.test(
       normalized,
     ) && !/\b(?:agenda|outline|report|assignment|workout|grocer|call|read)\b/i.test(normalized))
   );
@@ -209,6 +222,9 @@ export function inferSemanticActivityTitle(
   prompt: string,
   previousTitle?: string | null,
 ) {
+  if (previousTitle && commandOnlyPattern.test(prompt.trim())) {
+    return previousTitle;
+  }
   if (/\b(?:the\s+)?sealed nectar\b/i.test(prompt)) {
     return "Read The Sealed Nectar";
   }
@@ -295,7 +311,7 @@ export type WeeklyCommitment = {
 };
 
 export function parseWeeklyCommitment(prompt: string): WeeklyCommitment | null {
-  const match = prompt.match(weeklyCommitmentPattern);
+  const match = normalizePlanningLanguage(prompt).match(weeklyCommitmentPattern);
   if (!match) return null;
   const qualifier = (match[1] ?? match[4] ?? "").toLowerCase();
   const amount = parseNumber(match[2] ?? match[5]);
@@ -314,13 +330,40 @@ export function parseWeeklyCommitment(prompt: string): WeeklyCommitment | null {
 }
 
 export function removeWeeklyCommitmentPhrase(prompt: string) {
-  return prompt.replace(weeklyCommitmentPattern, " ");
+  return normalizePlanningLanguage(prompt).replace(weeklyCommitmentPattern, " ");
 }
 
 function recommendWeeklyPattern(
   weeklyMinutes: number,
   itemType: SemanticPlanningItemType,
+  options: {
+    consistentWeeklyTime?: boolean;
+    durationMinutes?: number | null;
+    sessionsPerWeek?: number | null;
+    singleContiguousBlock?: boolean;
+  } = {},
 ) {
+  if (options.singleContiguousBlock) {
+    return {
+      consistentWeeklyTime: true,
+      durationMinutes: weeklyMinutes,
+      rationale:
+        "The user asked for one continuous block repeated at the same time each week.",
+      sessionsPerWeek: 1,
+      singleContiguousBlock: true,
+      status: "accepted" as const,
+    };
+  }
+  if (options.sessionsPerWeek && options.durationMinutes) {
+    return {
+      consistentWeeklyTime: options.consistentWeeklyTime ?? true,
+      durationMinutes: options.durationMinutes,
+      rationale: "The user explicitly chose the weekly session pattern.",
+      sessionsPerWeek: options.sessionsPerWeek,
+      singleContiguousBlock: false,
+      status: "accepted" as const,
+    };
+  }
   const splitFriendly = [
     "reading",
     "study",
@@ -335,17 +378,39 @@ function recommendWeeklyPattern(
       ? 2
       : 1;
   return {
+    consistentWeeklyTime: options.consistentWeeklyTime ?? true,
     durationMinutes: Math.ceil(weeklyMinutes / sessionsPerWeek / 5) * 5,
     rationale:
       sessionsPerWeek > 1
         ? "Shorter sessions are easier to maintain than one long block."
         : "One session covers the weekly commitment without unnecessary splitting.",
     sessionsPerWeek,
+    singleContiguousBlock: sessionsPerWeek === 1,
     status: "pending" as const,
   };
 }
 
 function parsePlanningHorizon(prompt: string) {
+  const rangeMatch = prompt.match(
+    /\b(?:for|over|during)?\s*(?:the\s+)?next\s+(\d+|one|two|three|four|five|six|seven|eight)\s*-\s*(\d+|one|two|three|four|five|six|seven|eight)\s+(days?|weeks?|months?)\b/i,
+  );
+  const rangeMinimum = parseNumber(rangeMatch?.[1]);
+  const rangeMaximum = parseNumber(rangeMatch?.[2]);
+  if (rangeMatch && rangeMinimum && rangeMaximum) {
+    const minimumCount = Math.min(rangeMinimum, rangeMaximum);
+    const maximumCount = Math.max(rangeMinimum, rangeMaximum);
+    const unit = rangeMatch[3].toLowerCase().startsWith("day")
+      ? "day"
+      : rangeMatch[3].toLowerCase().startsWith("month")
+        ? "month"
+        : "week";
+    return {
+      count: maximumCount,
+      maximumCount,
+      minimumCount,
+      unit,
+    } as const;
+  }
   const match = prompt.match(
     /\b(?:for|over|during)?\s*(?:the\s+)?next\s+(\d+|one|two|three|four|five|six|seven|eight)\s+(days?|weeks?|months?)\b/i,
   );
@@ -368,9 +433,56 @@ function parseIntervalDays(prompt: string) {
 
 function parseSessionsPerWeek(prompt: string) {
   const match = prompt.match(
-    /\b(\d+|one|two|three|four|five|six|seven)\s+(?:\w+\s+)?sessions?\s+(?:each|per)\s+week\b/i,
+    /\b(\d+|one|two|three|four|five|six|seven)\s+(?:(?:\w+\s+)?sessions?\s+(?:each|per)\s+week|days?\s+(?:of\s+the|a|per)\s+week|days?\s+of\s+the\s+week)\b/i,
   );
   return parseNumber(match?.[1]);
+}
+
+const planningWeekdays = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+] as const;
+
+function parsePreferredDays(prompt: string) {
+  return planningWeekdays.filter((day) =>
+    new RegExp(`\\b${day}\\b`, "i").test(prompt),
+  );
+}
+
+function parsePreferredTime(prompt: string) {
+  const match = prompt.match(
+    /\b(?:at|after|starting(?:\s+at)?|from)\s+(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)\b/i,
+  );
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] ?? 0);
+  const isPm = /^p/i.test(match[3]);
+  if (hours === 12) hours = 0;
+  if (isPm) hours += 12;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function inferWeeklyPatternPreference(prompt: string) {
+  const singleContiguousBlock =
+    /\b(?:consecutive|contiguous|continuous|single|one)\s+(?:time|block|session)\b/i.test(
+      prompt,
+    ) ||
+    /\b(?:same|repeated)\s+(?:day\s+and\s+time|time|block)\s+(?:each|every|per)\s+week\b/i.test(
+      prompt,
+    );
+  const splitAcrossDays =
+    /\b(?:per|each)\s+day\b/i.test(prompt) ||
+    /\b\d+\s+days?\s+(?:of\s+the|a|per)\s+week\b/i.test(prompt);
+  return {
+    consistentWeeklyTime:
+      singleContiguousBlock || /\b(?:same|repeated)\b.*\bweek\b/i.test(prompt),
+    singleContiguousBlock: singleContiguousBlock && !splitAcrossDays,
+  };
 }
 
 function parseMaximumWeeklyMinutes(prompt: string) {
@@ -436,30 +548,76 @@ export function extractSemanticPlanningRequest({
   requestId?: string;
   workflowId?: string;
 }): SemanticPlanningRequest {
-  const title = inferSemanticActivityTitle(prompt, previous?.activity.title);
-  const weeklyCommitment = parseWeeklyCommitment(prompt);
+  const normalizedPrompt = normalizePlanningLanguage(prompt);
+  const title = inferSemanticActivityTitle(
+    normalizedPrompt,
+    previous?.activity.title,
+  );
+  const weeklyCommitment = parseWeeklyCommitment(normalizedPrompt);
+  const planningHorizon =
+    parsePlanningHorizon(normalizedPrompt) ??
+    previous?.scheduleInstructions.planningHorizon;
+  const intervalDays =
+    parseIntervalDays(normalizedPrompt) ??
+    previous?.scheduleInstructions.desiredFrequency?.intervalDays;
+  const explicitSessionCount = parseSessionsPerWeek(normalizedPrompt);
+  const explicitDurationMinutes = parseDurationMinutes(normalizedPrompt);
+  const explicitPreferredDays = parsePreferredDays(normalizedPrompt);
+  const explicitPreferredTime = parsePreferredTime(normalizedPrompt);
+  const sessionCount =
+    explicitSessionCount ??
+    previous?.scheduleInstructions.desiredFrequency?.count;
+  const durationMinutes =
+    explicitDurationMinutes ??
+    previous?.scheduleInstructions.sessionDurationMinutes;
   const previousWeeklyMinutes = previous?.weeklyGoal?.weeklyMinutes ??
     previous?.scheduleInstructions.weeklyMinutes;
   const weeklyMinutes = weeklyCommitment?.kind === "maximum"
     ? previousWeeklyMinutes
-    : weeklyCommitment?.minutes ?? previousWeeklyMinutes;
-  const planningHorizon = parsePlanningHorizon(prompt) ?? previous?.scheduleInstructions.planningHorizon;
-  const intervalDays = parseIntervalDays(prompt) ?? previous?.scheduleInstructions.desiredFrequency?.intervalDays;
-  const sessionCount = parseSessionsPerWeek(prompt) ?? previous?.scheduleInstructions.desiredFrequency?.count;
-  const durationMinutes = parseDurationMinutes(prompt) ?? previous?.scheduleInstructions.sessionDurationMinutes;
+    : weeklyCommitment?.minutes ??
+      previousWeeklyMinutes ??
+      (explicitSessionCount && explicitDurationMinutes
+        ? explicitSessionCount * explicitDurationMinutes
+        : undefined);
   const maximumWeeklyMinutes =
-    parseMaximumWeeklyMinutes(prompt) ??
+    parseMaximumWeeklyMinutes(normalizedPrompt) ??
     (weeklyCommitment?.kind === "maximum" ? weeklyCommitment.minutes : null) ??
     previous?.scheduleInstructions.maximumWeeklyMinutes;
   const hasRecurringInstructions = Boolean(
     planningHorizon || intervalDays || sessionCount || weeklyMinutes,
   );
-  const purpose = inferPurpose(prompt, title, previous?.activity.purpose);
-  const itemType = inferItemType(prompt, title, hasRecurringInstructions);
+  const purpose = inferPurpose(
+    normalizedPrompt,
+    title,
+    previous?.activity.purpose,
+  );
+  const itemType = inferItemType(
+    normalizedPrompt,
+    title,
+    hasRecurringInstructions,
+  );
+  const patternPreference = inferWeeklyPatternPreference(normalizedPrompt);
   const previousPattern = previous?.weeklyGoal?.recommendedPattern;
   const recommendedPattern = weeklyMinutes
-    ? previousPattern ?? recommendWeeklyPattern(weeklyMinutes, itemType)
+    ? explicitSessionCount && explicitDurationMinutes
+      ? recommendWeeklyPattern(weeklyMinutes, itemType, {
+          consistentWeeklyTime: true,
+          durationMinutes: explicitDurationMinutes,
+          sessionsPerWeek: explicitSessionCount,
+        })
+      : patternPreference.singleContiguousBlock
+        ? recommendWeeklyPattern(weeklyMinutes, itemType, patternPreference)
+        : previousPattern ??
+          recommendWeeklyPattern(weeklyMinutes, itemType, patternPreference)
     : undefined;
+  const effectiveSessionCount =
+    recommendedPattern?.status === "accepted"
+      ? recommendedPattern.sessionsPerWeek
+      : sessionCount;
+  const effectiveDurationMinutes =
+    recommendedPattern?.status === "accepted"
+      ? recommendedPattern.durationMinutes
+      : durationMinutes;
   const constraints: PlanningConstraint[] = [];
   if (planningHorizon) {
     constraints.push({
@@ -546,20 +704,27 @@ export function extractSemanticPlanningRequest({
     contradictions,
     itemType,
     missingFields,
-    relatedProject: findRelatedProject(projects, title, prompt),
+    relatedProject: findRelatedProject(projects, title, normalizedPrompt),
     requestId: requestId ?? previous?.requestId ?? `request-${Date.now()}`,
     scheduleInstructions: {
       desiredFrequency: hasRecurringInstructions
         ? {
-            count: sessionCount,
+            count: effectiveSessionCount,
             intervalDays,
             period: "week",
           }
         : undefined,
       maximumWeeklyMinutes,
-      minimumSessionDurationMinutes: durationMinutes,
+      minimumSessionDurationMinutes: effectiveDurationMinutes,
       planningHorizon,
-      sessionDurationMinutes: durationMinutes,
+      preferredDays:
+        explicitPreferredDays.length > 0
+          ? [...explicitPreferredDays]
+          : previous?.scheduleInstructions.preferredDays,
+      preferredTimes: explicitPreferredTime
+        ? [explicitPreferredTime]
+        : previous?.scheduleInstructions.preferredTimes,
+      sessionDurationMinutes: effectiveDurationMinutes,
       weeklyMinutes,
     },
     ...(weeklyMinutes && recommendedPattern

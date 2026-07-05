@@ -16,6 +16,7 @@ import {
   extractSemanticPlanningRequest,
   inferSemanticActivityTitle,
   isCommandDerivedTitle,
+  normalizePlanningLanguage,
   parseWeeklyCommitment,
   validateSemanticTitle,
 } from "../lib/assistant-semantics";
@@ -158,6 +159,122 @@ check("Weekly total derives from the proposed occurrences", () =>
 check("Weekly recommendation does not silently create an indefinite series", () =>
   assert.equal(weeklyDraft.context.seriesProposal?.planningHorizon.weeks, 1));
 
+const screenshotInput: AssistantScheduleAnalysisInput = {
+  ...input,
+  currentDate: "2026-07-05",
+  workShifts: [
+    ...(["Monday", "Tuesday", "Wednesday", "Thursday"] as const).map(
+      (day, index) => ({
+        day,
+        endTime: "17:00",
+        id: `screenshot-shift-${index}`,
+        location: "",
+        notes: "",
+        recurring: true,
+        startTime: "07:30",
+      }),
+    ),
+    {
+      day: "Friday",
+      endTime: "11:00",
+      id: "screenshot-shift-friday",
+      location: "",
+      notes: "",
+      recurring: true,
+      startTime: "07:00",
+    },
+  ],
+};
+const screenshotPrompt =
+  "I need to read the sealed nectar over the next 3-5 weeks for at least 3 hours everyweek. Find me a consecutive time that is repeated every week to read the book";
+check("Common everyweek spelling is normalized", () =>
+  assert.match(normalizePlanningLanguage(screenshotPrompt), /every week/i));
+const screenshotSemantic = extractSemanticPlanningRequest({
+  prompt: screenshotPrompt,
+});
+check("Three-to-five-week ranges preserve both bounds", () =>
+  assert.deepEqual(screenshotSemantic.scheduleInstructions.planningHorizon, {
+    count: 5,
+    maximumCount: 5,
+    minimumCount: 3,
+    unit: "week",
+  }));
+check("Consecutive weekly time means one contiguous three-hour block", () => {
+  assert.equal(
+    screenshotSemantic.weeklyGoal?.recommendedPattern.singleContiguousBlock,
+    true,
+  );
+  assert.equal(screenshotSemantic.weeklyGoal?.recommendedPattern.sessionsPerWeek, 1);
+  assert.equal(screenshotSemantic.weeklyGoal?.recommendedPattern.durationMinutes, 180);
+  assert.equal(screenshotSemantic.weeklyGoal?.recommendedPattern.status, "accepted");
+});
+const screenshotInitial = advanceAssistantSchedulingConversation({
+  activeContext: null,
+  input: screenshotInput,
+  prompt: screenshotPrompt,
+});
+assert.ok(screenshotInitial);
+check("Complete screenshot request drafts five proposals immediately", () => {
+  assert.equal(screenshotInitial.context.state, "awaiting_apply");
+  assert.equal(screenshotInitial.context.pendingProposals.length, 5);
+  assert.match(screenshotInitial.message, /same day and time each week for five weeks/i);
+  assert.doesNotMatch(
+    screenshotInitial.message,
+    /work Friday|highest-impact|Helpful notes|Which opening/i,
+  );
+});
+check("Repeated weekly blocks keep the same weekday and start time", () => {
+  const dates = screenshotInitial.context.pendingProposals.map((proposal) =>
+    new Date(`${proposal.date}T00:00:00`).getDay(),
+  );
+  const times = screenshotInitial.context.pendingProposals.map(
+    (proposal) => proposal.startTime,
+  );
+  assert.equal(new Set(dates).size, 1);
+  assert.equal(new Set(times).size, 1);
+  assert.ok(
+    screenshotInitial.context.pendingProposals.every(
+      (proposal) =>
+        proposal.title === "Read The Sealed Nectar" &&
+        proposal.durationMinutes === 180,
+    ),
+  );
+});
+
+const screenshotCorrection = advanceAssistantSchedulingConversation({
+  activeContext: screenshotInitial.context,
+  input: screenshotInput,
+  prompt:
+    "I want you to scan through my schedule and choose a day and time for me, and it'll be one hour per day but 3 days of the week",
+});
+assert.ok(screenshotCorrection);
+check("Three days of the week is understood as three one-hour sessions", () => {
+  assert.equal(screenshotCorrection.context.pendingProposals.length, 15);
+  assert.equal(screenshotCorrection.context.seriesProposal?.pattern.sessionsPerWeek, 3);
+  assert.equal(screenshotCorrection.context.seriesProposal?.pattern.durationMinutes, 60);
+  assert.equal(screenshotCorrection.context.seriesProposal?.weeklyTotalMinutes, 180);
+  assert.equal(
+    screenshotCorrection.context.semanticRequest?.activity.title,
+    "Read The Sealed Nectar",
+  );
+  assert.doesNotMatch(screenshotCorrection.message, /useful openings|Which opening/i);
+});
+const screenshotPreference = advanceAssistantSchedulingConversation({
+  activeContext: screenshotCorrection.context,
+  input: screenshotInput,
+  prompt: "Saturday after 9:00 AM",
+});
+assert.ok(screenshotPreference);
+check("A recurring time correction keeps Saturday at 9 AM in every week", () => {
+  const saturdays = screenshotPreference.context.pendingProposals.filter(
+    (proposal) =>
+      new Date(`${proposal.date}T00:00:00`).getDay() === 6 &&
+      proposal.startTime === "09:00",
+  );
+  assert.equal(saturdays.length, 5);
+  assert.equal(screenshotPreference.context.pendingProposals.length, 15);
+});
+
 const requestPrompt =
   "I want to make time to read The Sealed Nectar. Place it on my schedule for the next five weeks. I need at least one hour every two days, but no more than three hours per week. Find time around my schedule and implement it.";
 const semantic = extractSemanticPlanningRequest({ prompt: requestPrompt });
@@ -240,7 +357,7 @@ check("Sessions use a stable Tuesday-Thursday-Saturday rhythm", () =>
     ["Tuesday", "Thursday", "Saturday"],
   ));
 check("Series prose stays compressed", () => {
-  assert.match(secondTurn.message, /drafted all 15 sessions/i);
+  assert.match(secondTurn.message, /drafted all 15 .*sessions/i);
   assert.ok(secondTurn.message.length < 140);
 });
 

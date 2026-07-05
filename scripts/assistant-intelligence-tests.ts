@@ -347,6 +347,15 @@ check("Recurring explicit request gets batch intent", () =>
 check("Three-times parser returns three", () => assert.equal(parseRequestedSessionCount("three times this week"), 3));
 check("Every-weekday parser returns five", () => assert.equal(parseRequestedSessionCount("every weekday"), 5));
 check("Workout count parser returns two", () => assert.equal(parseRequestedSessionCount("two workouts"), 2));
+check("Three days of the week parser returns three", () =>
+  assert.equal(parseRequestedSessionCount("one hour per day, 3 days of the week"), 3));
+check("Scan-and-choose wording is an explicit scheduling request", () =>
+  assert.equal(
+    isExplicitSchedulingRequest(
+      "Scan through my schedule and choose a day and time for me",
+    ),
+    true,
+  ));
 check("Duration parser does not invent a duration", () => assert.equal(parseExplicitDurationMinutes("schedule reading"), null));
 check("Duration parser preserves 45 minutes", () => assert.equal(parseExplicitDurationMinutes("45 minutes each"), 45));
 

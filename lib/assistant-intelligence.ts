@@ -2,6 +2,7 @@ import type { AssistantContextStatus } from "@/lib/assistant";
 import type { Project } from "@/lib/projects";
 import {
   extractSemanticPlanningRequest,
+  normalizePlanningLanguage,
   removeWeeklyCommitmentPhrase,
   validateSemanticTitle,
 } from "@/lib/assistant-semantics";
@@ -122,7 +123,7 @@ const explicitMutationPattern =
 const statusQuestionPattern =
   /\b(?:is it on (?:my|the) schedule|is the [^?.]{1,60} scheduled|did you add (?:it|that|them|those)|was (?:it|that) saved|is the plan applied|did (?:that|those|the) (?:blocks?|sessions?) get created|has (?:it|that) been (?:added|scheduled|saved))\b/i;
 const recurringPattern =
-  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every week|each week|per week|weekly|every weekday|every other day|every\s+(?:\d+|one|two|three|four|five|six|seven)\s+days?|next\s+(?:\d+|one|two|three|four|five|six|seven|eight)\s+(?:weeks?|months?)|times? this week|sessions? this week|slots|twice|three times|four times|gradually|recurring)\b/i;
+  /\b(?:throughout the week|across the week|split (?:it|this) across|several days|a little each|every week|each week|per week|weekly|every weekday|every other day|every\s+(?:\d+|one|two|three|four|five|six|seven)\s+days?|next\s+(?:\d+|one|two|three|four|five|six|seven|eight)(?:\s*-\s*(?:\d+|one|two|three|four|five|six|seven|eight))?\s+(?:weeks?|months?)|(?:\d+|one|two|three|four|five|six|seven|eight)\s+days?\s+(?:of\s+the|a|per)\s+week|times? this week|sessions? this week|slots|twice|three times|four times|gradually|recurring)\b/i;
 const completionClaimPattern =
   /\b(?:you(?:'re| are) all set|it(?:'s| is) scheduled|i (?:added|scheduled|saved|applied|put) (?:it|that|them|those)|it(?:'s| is) on (?:your|the) schedule|your plan has been updated|(?:done|applied|completed)[.!]?\s*$)\b/i;
 const appliedClaimPattern =
@@ -155,9 +156,12 @@ export function isExplicitMutationRequest(prompt: string) {
 }
 
 export function isExplicitSchedulingRequest(prompt: string) {
-  const normalized = prompt.trim();
+  const normalized = normalizePlanningLanguage(prompt);
   return (
     /\b(?:put|add|schedule|plug|fit|reserve|block|book)\b.*\b(?:schedule|calendar|week|time|slot|spot|at\s+\d)/i.test(
+      normalized,
+    ) ||
+    /\b(?:scan|check|look through)\b.*\b(?:schedule|calendar)\b.*\b(?:choose|pick|select|find)\b.*\b(?:day|time|slot|opening)\b/i.test(
       normalized,
     ) ||
     /\b(?:find|give|show)\s+(?:me\s+)?(?:some\s+)?(?:time|slots?|openings?)\b/i.test(
@@ -172,20 +176,21 @@ export function isAssistantStatusQuestion(prompt: string) {
 }
 
 export function isRecurringPlanningRequest(prompt: string) {
-  return recurringPattern.test(prompt.trim());
+  return recurringPattern.test(normalizePlanningLanguage(prompt));
 }
 
 export function parseRequestedSessionCount(prompt: string) {
-  if (/\bevery weekday\b/i.test(prompt)) {
+  const normalized = normalizePlanningLanguage(prompt);
+  if (/\bevery weekday\b/i.test(normalized)) {
     return 5;
   }
 
-  if (/\bevery other day\b/i.test(prompt)) {
+  if (/\bevery other day\b/i.test(normalized)) {
     return 3;
   }
 
-  const match = prompt.match(
-    /\b(\d+|one|two|three|four|five|six|seven|eight|twice)\s+(?:(?:reading|study|workout)\s+)?(?:sessions?|times?|workouts?)\b/i,
+  const match = normalized.match(
+    /\b(\d+|one|two|three|four|five|six|seven|eight|twice)\s+(?:(?:reading|study|workout)\s+)?(?:sessions?|times?|workouts?|days?\s+(?:of\s+the|a|per)\s+week)\b/i,
   );
 
   if (!match) {
