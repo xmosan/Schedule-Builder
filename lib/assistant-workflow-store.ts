@@ -173,6 +173,15 @@ export async function loadAssistantWorkflow(
   const workflow = parseWorkflowRow(workflowResult.data as WorkflowRow);
   if (!workflow) return { data: null, error: new Error("Stored workflow is invalid.") };
 
+  return loadAssistantWorkflowRecords(supabase, userId, workflow);
+}
+
+async function loadAssistantWorkflowRecords(
+  supabase: SupabaseClient,
+  userId: string,
+  workflow: SchedulingWorkflowContext,
+): Promise<{ data: LoadedAssistantWorkflow | null; error: unknown | null }> {
+
   const [proposalResult, batchResult] = await Promise.all([
     supabase
       .from("assistant_proposals")
@@ -215,13 +224,42 @@ export async function loadAssistantWorkflowById(
 ) {
   const result = await supabase
     .from("assistant_workflows")
-    .select("thread_id")
+    .select(
+      "workflow_id, thread_id, user_id, state, intent, extracted_items, missing_fields, selected_candidate_ids, proposal_ids, pending_proposal_ids, applied_proposal_ids, completion_status, persistence_status, context, last_updated_at",
+    )
     .eq("user_id", userId)
     .eq("workflow_id", workflowId)
     .maybeSingle();
   if (result.error) return { data: null, error: result.error };
-  if (!result.data?.thread_id) return { data: null, error: null };
-  return loadAssistantWorkflow(supabase, userId, result.data.thread_id);
+  if (!result.data) return { data: null, error: null };
+
+  const workflow = parseWorkflowRow(result.data as WorkflowRow);
+  if (!workflow) {
+    return { data: null, error: new Error("Stored workflow is invalid.") };
+  }
+
+  return loadAssistantWorkflowRecords(supabase, userId, workflow);
+}
+
+export async function loadAssistantWorkflowByBatchId(
+  supabase: SupabaseClient,
+  userId: string,
+  batchId: string,
+) {
+  const result = await supabase
+    .from("assistant_proposal_batches")
+    .select("workflow_id")
+    .eq("user_id", userId)
+    .eq("batch_id", batchId)
+    .maybeSingle();
+
+  if (result.error) return { data: null, error: result.error };
+  if (!result.data?.workflow_id) return { data: null, error: null };
+  return loadAssistantWorkflowById(
+    supabase,
+    userId,
+    result.data.workflow_id,
+  );
 }
 
 export async function persistAssistantWorkflow(

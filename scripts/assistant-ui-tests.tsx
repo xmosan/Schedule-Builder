@@ -2,30 +2,57 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AssistantProposalSeries } from "../components/assistant/assistant-proposal-series";
+import { AssistantPlanSummary } from "../components/assistant/assistant-plan-summary";
+import {
+  AssistantProposalSeries,
+  type AssistantProposalRowState,
+} from "../components/assistant/assistant-proposal-series";
 import type { AssistantSuggestion } from "../lib/assistant";
+import {
+  getPlanPresentationKind,
+  type PlanPresentationKind,
+} from "../lib/assistant-plan-presentation";
+import type { AssistantSchedulingContext } from "../lib/assistant-schedule-analysis";
 import type { RecurringSeriesProposal } from "../lib/assistant-semantics";
+import {
+  getSafeClarificationQuestion,
+  sanitizeAssistantUserFacingText,
+  shouldRenderAssistantClarification,
+} from "../lib/assistant-ui-guards";
+import type { SchedulingWorkflowContext } from "../lib/assistant-workflow";
 
-const suggestions: AssistantSuggestion[] = [
-  ["proposal-1", "2026-07-05", "Sunday", "08:00"],
-  ["proposal-2", "2026-07-08", "Wednesday", "17:00"],
-  ["proposal-3", "2026-07-10", "Friday", "11:00"],
-].map(([id, itemDate, day, startTime]) => ({
-  confidence: 1,
-  day: day as AssistantSuggestion["day"],
-  description: "A validated reading session.",
-  estimatedHours: 1,
-  id,
-  itemDate,
-  plannedTask: "Prepare for the masjid halaqah.",
-  projectName: "Read The Sealed Nectar",
-  rationale: "Fits an open schedule window.",
-  severity: "info",
-  startTime,
-  summary: "One-hour reading session",
-  title: "Read The Sealed Nectar",
-  type: "suggested_weekly_block",
-}));
+const occurrenceSeeds = [
+  ["2026-07-05", "Sunday", "08:00"],
+  ["2026-07-08", "Wednesday", "17:00"],
+  ["2026-07-10", "Friday", "11:00"],
+  ["2026-07-12", "Sunday", "08:00"],
+  ["2026-07-15", "Wednesday", "17:00"],
+  ["2026-07-17", "Friday", "11:00"],
+  ["2026-07-19", "Sunday", "08:00"],
+  ["2026-07-22", "Wednesday", "17:00"],
+  ["2026-07-24", "Friday", "11:00"],
+] as const;
+
+const suggestions: AssistantSuggestion[] = occurrenceSeeds.map(
+  ([itemDate, day, startTime], index) => ({
+    batchId: "batch-1",
+    confidence: 1,
+    day,
+    description: "A validated reading session.",
+    estimatedHours: 1,
+    id: `proposal-${index + 1}`,
+    itemDate,
+    plannedTask: "Prepare for the masjid halaqah.",
+    projectName: "Read The Sealed Nectar",
+    rationale: "Fits an open schedule window.",
+    severity: "info",
+    startTime,
+    summary: "One-hour reading session",
+    title: "Read The Sealed Nectar",
+    type: "suggested_weekly_block",
+    workflowId: "workflow-1",
+  }),
+);
 
 const series: RecurringSeriesProposal = {
   assumptions: [],
@@ -39,21 +66,49 @@ const series: RecurringSeriesProposal = {
     typicalTimes: ["08:00", "17:00", "11:00"],
   },
   planningHorizon: {
-    endDate: "2026-07-11",
+    endDate: "2026-07-25",
     startDate: "2026-07-05",
-    weeks: 1,
+    weeks: 3,
   },
   purpose: "Prepare for the masjid halaqah.",
   status: "pending",
   title: "Sealed Nectar Reading Plan",
-  totalOccurrences: 3,
+  totalOccurrences: 9,
   weeklyTotalMinutes: 180,
   workflowId: "workflow-1",
 };
 
 const noOp = () => undefined;
 
-function renderSeries({
+function countMatches(value: string, pattern: RegExp) {
+  return value.match(pattern)?.length ?? 0;
+}
+
+function renderSummary({
+  appliedIds = [],
+  planSeries = series,
+  planSuggestions = suggestions,
+  pendingIds = planSuggestions.map((suggestion) => suggestion.id),
+}: {
+  appliedIds?: string[];
+  planSeries?: RecurringSeriesProposal | null;
+  planSuggestions?: AssistantSuggestion[];
+  pendingIds?: string[];
+} = {}) {
+  return renderToStaticMarkup(
+    <AssistantPlanSummary
+      appliedProposalIds={appliedIds}
+      batchId="batch-1"
+      isApplying={false}
+      pendingProposalIds={pendingIds}
+      series={planSeries}
+      suggestions={planSuggestions}
+      onApplyAll={noOp}
+    />,
+  );
+}
+
+function renderReview({
   appliedIds = [],
   pendingIds = suggestions.map((suggestion) => suggestion.id),
   selectedIds = pendingIds,
@@ -67,10 +122,8 @@ function renderSeries({
       suggestion.id,
       {
         editing: false,
-        status: appliedIds.includes(suggestion.id)
-          ? ("applied" as const)
-          : ("pending" as const),
-      },
+        status: appliedIds.includes(suggestion.id) ? "applied" : "pending",
+      } satisfies AssistantProposalRowState,
     ]),
   );
 
@@ -79,6 +132,7 @@ function renderSeries({
       actionStates={actionStates}
       appliedProposalIds={appliedIds}
       pendingProposalIds={pendingIds}
+      reviewMode
       selectedProposalIds={new Set(selectedIds)}
       series={series}
       suggestions={suggestions}
@@ -91,44 +145,274 @@ function renderSeries({
   );
 }
 
-function countMatches(value: string, pattern: RegExp) {
-  return value.match(pattern)?.length ?? 0;
+function runCompactSummaryCases() {
+  const recurring = renderSummary();
+  assert.equal(countMatches(recurring, />Sealed Nectar Reading Plan</g), 1);
+  assert.match(recurring, /3 sessions per week · 1 hour each · 3 weeks · 9 total sessions/);
+  assert.equal(countMatches(recurring, /Jul 5|Jul 8|Jul 10/g), 3);
+  assert.doesNotMatch(recurring, /Jul 12|Jul 15|Jul 17|Jul 19|Jul 22|Jul 24/);
+  assert.match(recurring, /\+ 6 more sessions/);
+  assert.match(recurring, /href="\/assistant\/review\/batch-1"/);
+  assert.match(recurring, /Apply all 9/);
+  assert.doesNotMatch(recurring, /type="checkbox"|Remove occurrence|overflow-y-auto/);
+
+  const single = renderSummary({
+    planSeries: null,
+    planSuggestions: suggestions.slice(0, 1),
+    pendingIds: [suggestions[0].id],
+  });
+  assert.match(single, />Read The Sealed Nectar</);
+  assert.match(single, />Edit</);
+  assert.match(single, />Apply</);
+
+  const applied = renderSummary({
+    appliedIds: suggestions.map((suggestion) => suggestion.id),
+    pendingIds: [],
+  });
+  assert.match(applied, /Sealed Nectar Reading Plan added/);
+  assert.match(applied, /9 sessions across 3 weeks/);
+  assert.match(applied, /View Weekly Plan/);
+  assert.doesNotMatch(applied, /Apply all|awaiting approval/);
+
+  const partial = renderSummary({
+    appliedIds: [suggestions[0].id, suggestions[1].id],
+    pendingIds: suggestions.slice(2).map((suggestion) => suggestion.id),
+  });
+  assert.match(partial, /2 applied · 7 awaiting approval/);
+
+  const weeklyItems = suggestions.slice(0, 3).map((suggestion, index) => ({
+    ...suggestion,
+    projectName: `Weekly item ${index + 1}`,
+    title: `Weekly item ${index + 1}`,
+  }));
+  const week = renderSummary({
+    planSeries: null,
+    planSuggestions: weeklyItems,
+    pendingIds: weeklyItems.map((suggestion) => suggestion.id),
+  });
+  assert.match(week, /Proposed week/);
+  assert.match(week, /3 items · 3 hours planned/);
+  assert.match(week, /Weekly item 1/);
+  assert.match(week, /Review week/);
+  assert.match(week, /Apply plan/);
+
+  const routineSuggestions = suggestions.slice(0, 3).map((suggestion) => ({
+    ...suggestion,
+    projectName: "Workout",
+    title: "Workout",
+  }));
+  const routine = renderSummary({
+    planSeries: { ...series, title: "Workout routine", totalOccurrences: 3 },
+    planSuggestions: routineSuggestions,
+    pendingIds: routineSuggestions.map((suggestion) => suggestion.id),
+  });
+  assert.match(routine, /Workout routine/);
+  assert.match(routine, /Sunday · Wednesday · Friday/);
+  assert.match(routine, /1 hour · Repeats weekly/);
+  assert.match(routine, /Review routine/);
+
+  const linkedSuggestions: AssistantSuggestion[] = [
+    {
+      ...suggestions[0],
+      description: "End work at 1:30 PM",
+      title: "End work early",
+      type: "schedule_exception",
+    },
+    {
+      ...suggestions[1],
+      description: "Add MSA work at 2:30 PM",
+      title: "Add MSA work",
+      type: "suggested_weekly_block",
+    },
+  ];
+  const linked = renderSummary({
+    planSeries: null,
+    planSuggestions: linkedSuggestions,
+    pendingIds: linkedSuggestions.map((suggestion) => suggestion.id),
+  });
+  assert.match(linked, /Today’s adjusted plan/);
+  assert.match(linked, /2 related changes/);
+  assert.match(linked, /End work at 1:30 PM/);
+  assert.match(linked, /Apply both/);
 }
 
-function runSeriesReviewCases() {
-  const allSelected = renderSeries();
-  assert.equal(
-    countMatches(allSelected, />Sealed Nectar Reading Plan</g),
-    1,
-    "A recurring batch renders one parent title",
-  );
-  assert.equal(
-    countMatches(allSelected, /type="checkbox"/g),
-    3,
-    "Three occurrences render as three selectable compact rows",
-  );
-  assert.match(allSelected, /Apply all 3/);
-  assert.equal(countMatches(allSelected, /Apply all 3/g), 1);
-  assert.doesNotMatch(allSelected, /Apply series/);
-  assert.match(allSelected, /aria-expanded="false"/);
-  assert.match(allSelected, /Sunday, July 5/);
-  assert.match(allSelected, /Wednesday, July 8/);
-  assert.match(allSelected, /Friday, July 10/);
+function runPresentationKindCases() {
+  const cases: Array<[PlanPresentationKind, AssistantSuggestion[], RecurringSeriesProposal | null, number, number]> = [
+    ["single_item", suggestions.slice(0, 1), null, 0, 1],
+    ["recurring_series", suggestions, series, 0, 9],
+    [
+      "multi_item_week",
+      suggestions.slice(0, 3).map((suggestion, index) => ({
+        ...suggestion,
+        projectName: `Weekly item ${index + 1}`,
+        title: `Weekly item ${index + 1}`,
+      })),
+      null,
+      0,
+      3,
+    ],
+    [
+      "routine",
+      suggestions.slice(0, 3).map((suggestion) => ({
+        ...suggestion,
+        projectName: "Workout",
+        title: "Workout",
+      })),
+      { ...series, title: "Workout routine" },
+      0,
+      3,
+    ],
+    [
+      "linked_changes",
+      [
+        { ...suggestions[0], title: "End work early", type: "schedule_exception" },
+        { ...suggestions[1], title: "Add MSA work", type: "suggested_weekly_block" },
+      ],
+      null,
+      0,
+      2,
+    ],
+    ["applied_result", suggestions, series, 9, 0],
+  ];
 
-  const twoSelected = renderSeries({
-    selectedIds: ["proposal-1", "proposal-2"],
+  cases.forEach(([expected, planSuggestions, planSeries, appliedCount, pendingCount]) => {
+    assert.equal(
+      getPlanPresentationKind({
+        appliedCount,
+        pendingCount,
+        series: planSeries,
+        suggestions: planSuggestions,
+      }),
+      expected,
+    );
+  });
+}
+
+function runReviewCases() {
+  const allSelected = renderReview();
+  assert.equal(countMatches(allSelected, /type="checkbox"/g), 9);
+  assert.match(allSelected, /Apply all 9/);
+  assert.match(allSelected, /Sunday, July 5/);
+  assert.match(allSelected, /Friday, July 24/);
+
+  const twoSelected = renderReview({
+    selectedIds: [suggestions[0].id, suggestions[1].id],
   });
   assert.match(twoSelected, /Apply selected \(2\)/);
 
-  const applied = renderSeries({
+  const applied = renderReview({
     appliedIds: suggestions.map((suggestion) => suggestion.id),
     pendingIds: [],
     selectedIds: [],
   });
-  assert.match(applied, /Applied · 3 sessions · 3 hours/);
-  assert.match(applied, /View in Weekly Plan/);
-  assert.match(applied, /View in Calendar/);
+  assert.match(applied, /Applied · 9 sessions · 9 hours/);
   assert.doesNotMatch(applied, /Apply all|Apply selected|Remove occurrence/);
+}
+
+function createClarificationState() {
+  const context = {
+    appliedRecords: [],
+    batchId: null,
+    candidateWindows: [],
+    confirmationStatus: "awaiting_duration",
+    extractedItems: [],
+    intent: "create_multiple_time_blocks",
+    lastUpdatedAt: "2026-07-06T12:00:00.000Z",
+    maximumDurationMinutes: null,
+    pendingQuestion: "How long should “Planning item” take?",
+    pendingProposal: null,
+    pendingProposals: [],
+    pendingWorkException: null,
+    purpose: "Prepare for halaqah",
+    requestedDurationMinutes: null,
+    requestedSessionCount: 3,
+    selectedDate: null,
+    selectedWindowEnd: null,
+    selectedWindowId: null,
+    selectedWindowStart: null,
+    state: "awaiting_duration",
+    workflowId: "workflow-1",
+  } as AssistantSchedulingContext;
+  const workflow = {
+    appliedProposalIds: [],
+    completionStatus: "nothing_created",
+    context,
+    extractedItems: [],
+    intent: "create_multiple_time_blocks",
+    lastUpdatedAt: context.lastUpdatedAt,
+    missingFields: ["durationMinutes"],
+    pendingProposalIds: [],
+    persistenceStatus: "persisted",
+    proposalIds: [],
+    selectedCandidateIds: [],
+    state: "awaiting_clarification",
+    threadId: "thread-1",
+    userId: "user-1",
+    workflowId: "workflow-1",
+  } as SchedulingWorkflowContext;
+  return { context, workflow };
+}
+
+function runClarificationGuardCases() {
+  assert.equal(
+    getSafeClarificationQuestion({
+      activityTitle: "Sealed Nectar reading",
+      question: "How long should “Planning item” take?",
+    }),
+    "How long should each Sealed Nectar reading session be?",
+  );
+  assert.equal(
+    getSafeClarificationQuestion({
+      question: "How long should ‘Item’ take?",
+    }),
+    "How long should each session be?",
+  );
+  assert.doesNotMatch(
+    sanitizeAssistantUserFacingText("How long should “Planning item” take?"),
+    /Planning item/,
+  );
+
+  const { context, workflow } = createClarificationState();
+  const shared = {
+    activeWorkflow: workflow,
+    context,
+    hasSubstantiveUserMessage: true,
+    isSubmitting: false,
+  };
+  assert.equal(
+    shouldRenderAssistantClarification({
+      ...shared,
+      latestMessageWorkflowId: "workflow-1",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRenderAssistantClarification({
+      ...shared,
+      latestMessageWorkflowId: "old-workflow",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRenderAssistantClarification({
+      ...shared,
+      context: { ...context, requestedDurationMinutes: 60 },
+      latestMessageWorkflowId: "workflow-1",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRenderAssistantClarification({
+      ...shared,
+      activeWorkflow: {
+        ...workflow,
+        pendingProposalIds: ["proposal-1"],
+        state: "proposal_ready",
+      },
+      latestMessageWorkflowId: "workflow-1",
+    }),
+    false,
+  );
 }
 
 function runWorkspaceSourceCases() {
@@ -140,43 +424,44 @@ function runWorkspaceSourceCases() {
     new URL("../components/assistant/assistant-context-panel.tsx", import.meta.url),
     "utf8",
   );
-  const schedulerNav = readFileSync(
-    new URL("../components/scheduler/scheduler-nav.tsx", import.meta.url),
+  const summary = readFileSync(
+    new URL("../components/assistant/assistant-plan-summary.tsx", import.meta.url),
     "utf8",
   );
-  const globals = readFileSync(
-    new URL("../app/globals.css", import.meta.url),
+  const reviewPage = readFileSync(
+    new URL("../components/assistant/assistant-review-page.tsx", import.meta.url),
     "utf8",
   );
-  const topNavigationBranch = schedulerNav.slice(
-    schedulerNav.indexOf('if (variant === "top")'),
-    schedulerNav.indexOf("return (\n    <>", schedulerNav.indexOf('if (variant === "top")')),
+  const reviewRoute = readFileSync(
+    new URL("../app/assistant/review/[proposalBatchId]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const proposalApi = readFileSync(
+    new URL("../app/api/assistant/proposals/route.ts", import.meta.url),
+    "utf8",
   );
 
-  assert.equal(
-    countMatches(topNavigationBranch, /<nav\b/g),
-    1,
-    "The Assistant top shell renders one navigation landmark",
-  );
-  assert.equal(
-    countMatches(assistantPage, /<h1\b/g),
-    1,
-    "The Assistant workspace renders one page title",
-  );
-  assert.match(assistantPage, /isTrueEmptyState/);
-  assert.match(assistantPage, /showsActiveClarification/);
-  assert.doesNotMatch(assistantPage, /Apply series/);
-  assert.doesNotMatch(assistantPage, /Suggested next steps/);
-  assert.match(assistantPage, /sticky bottom-0/);
-  assert.match(assistantPage, /aria-label="Conversation options"/);
+  assert.equal(countMatches(assistantPage, /overflow-y-auto/g), 2);
+  assert.match(assistantPage, /View schedule context/);
+  assert.match(assistantPage, /open=\{isScheduleContextOpen\}/);
+  assert.doesNotMatch(assistantPage, /lg:grid-cols-\[[^\]]*context/i);
+  assert.doesNotMatch(contextPanel, /Pending review/i);
+  assert.match(contextPanel, /if \(!open\) return null/);
   assert.match(contextPanel, /aria-modal="true"/);
-  assert.match(contextPanel, /xl:hidden/);
-  assert.match(contextPanel, /hidden[^\n]*xl:sticky/);
-  assert.match(contextPanel, /Pending review/);
-  assert.match(globals, /prefers-reduced-motion/);
+  assert.doesNotMatch(summary, /overflow-y-auto|overflow-y-scroll|max-h-\[/);
+  assert.doesNotMatch(reviewPage, /overflow-y-auto|overflow-y-scroll|max-h-\[/);
+  assert.match(reviewPage, /proposalIds: suggestions\.map/);
+  assert.match(reviewPage, /action: "update"/);
+  assert.match(reviewPage, /action: "reject"/);
+  assert.match(reviewRoute, /proposalBatchId/);
+  assert.match(proposalApi, /loadAssistantWorkflowByBatchId/);
+  assert.match(proposalApi, /authResult\.userId/);
 }
 
-runSeriesReviewCases();
+runCompactSummaryCases();
+runPresentationKindCases();
+runReviewCases();
+runClarificationGuardCases();
 runWorkspaceSourceCases();
 
-console.log("Assistant UI tests passed: 20 focused cases");
+console.log("Assistant UI tests passed: 41 focused cases");

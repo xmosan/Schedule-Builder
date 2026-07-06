@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   clearLocalAssistantConversation,
   createAssistantThreadId,
@@ -18,7 +18,7 @@ import type {
 import { TargetIcon } from "@/components/projects/icons";
 import { AssistantClarificationPanel } from "@/components/assistant/assistant-clarification-panel";
 import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
-import { AssistantProposalSeries } from "@/components/assistant/assistant-proposal-series";
+import { AssistantPlanSummary } from "@/components/assistant/assistant-plan-summary";
 import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,11 @@ import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/c
 import { formatStartTime, weekDays, type WeekDay } from "@/lib/weekly-plan";
 import { cn } from "@/lib/utils";
 import { getUserFacingError } from "@/lib/user-facing-error";
+import {
+  getSafeClarificationQuestion,
+  sanitizeAssistantUserFacingText,
+  shouldRenderAssistantClarification,
+} from "@/lib/assistant-ui-guards";
 
 type AssistantStatus = "loading" | "ready" | "signed_out" | "error";
 type ChatRole = "assistant" | "user";
@@ -1179,16 +1184,10 @@ function ChatBubble({
   actionStates,
   dismissedNoticeIds,
   hiddenTrailingPrompt,
-  isReviewOpen,
   message,
-  onApply,
   onApplyAll,
   onAcknowledgeNotice,
   onDismissNotice,
-  onIgnore,
-  onOpenReview,
-  onToggleEdit,
-  onUpdateSuggestion,
   appliedProposalIds,
   pendingProposalIds,
   workflowProposalIds,
@@ -1197,20 +1196,10 @@ function ChatBubble({
   actionStates: Record<string, ActionState>;
   dismissedNoticeIds: string[];
   hiddenTrailingPrompt?: string | null;
-  isReviewOpen: boolean;
   message: ChatMessage;
-  onApply: (suggestion: AssistantSuggestion) => void;
   onApplyAll: (suggestions: AssistantSuggestion[]) => void;
   onAcknowledgeNotice: (noticeId: string) => void;
   onDismissNotice: (noticeId: string) => void;
-  onIgnore: (suggestionId: string) => void;
-  onOpenReview: (messageId: string) => void;
-  onToggleEdit: (suggestion: AssistantSuggestion) => void;
-  onUpdateSuggestion: (
-    messageId: string,
-    suggestionId: string,
-    patch: Partial<AssistantSuggestion>,
-  ) => void;
   appliedProposalIds: string[];
   pendingProposalIds: string[];
   workflowProposalIds: string[];
@@ -1229,7 +1218,6 @@ function ChatBubble({
   );
   const actionableActions = visibleActions.filter(isActionableSuggestion);
   const pendingProposalIdSet = new Set(pendingProposalIds);
-  const appliedProposalIdSet = new Set(appliedProposalIds);
   const pendingActionableActions = actionableActions.filter(
     (suggestion) =>
       pendingProposalIdSet.has(suggestion.id) &&
@@ -1238,44 +1226,18 @@ function ChatBubble({
   const insightActions = visibleActions.filter(
     (suggestion) => !isActionableSuggestion(suggestion),
   );
-  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const initializedSelectionIds = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    const newlyPendingIds = pendingActionableActions
-      .map((suggestion) => suggestion.id)
-      .filter((id) => !initializedSelectionIds.current.has(id));
-
-    if (newlyPendingIds.length === 0) {
-      return;
-    }
-
-    newlyPendingIds.forEach((id) => initializedSelectionIds.current.add(id));
-    setSelectedActionIds((current) => {
-      const next = new Set(current);
-      newlyPendingIds.forEach((id) => next.add(id));
-      return next;
-    });
-  }, [pendingActionableActions]);
-
-  const visibleActionCount = pendingActionableActions.length;
   const seriesProposal = message.response?.schedulingContext?.seriesProposal;
-  const appliedActionCount = actionableActions.filter((suggestion) =>
-    appliedProposalIdSet.has(suggestion.id),
-  ).length;
-  const hasHandledAllSuggestions =
-    actions.length > 0 &&
-    visibleActionCount === 0 &&
-    appliedActionCount === 0;
-  const selectedActions = pendingActionableActions.filter((suggestion) =>
-    selectedActionIds.has(suggestion.id),
-  );
-  const displayedContent = stripTrailingPendingQuestion(
+  const batchId =
+    message.response?.proposalBatch?.id ??
+    actionableActions.find((suggestion) => suggestion.batchId)?.batchId ??
+    null;
+  const rawDisplayedContent = stripTrailingPendingQuestion(
     message.content,
     hiddenTrailingPrompt,
   );
+  const displayedContent = isUser
+    ? rawDisplayedContent
+    : sanitizeAssistantUserFacingText(rawDisplayedContent);
   const handledNoticeIds = new Set([
     ...acknowledgedNoticeIds,
     ...dismissedNoticeIds,
@@ -1346,7 +1308,7 @@ function ChatBubble({
               {relevantNotices.map((notice) => (
                 <div key={notice.id}>
                   <p className="text-sm leading-6 text-brand-ink/75">
-                    {notice.message}
+                    {sanitizeAssistantUserFacingText(notice.message)}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Button
@@ -1374,184 +1336,35 @@ function ChatBubble({
           </section>
         ) : null}
 
-        {!isUser && !message.isStreaming && actions.length > 0 ? (
+        {!isUser && !message.isStreaming && actionableActions.length > 0 ? (
           <div
             id={`assistant-review-${message.id}`}
-            className="mt-2 w-full space-y-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal/30"
+            className="mt-2 w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal/30"
             tabIndex={-1}
           >
-            {hasHandledAllSuggestions ? (
-              <div className="animate-assistant-card rounded-[20px] border border-brand-teal/20 bg-brand-teal/10 p-4 text-sm font-semibold leading-6 text-brand-teal">
-                No changes remain in this review.
-              </div>
-            ) : null}
+            <AssistantPlanSummary
+              appliedProposalIds={appliedProposalIds}
+              batchId={batchId}
+              isApplying={pendingActionableActions.some(
+                (suggestion) => actionStates[suggestion.id]?.status === "applying",
+              )}
+              pendingProposalIds={pendingProposalIds}
+              series={seriesProposal}
+              suggestions={actionableActions}
+              onApplyAll={onApplyAll}
+            />
+          </div>
+        ) : null}
 
-            {seriesProposal && actionableActions.length > 0 ? (
-              <AssistantProposalSeries
-                actionStates={actionStates}
-                appliedProposalIds={appliedProposalIds}
-                pendingProposalIds={pendingProposalIds}
-                selectedProposalIds={selectedActionIds}
-                series={seriesProposal}
-                suggestions={actionableActions}
-                onApplySelected={onApplyAll}
-                onIgnore={onIgnore}
-                onSelectionChange={(suggestionId, selected) =>
-                  setSelectedActionIds((current) => {
-                    const next = new Set(current);
-
-                    if (selected) next.add(suggestionId);
-                    else next.delete(suggestionId);
-
-                    return next;
-                  })
-                }
-                onToggleEdit={onToggleEdit}
-                onUpdate={(suggestionId, patch) =>
-                  onUpdateSuggestion(message.id, suggestionId, patch)
-                }
-              />
-            ) : null}
-
-            {!seriesProposal && !hasHandledAllSuggestions && !isReviewOpen ? (
-              <div className="animate-assistant-card rounded-[22px] border border-brand-teal/14 bg-brand-teal/[0.045] p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-brand-ink">
-                      {`Proposed plan · ${visibleActionCount} ${
-                        visibleActionCount === 1 ? "change" : "changes"
-                      }`}
-                    </p>
-                    <ul className="mt-2 grid gap-1 text-xs leading-5 text-brand-ink/58">
-                      {pendingActionableActions.slice(0, 3).map((suggestion) => (
-                        <li key={suggestion.id} className="truncate">
-                          • {suggestion.title}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <Button
-                    className="h-10 rounded-full px-4 text-xs font-semibold"
-                    size="sm"
-                    type="button"
-                    onClick={() => onOpenReview(message.id)}
-                  >
-                    Review plan
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
-            {!seriesProposal && isReviewOpen && actionableActions.length > 0 ? (
-              <section>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
-                      Proposed changes
-                    </h4>
-                    <span className="text-xs text-brand-ink/40">
-                      {pendingActionableActions.length} remaining
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedActions.length > 0 ? (
-                      <Button
-                        className="h-9 rounded-full px-4 text-xs font-semibold"
-                        size="sm"
-                        type="button"
-                        onClick={() => onApplyAll(selectedActions)}
-                      >
-                        Apply selected ({selectedActions.length})
-                      </Button>
-                    ) : null}
-                    {pendingActionableActions.length > 1 ? (
-                      <Button
-                        className="h-9 rounded-full px-4 text-xs font-semibold"
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                        onClick={() => onApplyAll(pendingActionableActions)}
-                      >
-                        Apply all
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
-                  {actionableActions.map((suggestion, index) => (
-                    <ActionCard
-                      key={suggestion.id}
-                      actionState={
-                        actionStates[suggestion.id] ?? {
-                          editing: false,
-                          status: "pending",
-                        }
-                      }
-                      index={index}
-                      suggestion={suggestion}
-                      onApply={() => onApply(suggestion)}
-                      onIgnore={() => onIgnore(suggestion.id)}
-                      onSelectionChange={(selected) =>
-                        setSelectedActionIds((current) => {
-                          const next = new Set(current);
-
-                          if (selected) {
-                            next.add(suggestion.id);
-                          } else {
-                            next.delete(suggestion.id);
-                          }
-
-                          return next;
-                        })
-                      }
-                      onToggleEdit={() => onToggleEdit(suggestion)}
-                      onUpdate={(patch) =>
-                        onUpdateSuggestion(message.id, suggestion.id, patch)
-                      }
-                      selected={selectedActionIds.has(suggestion.id)}
-                      showSelection={
-                        pendingActionableActions.length > 1 &&
-                        isPendingActionState(actionStates[suggestion.id])
-                      }
-                    />
-                  ))}
-                </div>
-              </section>
-            ) : null}
-
-            {isReviewOpen && insightActions.length > 0 ? (
-              <section>
-                <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
-                  <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-ink/70">
-                    Needs your attention
-                  </h4>
-                </div>
-                <div className="grid max-h-[46vh] gap-3 overflow-y-auto pr-1 sm:max-h-[520px]">
-                  {insightActions.map((suggestion, index) => (
-                    <ActionCard
-                      key={suggestion.id}
-                      actionState={
-                        actionStates[suggestion.id] ?? {
-                          editing: false,
-                          status: "pending",
-                        }
-                      }
-                      index={actionableActions.length + index}
-                      suggestion={suggestion}
-                      onApply={() => onApply(suggestion)}
-                      onIgnore={() => onIgnore(suggestion.id)}
-                      onSelectionChange={() => undefined}
-                      onToggleEdit={() => onToggleEdit(suggestion)}
-                      onUpdate={(patch) =>
-                        onUpdateSuggestion(message.id, suggestion.id, patch)
-                      }
-                      selected={false}
-                      showSelection={false}
-                    />
-                  ))}
-                </div>
-              </section>
-            ) : null}
+        {!isUser && !message.isStreaming && insightActions.length > 0 ? (
+          <div className="w-full rounded-[18px] bg-brand-coral/[0.06] px-4 py-3">
+            {insightActions.slice(0, 2).map((suggestion) => (
+              <p key={suggestion.id} className="text-sm leading-6 text-brand-ink/68">
+                {sanitizeAssistantUserFacingText(
+                  suggestion.description || suggestion.title,
+                )}
+              </p>
+            ))}
           </div>
         ) : null}
       </div>
@@ -1575,7 +1388,12 @@ export function AssistantPage() {
   const [acknowledgedNoticeIds, setAcknowledgedNoticeIds] = useState<string[]>([]);
   const [dismissedNoticeIds, setDismissedNoticeIds] = useState<string[]>([]);
   const [isClearChatDialogOpen, setIsClearChatDialogOpen] = useState(false);
+  const [isScheduleContextOpen, setIsScheduleContextOpen] = useState(false);
   const [isClearChatLoading, setIsClearChatLoading] = useState(false);
+  const closeScheduleContext = useCallback(
+    () => setIsScheduleContextOpen(false),
+    [],
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshingContext, setIsRefreshingContext] = useState(false);
   const [activeSchedulingContext, setActiveSchedulingContext] =
@@ -1602,8 +1420,6 @@ export function AssistantPage() {
   const hasSubstantiveUserMessage = messages.some(
     (message) => message.role === "user" && message.content.trim().length > 0,
   );
-  const isTrueEmptyState = !hasSubstantiveUserMessage;
-  const showsPlanningContext = status !== "signed_out";
   const examplePrompts = getExamplePrompts(context?.plannerType);
   const isBusy = isSubmitting || status === "loading";
   const schedulingQuickReplies = getSchedulingQuickReplies(
@@ -1619,11 +1435,25 @@ export function AssistantPage() {
       message.role === "assistant" ? message.id : latestId,
     null,
   );
-  const activeClarificationQuestion =
-    schedulingQuickReplies.length > 0
-      ? activeSchedulingContext?.pendingQuestion
-      : null;
+  const latestAssistantMessage = latestAssistantMessageId
+    ? messages.find((message) => message.id === latestAssistantMessageId)
+    : null;
+  const latestMessageWorkflowId =
+    latestAssistantMessage?.response?.workflow?.workflowId ??
+    latestAssistantMessage?.response?.schedulingContext?.workflowId ??
+    null;
+  const activeClarificationQuestion = getSafeClarificationQuestion({
+    activityTitle:
+      activeSchedulingContext?.semanticRequest?.activity.title ??
+      activeWorkflow?.extractedItems[0]?.title,
+    question: activeSchedulingContext?.pendingQuestion,
+  });
   const pendingReviewCount = getPendingReviewCount(activeWorkflow);
+  const isTrueEmptyState =
+    !hasSubstantiveUserMessage &&
+    !activeWorkflow &&
+    !activeClarificationQuestion &&
+    pendingReviewCount === 0;
   const isApplying = Object.values(actionStates).some(
     (state) => state.status === "applying",
   );
@@ -1635,11 +1465,15 @@ export function AssistantPage() {
     pendingReviewCount,
   });
   const showsActiveClarification =
-    hasSubstantiveUserMessage &&
-    !isSubmitting &&
-    pendingReviewCount === 0 &&
     schedulingQuickReplies.length > 0 &&
-    Boolean(activeClarificationQuestion);
+    Boolean(activeClarificationQuestion) &&
+    shouldRenderAssistantClarification({
+      activeWorkflow,
+      context: activeSchedulingContext,
+      hasSubstantiveUserMessage,
+      isSubmitting,
+      latestMessageWorkflowId,
+    });
 
   async function clearConversationHistory() {
     setIsClearChatLoading(true);
@@ -2813,7 +2647,7 @@ export function AssistantPage() {
             </span>
           </div>
 
-          {hasMessages ? (
+          {status !== "signed_out" ? (
             <details className="group relative">
               <summary
                 aria-haspopup="menu"
@@ -2827,6 +2661,25 @@ export function AssistantPage() {
                 role="menu"
               >
                 <button
+                  className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05]"
+                  role="menuitem"
+                  type="button"
+                  onClick={() => setIsScheduleContextOpen(true)}
+                >
+                  View schedule context
+                </button>
+                <button
+                  className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05] disabled:opacity-50"
+                  disabled={isRefreshingContext}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => void refreshPlanningContext()}
+                >
+                  {isRefreshingContext ? "Refreshing…" : "Refresh schedule context"}
+                </button>
+                {hasMessages ? <div className="my-1 border-t border-brand-ink/7" /> : null}
+                {hasMessages ? (
+                <button
                   className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-coral hover:bg-brand-coral/[0.07]"
                   role="menuitem"
                   type="button"
@@ -2834,6 +2687,7 @@ export function AssistantPage() {
                 >
                   Clear conversation
                 </button>
+                ) : null}
               </div>
             </details>
           ) : null}
@@ -2844,16 +2698,10 @@ export function AssistantPage() {
         </span>
       </header>
 
-      <div
-        className={cn(
-          "grid min-h-0 flex-1 gap-4",
-          showsPlanningContext &&
-            "xl:grid-cols-[minmax(0,1fr)_minmax(280px,32%)]",
-        )}
-      >
+      <div className="flex min-h-0 flex-1 justify-center">
         <section
           aria-label="Assistant conversation"
-          className="order-last flex min-h-0 flex-col overflow-hidden rounded-[26px] bg-white/62 shadow-[0_20px_52px_rgba(18,32,47,0.075)] backdrop-blur-sm xl:order-first"
+          className="flex min-h-0 w-full max-w-[980px] flex-col overflow-hidden rounded-[26px] bg-white/62 shadow-[0_20px_52px_rgba(18,32,47,0.075)] backdrop-blur-sm"
         >
           <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -2899,12 +2747,10 @@ export function AssistantPage() {
                   dismissedNoticeIds={dismissedNoticeIds}
                   hiddenTrailingPrompt={
                     message.id === latestAssistantMessageId
-                      ? activeClarificationQuestion
+                      ? activeSchedulingContext?.pendingQuestion
                       : null
                   }
-                  isReviewOpen={openReviewMessages[message.id] ?? false}
                   message={message}
-                  onApply={(suggestion) => void applySuggestion(suggestion)}
                   onApplyAll={(suggestions) =>
                     void applyAllSuggestions(suggestions)
                   }
@@ -2918,15 +2764,6 @@ export function AssistantPage() {
                       current.includes(noticeId) ? current : [...current, noticeId],
                     )
                   }
-                  onIgnore={(suggestionId) => void ignoreSuggestion(suggestionId)}
-                  onOpenReview={(messageId) =>
-                    setOpenReviewMessages((current) => ({
-                      ...current,
-                      [messageId]: true,
-                    }))
-                  }
-                  onToggleEdit={(suggestion) => void toggleEdit(suggestion)}
-                  onUpdateSuggestion={updateSuggestion}
                   appliedProposalIds={activeWorkflow?.appliedProposalIds ?? []}
                   pendingProposalIds={activeWorkflow?.pendingProposalIds ?? []}
                   workflowProposalIds={activeWorkflow?.proposalIds ?? []}
@@ -2935,7 +2772,7 @@ export function AssistantPage() {
 
               {showsActiveClarification ? (
                 <AssistantClarificationPanel
-                  key={`${activeSchedulingContext?.lastUpdatedAt ?? "clarification"}-${clarificationKind}`}
+                  key={`${activeWorkflow?.workflowId ?? "clarification"}-${activeSchedulingContext?.lastUpdatedAt ?? "state"}-${clarificationKind}`}
                   choices={schedulingQuickReplies}
                   disabled={isBusy}
                   kind={clarificationKind}
@@ -2956,7 +2793,7 @@ export function AssistantPage() {
                           : "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
                       )}
                     >
-                      {notice.message}
+                      {sanitizeAssistantUserFacingText(notice.message)}
                     </div>
                   ))}
                 </div>
@@ -3026,19 +2863,18 @@ export function AssistantPage() {
           </div>
         </section>
 
-        {showsPlanningContext ? (
-          <AssistantContextPanel
-            context={context}
-            contextStatus={contextStatus}
-            loading={status === "loading"}
-            pendingReviewCount={pendingReviewCount}
-            refreshing={isRefreshingContext}
-            warning={contextWarning}
-            onRefresh={() => void refreshPlanningContext()}
-            onReviewChanges={openLatestReview}
-          />
-        ) : null}
       </div>
+
+      <AssistantContextPanel
+        context={context}
+        contextStatus={contextStatus}
+        loading={status === "loading"}
+        open={isScheduleContextOpen}
+        refreshing={isRefreshingContext}
+        warning={contextWarning}
+        onClose={closeScheduleContext}
+        onRefresh={() => void refreshPlanningContext()}
+      />
 
       <ConfirmDialog
         confirmLabel="Clear conversation"

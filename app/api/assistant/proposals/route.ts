@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  loadAssistantWorkflowByBatchId,
   loadAssistantWorkflowById,
   persistAssistantWorkflow,
   updateAssistantProposalResults,
@@ -62,6 +63,41 @@ async function getAuthenticatedUser(
       { status: 500 },
     );
   }
+}
+
+export async function GET(request: NextRequest) {
+  const authResult = await getAuthenticatedUser(request);
+  if (authResult instanceof NextResponse) return authResult;
+
+  const batchId = request.nextUrl.searchParams.get("batchId")?.trim() ?? "";
+  if (!batchId) {
+    return NextResponse.json(
+      { error: "Send a proposal batch ID." },
+      { status: 400 },
+    );
+  }
+
+  const loaded = await loadAssistantWorkflowByBatchId(
+    authResult.supabase,
+    authResult.userId,
+    batchId,
+  );
+
+  if (loaded.error) {
+    return NextResponse.json(
+      { error: "The review plan could not be loaded." },
+      { status: 500 },
+    );
+  }
+
+  if (!loaded.data || loaded.data.batch?.id !== batchId) {
+    return NextResponse.json(
+      { error: "This review plan is unavailable or no longer exists." },
+      { status: 404 },
+    );
+  }
+
+  return NextResponse.json(loaded.data);
 }
 
 export async function PATCH(request: NextRequest) {

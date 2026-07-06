@@ -8,6 +8,10 @@ import type {
   AssistantSuggestion,
 } from "@/lib/assistant";
 import type { RecurringSeriesProposal } from "@/lib/assistant-semantics";
+import {
+  getSafeAssistantLabel,
+  sanitizeAssistantUserFacingText,
+} from "@/lib/assistant-ui-guards";
 import { formatStartTime, weekDays, type WeekDay } from "@/lib/weekly-plan";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +31,7 @@ type AssistantProposalSeriesProps = {
   onToggleEdit: (suggestion: AssistantSuggestion) => void;
   onUpdate: (suggestionId: string, patch: Partial<AssistantSuggestion>) => void;
   pendingProposalIds: string[];
+  reviewMode?: boolean;
   selectedProposalIds: Set<string>;
   series: RecurringSeriesProposal | null;
   suggestions: AssistantSuggestion[];
@@ -131,7 +136,10 @@ function OccurrenceEditor({
         </span>
         <input
           className="min-h-11 w-full rounded-xl border border-brand-ink/10 bg-white px-3 text-sm text-brand-ink"
-          value={isWeeklyBlock ? suggestion.projectName ?? "" : suggestion.title}
+          value={getSafeAssistantLabel(
+            isWeeklyBlock ? suggestion.projectName : suggestion.title,
+            "",
+          )}
           onChange={(event) =>
             onUpdate(
               isWeeklyBlock
@@ -245,6 +253,7 @@ export function AssistantProposalSeries({
   onToggleEdit,
   onUpdate,
   pendingProposalIds,
+  reviewMode = false,
   selectedProposalIds,
   series,
   suggestions,
@@ -271,7 +280,9 @@ export function AssistantProposalSeries({
   );
   const firstWeekCount = series?.pattern.sessionsPerWeek ?? suggestions.length;
   const displayedSuggestions =
-    series && !showAllOccurrences
+    reviewMode
+      ? suggestions
+      : series && !showAllOccurrences
       ? suggestions.slice(0, firstWeekCount)
       : suggestions;
   const sessionMinutes =
@@ -279,8 +290,14 @@ export function AssistantProposalSeries({
     Math.round((suggestions[0]?.estimatedHours ?? 0) * 60);
   const weeklyMinutes =
     series?.weeklyTotalMinutes ?? sessionMinutes * suggestions.length;
-  const title = series?.title ?? `${suggestions[0]?.title ?? "Proposed"} Plan`;
-  const activityTitle = suggestions[0]?.projectName || suggestions[0]?.title;
+  const title = getSafeAssistantLabel(
+    series?.title,
+    `${getSafeAssistantLabel(suggestions[0]?.title, "Proposed")} Plan`,
+  );
+  const activityTitle = getSafeAssistantLabel(
+    suggestions[0]?.projectName || suggestions[0]?.title,
+    "",
+  );
   const totalProposalMinutes = suggestions.reduce(
     (total, suggestion) =>
       total + Math.round((suggestion.estimatedHours ?? 0) * 60),
@@ -348,7 +365,9 @@ export function AssistantProposalSeries({
             <p className="mt-1 text-xs leading-5 text-brand-ink/45">
               {activityTitle}
               {activityTitle && series?.purpose ? " · " : ""}
-              {series?.purpose}
+              {series?.purpose
+                ? sanitizeAssistantUserFacingText(series.purpose)
+                : null}
             </p>
           ) : null}
         </div>
@@ -464,7 +483,9 @@ export function AssistantProposalSeries({
                       Title
                     </p>
                     <p className="mt-1 text-brand-ink/72">
-                      {suggestion.projectName || suggestion.title}
+                      {getSafeAssistantLabel(
+                        suggestion.projectName || suggestion.title,
+                      )}
                     </p>
                   </div>
                   <div>
@@ -481,7 +502,9 @@ export function AssistantProposalSeries({
                         Purpose
                       </p>
                       <p className="mt-1 leading-6 text-brand-ink/72">
-                        {suggestion.plannedTask || suggestion.rationale}
+                        {sanitizeAssistantUserFacingText(
+                          suggestion.plannedTask || suggestion.rationale || "",
+                        )}
                       </p>
                     </div>
                   ) : null}
@@ -491,7 +514,9 @@ export function AssistantProposalSeries({
                         Conflict status
                       </p>
                       <p className="mt-1 leading-6 text-brand-coral">
-                        {suggestion.conflictWarnings.join(" ")}
+                        {sanitizeAssistantUserFacingText(
+                          suggestion.conflictWarnings.join(" "),
+                        )}
                       </p>
                     </div>
                   ) : null}
@@ -533,7 +558,7 @@ export function AssistantProposalSeries({
         })}
       </div>
 
-      {series && suggestions.length > firstWeekCount ? (
+      {!reviewMode && series && suggestions.length > firstWeekCount ? (
         <button
           className="mx-4 mt-3 text-xs font-semibold text-brand-teal underline decoration-brand-teal/25 underline-offset-4 sm:mx-5"
           type="button"

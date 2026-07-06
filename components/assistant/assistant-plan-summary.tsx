@@ -1,0 +1,249 @@
+"use client";
+
+import Link from "next/link";
+import React from "react";
+import { Button } from "@/components/ui/button";
+import type { AssistantSuggestion } from "@/lib/assistant";
+import {
+  getPlanApplyLabel,
+  getPlanPresentationKind,
+  getPlanReviewLabel,
+} from "@/lib/assistant-plan-presentation";
+import type { RecurringSeriesProposal } from "@/lib/assistant-semantics";
+import {
+  getSafeAssistantLabel,
+  sanitizeAssistantUserFacingText,
+} from "@/lib/assistant-ui-guards";
+import { formatStartTime } from "@/lib/weekly-plan";
+
+type AssistantPlanSummaryProps = {
+  appliedProposalIds: string[];
+  batchId?: string | null;
+  isApplying: boolean;
+  onApplyAll: (suggestions: AssistantSuggestion[]) => void;
+  pendingProposalIds: string[];
+  series?: RecurringSeriesProposal | null;
+  suggestions: AssistantSuggestion[];
+};
+
+function addMinutesToTime(startTime: string, durationHours: number) {
+  const [hours, minutes] = startTime.split(":").map(Number);
+  const total = hours * 60 + minutes + Math.round(durationHours * 60);
+  return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(
+    total % 60,
+  ).padStart(2, "0")}`;
+}
+
+function formatOccurrenceDate(suggestion: AssistantSuggestion) {
+  if (!suggestion.itemDate) return suggestion.day ?? "Date to be confirmed";
+  const date = new Date(`${suggestion.itemDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return suggestion.itemDate;
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    weekday: "short",
+  }).format(date);
+}
+
+function formatOccurrenceTime(suggestion: AssistantSuggestion) {
+  if (!suggestion.startTime) return "Anytime";
+  if (!suggestion.estimatedHours) return formatStartTime(suggestion.startTime);
+  return `${formatStartTime(suggestion.startTime)}–${formatStartTime(
+    addMinutesToTime(suggestion.startTime, suggestion.estimatedHours),
+  )}`;
+}
+
+function formatDuration(minutes: number) {
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  return `${minutes} minutes`;
+}
+
+function getUniqueDays(suggestions: AssistantSuggestion[]) {
+  return [...new Set(suggestions.map((suggestion) => suggestion.day).filter(Boolean))];
+}
+
+export function AssistantPlanSummary({
+  appliedProposalIds,
+  batchId,
+  isApplying,
+  onApplyAll,
+  pendingProposalIds,
+  series,
+  suggestions,
+}: AssistantPlanSummaryProps) {
+  const pendingSet = new Set(pendingProposalIds);
+  const appliedSet = new Set(appliedProposalIds);
+  const pending = suggestions.filter((suggestion) => pendingSet.has(suggestion.id));
+  const applied = suggestions.filter((suggestion) => appliedSet.has(suggestion.id));
+  const kind = getPlanPresentationKind({
+    appliedCount: applied.length,
+    pendingCount: pending.length,
+    series,
+    suggestions,
+  });
+  const activityTitle = getSafeAssistantLabel(
+    suggestions[0]?.projectName || suggestions[0]?.title,
+    "Plan",
+  );
+  const seriesTitle = getSafeAssistantLabel(series?.title, activityTitle);
+  const title =
+    kind === "applied_result"
+      ? `${seriesTitle} added`
+      : kind === "multi_item_week"
+        ? "Proposed week"
+        : kind === "linked_changes"
+          ? "Today’s adjusted plan"
+          : kind === "routine"
+            ? `${activityTitle} routine`
+            : seriesTitle;
+  const preview = suggestions.slice(0, 3);
+  const remainingCount = Math.max(0, suggestions.length - preview.length);
+  const uniqueDays = getUniqueDays(suggestions);
+  const totalMinutes = suggestions.reduce(
+    (total, suggestion) => total + Math.round((suggestion.estimatedHours ?? 0) * 60),
+    0,
+  );
+  const appliedSummary = series
+    ? `${applied.length} sessions across ${series.planningHorizon.weeks} ${
+        series.planningHorizon.weeks === 1 ? "week" : "weeks"
+      }`
+    : `${applied.length} ${applied.length === 1 ? "change" : "changes"} applied`;
+  const statusSummary =
+    applied.length > 0 && pending.length > 0
+      ? `${applied.length} applied · ${pending.length} awaiting approval`
+      : `${pending.length} awaiting approval`;
+
+  return (
+    <section
+      aria-label={title}
+      className="animate-assistant-card w-full rounded-[24px] border border-brand-teal/16 bg-white px-4 py-4 shadow-[0_18px_44px_rgba(18,32,47,0.09)] sm:px-5"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-base font-semibold tracking-[-0.02em] text-brand-ink sm:text-lg">
+            {title}
+          </h3>
+          {kind === "applied_result" ? (
+            <p aria-live="polite" className="mt-1 text-sm text-brand-teal">
+              {appliedSummary}
+            </p>
+          ) : kind === "recurring_series" && series ? (
+            <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+              {series.pattern.sessionsPerWeek} sessions per week · {formatDuration(series.pattern.durationMinutes)} each · {series.planningHorizon.weeks} {series.planningHorizon.weeks === 1 ? "week" : "weeks"} · {series.totalOccurrences} total sessions
+            </p>
+          ) : kind === "routine" ? (
+            <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+              {uniqueDays.join(" · ")}<br />
+              {formatDuration(series?.pattern.durationMinutes ?? Math.round((suggestions[0]?.estimatedHours ?? 0) * 60))} · Repeats weekly
+            </p>
+          ) : kind === "linked_changes" ? (
+            <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+              {suggestions.length} related changes
+            </p>
+          ) : kind === "single_item" ? null : (
+            <p className="mt-1 text-sm leading-6 text-brand-ink/58">
+              {suggestions.length} items · {formatDuration(totalMinutes)} planned
+            </p>
+          )}
+        </div>
+        {pending.length > 0 ? (
+          <span
+            aria-live="polite"
+            className="rounded-full bg-brand-ink/6 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/52"
+          >
+            {statusSummary}
+          </span>
+        ) : null}
+      </div>
+
+      {kind !== "applied_result" && kind !== "routine" ? (
+        <div className="mt-4 border-y border-brand-ink/7 py-2">
+          {kind === "linked_changes" ? (
+            preview.map((suggestion) => (
+              <p key={suggestion.id} className="py-1.5 text-sm text-brand-ink/70">
+                • {sanitizeAssistantUserFacingText(suggestion.description || suggestion.title)}
+              </p>
+            ))
+          ) : kind === "multi_item_week" ? (
+            preview.map((suggestion) => (
+              <div
+                key={suggestion.id}
+                className="flex flex-col gap-0.5 py-1.5 sm:flex-row sm:items-center sm:gap-3"
+              >
+                <p className="text-sm font-semibold text-brand-ink/76">
+                  {formatOccurrenceDate(suggestion)}
+                </p>
+                <p className="text-sm text-brand-ink/54">
+                  {getSafeAssistantLabel(suggestion.projectName || suggestion.title)}
+                </p>
+              </div>
+            ))
+          ) : (
+            (kind === "single_item" ? preview.slice(0, 1) : preview).map((suggestion) => (
+              <div
+                key={suggestion.id}
+                className="flex flex-col gap-0.5 py-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+              >
+                <p className="text-sm font-semibold text-brand-ink/76">
+                  {formatOccurrenceDate(suggestion)}
+                </p>
+                <p className="text-sm text-brand-ink/54">
+                  {formatOccurrenceTime(suggestion)}
+                </p>
+              </div>
+            ))
+          )}
+          {remainingCount > 0 ? (
+            <p className="py-1.5 text-xs font-semibold text-brand-ink/42">
+              + {remainingCount} more {kind === "multi_item_week" ? (remainingCount === 1 ? "item" : "items") : (remainingCount === 1 ? "session" : "sessions")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+        {kind === "applied_result" ? (
+          <>
+            <Link
+              className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
+              href="/plan"
+            >
+              View Weekly Plan
+            </Link>
+            <Link
+              className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
+              href="/calendar"
+            >
+              View Calendar
+            </Link>
+          </>
+        ) : (
+          <>
+            {batchId ? (
+              <Link
+                aria-label={`${getPlanReviewLabel(kind)}: ${title}`}
+                className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
+                href={`/assistant/review/${encodeURIComponent(batchId)}`}
+              >
+                {getPlanReviewLabel(kind)}
+              </Link>
+            ) : null}
+            <Button
+              aria-live="polite"
+              className="h-11 rounded-2xl px-5 text-sm"
+              disabled={pending.length === 0 || isApplying}
+              onClick={() => onApplyAll(pending)}
+            >
+              {isApplying
+                ? "Applying…"
+                : getPlanApplyLabel(kind, pending.length)}
+            </Button>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
