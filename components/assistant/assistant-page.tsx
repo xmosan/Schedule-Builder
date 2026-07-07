@@ -30,6 +30,7 @@ import {
   type AssistantPlanReviewResponse,
   type AssistantSuggestion,
   type AssistantSuggestionType,
+  type AssistantUndoResponse,
 } from "@/lib/assistant";
 import type { SchedulingWorkflowContext } from "@/lib/assistant-workflow";
 import {
@@ -48,6 +49,10 @@ import {
   sanitizeAssistantUserFacingText,
   shouldRenderAssistantClarification,
 } from "@/lib/assistant-ui-guards";
+import {
+  getAssistantWorkflowStatusLabel,
+  resolveAssistantWorkflowStatus,
+} from "@/lib/assistant-automation";
 
 type AssistantStatus = "loading" | "ready" | "signed_out" | "error";
 type ChatRole = "assistant" | "user";
@@ -480,71 +485,6 @@ function getTypingDelay(chunk: string) {
 
   return Math.max(22, Math.min(42, chunk.length * 4));
 }
-
-function getWorkflowStatus({
-  context,
-  hasDataWarning,
-  isApplying,
-  isSubmitting,
-  pendingReviewCount,
-}: {
-  context: AssistantSchedulingContext | null;
-  hasDataWarning: boolean;
-  isApplying: boolean;
-  isSubmitting: boolean;
-  pendingReviewCount: number;
-}) {
-  if (isApplying) {
-    return "Applying approved changes";
-  }
-
-  if (isSubmitting) {
-    return "Checking your schedule";
-  }
-
-  if (pendingReviewCount > 0) {
-    return `${pendingReviewCount} ${pendingReviewCount === 1 ? "change" : "changes"} ready`;
-  }
-
-  if (context?.state === "calculating_availability") {
-    return "Checking your schedule";
-  }
-
-  if (context?.state === "awaiting_window_selection") {
-    return "Waiting for a time choice";
-  }
-
-  if (context?.state === "awaiting_duration") {
-    return "Waiting for a duration";
-  }
-
-  if (context?.state === "awaiting_title") {
-    return "Waiting for a title";
-  }
-
-  if (context?.state === "needs_clarification") {
-    return "Waiting for details";
-  }
-
-  if (context?.state === "proposal_ready" || context?.state === "awaiting_apply") {
-    return "Ready for review";
-  }
-
-  if (context?.state === "applied") {
-    return "Plan applied";
-  }
-
-  if (context?.state === "failed") {
-    return "Couldn’t finish this planning step";
-  }
-
-  if (hasDataWarning) {
-    return "Some schedule data is unavailable";
-  }
-
-  return "Ready for a request";
-}
-
 
 function updateSuggestionInResponse(
   response: AssistantPlanReviewResponse,
@@ -1188,6 +1128,8 @@ function ChatBubble({
   onApplyAll,
   onAcknowledgeNotice,
   onDismissNotice,
+  onUndo,
+  undoingDecisionId,
   appliedProposalIds,
   pendingProposalIds,
   workflowProposalIds,
@@ -1200,6 +1142,8 @@ function ChatBubble({
   onApplyAll: (suggestions: AssistantSuggestion[]) => void;
   onAcknowledgeNotice: (noticeId: string) => void;
   onDismissNotice: (noticeId: string) => void;
+  onUndo: (decisionRecordId: string) => void;
+  undoingDecisionId: string | null;
   appliedProposalIds: string[];
   pendingProposalIds: string[];
   workflowProposalIds: string[];
@@ -1344,14 +1288,20 @@ function ChatBubble({
           >
             <AssistantPlanSummary
               appliedProposalIds={appliedProposalIds}
+              automationReceipt={message.response?.automationReceipt}
               batchId={batchId}
               isApplying={pendingActionableActions.some(
                 (suggestion) => actionStates[suggestion.id]?.status === "applying",
               )}
+              isUndoing={
+                undoingDecisionId ===
+                message.response?.automationReceipt?.decisionRecordId
+              }
               pendingProposalIds={pendingProposalIds}
               series={seriesProposal}
               suggestions={actionableActions}
               onApplyAll={onApplyAll}
+              onUndo={onUndo}
             />
           </div>
         ) : null}
@@ -1395,6 +1345,7 @@ export function AssistantPage() {
     [],
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [undoingDecisionId, setUndoingDecisionId] = useState<string | null>(null);
   const [isRefreshingContext, setIsRefreshingContext] = useState(false);
   const [activeSchedulingContext, setActiveSchedulingContext] =
     useState<AssistantSchedulingContext | null>(null);
@@ -1457,13 +1408,13 @@ export function AssistantPage() {
   const isApplying = Object.values(actionStates).some(
     (state) => state.status === "applying",
   );
-  const workflowStatus = getWorkflowStatus({
-    context: activeSchedulingContext,
-    hasDataWarning: Boolean(contextWarning),
-    isApplying,
-    isSubmitting,
-    pendingReviewCount,
-  });
+  const workflowStatus = getAssistantWorkflowStatusLabel(
+    resolveAssistantWorkflowStatus({
+      isApplying,
+      isBuilding: isSubmitting,
+      workflow: activeWorkflow,
+    }),
+  );
   const showsActiveClarification =
     schedulingQuickReplies.length > 0 &&
     Boolean(activeClarificationQuestion) &&
@@ -1576,10 +1527,12 @@ export function AssistantPage() {
     nextPrompt,
     onDelta,
     recentMessages,
+    sourceMessageId,
   }: {
     nextPrompt: string;
     onDelta: (delta: string) => void;
     recentMessages: AssistantChatHistoryItem[];
+    sourceMessageId: string;
   }) {
     const supabase = getSupabaseBrowserClient();
     const { data, error: sessionError } = await supabase.auth.getSession();
@@ -1607,6 +1560,7 @@ export function AssistantPage() {
         activeSchedulingContext,
         threadId,
         recentMessages,
+        sourceMessageId,
         timezone: getBrowserTimeZone(),
       }),
     });
@@ -1687,6 +1641,34 @@ export function AssistantPage() {
     }
 
     return finalResponse;
+  }
+
+  async function requestUndoDecision(decisionRecordId: string) {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw new Error(sessionError.message);
+    const accessToken = data.session?.access_token;
+    if (!accessToken) throw new Error("Sign in before undoing this plan.");
+    const response = await fetch("/api/assistant/undo", {
+      body: JSON.stringify({ decisionRecordId }),
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | AssistantUndoResponse
+      | { error?: string }
+      | null;
+    if (!response.ok || !payload || !("reversedRecords" in payload)) {
+      throw new Error(
+        payload && "error" in payload && payload.error
+          ? payload.error
+          : "The automated plan could not be undone safely.",
+      );
+    }
+    return payload;
   }
 
   async function requestApplyActions(suggestions: AssistantSuggestion[]) {
@@ -2368,6 +2350,7 @@ export function AssistantPage() {
       const response = await requestPlanReviewStream({
         nextPrompt: trimmedPrompt,
         recentMessages,
+        sourceMessageId: userMessage.id,
         onDelta: (delta) => {
           incomingBuffer += delta;
         },
@@ -2398,16 +2381,35 @@ export function AssistantPage() {
         return nextStates;
       });
       setMessages((current) =>
-        current.map((message) =>
-          message.id === assistantMessageId
-            ? {
-                ...message,
-                content: chatResponse.assistantMessage || chatResponse.message,
-                isStreaming: false,
-                response: chatResponse,
-              }
-            : message,
-        ),
+        current.map((message) => {
+          if (message.id === assistantMessageId) {
+            return {
+              ...message,
+              content: chatResponse.assistantMessage || chatResponse.message,
+              isStreaming: false,
+              response: chatResponse,
+            };
+          }
+          const messageResponse = message.response;
+          if (
+            chatResponse.automationReceipt?.actionType === "action_undone" &&
+            messageResponse &&
+            messageResponse.automationReceipt?.decisionRecordId ===
+              chatResponse.automationReceipt.decisionRecordId
+          ) {
+            return {
+              ...message,
+              response: {
+                ...messageResponse,
+                automationReceipt: chatResponse.automationReceipt,
+                schedulingContext: chatResponse.workflow?.context ?? null,
+                workflow: chatResponse.workflow,
+                workflowStatus: chatResponse.workflowStatus,
+              },
+            };
+          }
+          return message;
+        }),
       );
       setOpenReviewMessages((current) => ({
         ...current,
@@ -2563,6 +2565,39 @@ export function AssistantPage() {
       });
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function undoAutomatedPlan(decisionRecordId: string) {
+    setUndoingDecisionId(decisionRecordId);
+    try {
+      const response = await requestUndoDecision(decisionRecordId);
+      setActiveWorkflow(response.workflow);
+      setActiveSchedulingContext(response.workflow.context);
+      setMessages((current) =>
+        current.map((message) =>
+          message.response?.automationReceipt?.decisionRecordId ===
+          decisionRecordId
+            ? {
+                ...message,
+                response: {
+                  ...message.response,
+                  automationReceipt: response.automationReceipt,
+                  schedulingContext: response.workflow.context,
+                  workflow: response.workflow,
+                  workflowStatus: response.workflowStatus,
+                },
+              }
+            : message,
+        ),
+      );
+      addAssistantNotice(response.message);
+      window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+      router.refresh();
+    } catch (undoError) {
+      addAssistantNotice(getErrorMessage(undoError), "error");
+    } finally {
+      setUndoingDecisionId(null);
     }
   }
 
@@ -2764,9 +2799,13 @@ export function AssistantPage() {
                       current.includes(noticeId) ? current : [...current, noticeId],
                     )
                   }
+                  onUndo={(decisionRecordId) =>
+                    void undoAutomatedPlan(decisionRecordId)
+                  }
                   appliedProposalIds={activeWorkflow?.appliedProposalIds ?? []}
                   pendingProposalIds={activeWorkflow?.pendingProposalIds ?? []}
                   workflowProposalIds={activeWorkflow?.proposalIds ?? []}
+                  undoingDecisionId={undoingDecisionId}
                 />
               ))}
 

@@ -295,7 +295,7 @@ function parseDurationMinutes(prompt: string) {
   const minutes = withoutWeeklyCommitment.match(/\b(\d+)\s*(?:minutes?|mins?)\b/i);
   if (minutes) return Number(minutes[1]);
   const hours = withoutWeeklyCommitment.match(
-    /\b(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*(?:hours?|hrs?)\b/i,
+    /\b(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*-?\s*(?:hours?|hrs?)\b/i,
   );
   const value = parseNumber(hours?.[1]);
   return value ? Math.round(value * 60) : null;
@@ -391,6 +391,9 @@ function recommendWeeklyPattern(
 }
 
 function parsePlanningHorizon(prompt: string) {
+  if (/\b(?:starting\s+)?this week\b|\bfor the current week\b/i.test(prompt)) {
+    return { count: 1, unit: "week" as const };
+  }
   const rangeMatch = prompt.match(
     /\b(?:for|over|during)?\s*(?:the\s+)?next\s+(\d+|one|two|three|four|five|six|seven|eight)\s*-\s*(\d+|one|two|three|four|five|six|seven|eight)\s+(days?|weeks?|months?)\b/i,
   );
@@ -433,7 +436,7 @@ function parseIntervalDays(prompt: string) {
 
 function parseSessionsPerWeek(prompt: string) {
   const match = prompt.match(
-    /\b(\d+|one|two|three|four|five|six|seven)\s+(?:(?:\w+\s+)?sessions?\s+(?:each|per)\s+week|days?\s+(?:of\s+the|a|per)\s+week|days?\s+of\s+the\s+week)\b/i,
+    /\b(\d+|one|two|three|four|five|six|seven)\s+(?:(?:(?:\d+|one|two|three|four|five|six|seven)\s*-?\s*(?:hours?|hrs?|minutes?|mins?)\s+)?sessions?(?:\s+(?:each|per)\s+week)?|days?\s+(?:of\s+the|a|per)\s+week|days?\s+of\s+the\s+week)\b/i,
   );
   return parseNumber(match?.[1]);
 }

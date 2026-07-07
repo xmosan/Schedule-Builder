@@ -18,6 +18,7 @@ export const schedulingWorkflowStates = [
   "applying",
   "applied",
   "failed",
+  "canceled",
 ] as const;
 
 export type SchedulingWorkflowState = (typeof schedulingWorkflowStates)[number];

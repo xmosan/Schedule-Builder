@@ -58,9 +58,23 @@ import {
 import { getUserFacingError } from "@/lib/user-facing-error";
 import {
   loadAssistantWorkflowById,
+  persistAssistantWorkflow,
   updateAssistantProposalResults,
 } from "@/lib/assistant-workflow-store";
 import { getCanonicalPendingProposals } from "@/lib/assistant-workflow";
+import {
+  decideAssistantAutomation,
+  resolveAssistantWorkflowStatus,
+  type AutomationGrant,
+  type CompactActionReceipt,
+  type PlanningDecisionRecord,
+} from "@/lib/assistant-automation";
+import {
+  loadAutomationGrantById,
+  persistActionReceipt,
+  persistPlanningDecision,
+  updateAutomationGrantStatus,
+} from "@/lib/assistant-automation-store";
 
 export const dynamic = "force-dynamic";
 
@@ -932,9 +946,14 @@ export async function POST(request: NextRequest) {
   }
 
   const body = (await request.json().catch(() => ({}))) as {
+    automationGrantId?: unknown;
     proposalIds?: unknown;
     workflowId?: unknown;
   };
+  const automationGrantId =
+    typeof body.automationGrantId === "string"
+      ? body.automationGrantId.trim()
+      : "";
   const workflowId =
     typeof body.workflowId === "string" ? body.workflowId.trim() : "";
   const proposalIds = Array.isArray(body.proposalIds)
@@ -981,6 +1000,32 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let automationGrant: AutomationGrant | null = null;
+  if (automationGrantId) {
+    const grantResult = await loadAutomationGrantById(
+      authResult.supabase,
+      authResult.userId,
+      automationGrantId,
+    );
+    if (
+      grantResult.error ||
+      !grantResult.data ||
+      grantResult.data.status !== "active" ||
+      grantResult.data.workflowId !== workflowId ||
+      (grantResult.data.expiresAt &&
+        new Date(grantResult.data.expiresAt).getTime() <= Date.now())
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The scoped automation permission is missing, expired, or does not match this workflow. Nothing was applied.",
+        },
+        { status: 403 },
+      );
+    }
+    automationGrant = grantResult.data;
+  }
+
   const proposalById = new Map(
     getCanonicalPendingProposals(
       workflowResult.data.workflow,
@@ -1004,6 +1049,10 @@ export async function POST(request: NextRequest) {
       { status: 409 },
     );
   }
+
+  const normalizedSuggestions = suggestions.flatMap((item) =>
+    item.normalized ? [item.normalized] : [],
+  );
 
   const [
     projectsResult,
@@ -1041,6 +1090,80 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (
+    automationGrant &&
+    (workShiftsResult.error ||
+      importedEventsResult.error ||
+      scheduleExceptionsResult.error)
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          "I couldn’t load enough schedule data to revalidate the automated plan. Nothing was applied.",
+      },
+      { status: 503 },
+    );
+  }
+
+  const automationDecision = automationGrant
+    ? decideAssistantAutomation({
+        grant: automationGrant,
+        sourceDataComplete: true,
+        suggestions: normalizedSuggestions,
+        workflowId,
+      })
+    : null;
+  if (automationDecision && automationDecision.outcome !== "auto_apply") {
+    return NextResponse.json(
+      {
+        error:
+          "The proposals no longer fit the scoped automation permission. Nothing was applied.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const decisionId = automationGrant
+    ? `decision-${workflowId}-${Date.now()}`
+    : null;
+  const decisionCreatedAt = new Date().toISOString();
+  const pendingDecision: PlanningDecisionRecord | null =
+    automationGrant && automationDecision && decisionId
+      ? {
+          actionType:
+            normalizedSuggestions.length > 1
+              ? "create_time_block_series"
+              : "create_time_block",
+          automationMode: "auto_applied",
+          constraintsUsed: Object.entries(automationGrant.guardrails)
+            .filter(([, value]) => value !== undefined && value !== null)
+            .map(([key]) => key)
+            .concat(
+              workflowResult.data.workflow.context?.temporaryScheduleContext
+                ?.affectedCandidateCalculation
+                ? ["temporary_work_context"]
+                : [],
+            ),
+          createdAt: decisionCreatedAt,
+          grantId: automationGrant.id,
+          id: decisionId,
+          preferencesUsed: [
+            ...(automationGrant.guardrails.earliestTime ? ["preferred_evening_start"] : []),
+            ...(automationGrant.guardrails.latestTime ? ["latest_finish_time"] : []),
+            ...(automationGrant.guardrails.minimumBufferAfterWorkMinutes
+              ? ["buffer_after_work"]
+              : []),
+          ],
+          proposalIds,
+          reasonCodes: automationDecision.reasonCodes,
+          reversibleUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          scheduleExceptionIds: [],
+          status: "pending",
+          targetRecordIds: [],
+          userId: authResult.userId,
+          workflowId,
+        }
+      : null;
   const currentProjects = [...projectsResult.data];
   const currentBlocks = [...weeklyPlanResult.data];
   const currentScheduledItems = [...scheduledItemsResult.data];
@@ -1048,6 +1171,98 @@ export async function POST(request: NextRequest) {
     ? []
     : [...scheduleExceptionsResult.data];
   const workShifts = workShiftsResult.error ? [] : [...workShiftsResult.data];
+  const temporaryScheduleContext =
+    workflowResult.data.workflow.context?.temporaryScheduleContext;
+  if (
+    automationGrant &&
+    temporaryScheduleContext?.relatedWorkShiftId
+  ) {
+    const relatedShift = workShifts.find(
+      (shift) => shift.id === temporaryScheduleContext.relatedWorkShiftId,
+    );
+    if (relatedShift) {
+      currentScheduleExceptions.push({
+        createdBy: "assistant_approved",
+        date: temporaryScheduleContext.date,
+        exceptionType: "modify_shift",
+        id: `workflow-context-${temporaryScheduleContext.date}-${relatedShift.id}`,
+        notes: "Temporary automation context; not persisted as a Work Schedule change.",
+        originalEndTime: temporaryScheduleContext.originalEndTime,
+        originalStartTime: relatedShift.startTime,
+        overrideEndTime: temporaryScheduleContext.overrideEndTime,
+        overrideStartTime: relatedShift.startTime,
+        relatedWorkShiftId: relatedShift.id,
+        title: "Temporary early departure context",
+      });
+    }
+  }
+  if (automationGrant?.guardrails.minimumBufferAfterWorkMinutes) {
+    const buffer = automationGrant.guardrails.minimumBufferAfterWorkMinutes;
+    const violatesBuffer = normalizedSuggestions.some((suggestion) => {
+      if (!suggestion.itemDate || !suggestion.startTime || !suggestion.day) return true;
+      const proposalStart = parseStartTimeToMinutes(suggestion.startTime);
+      const workEnd = getEffectiveWorkShiftsForDate(
+        workShifts,
+        currentScheduleExceptions,
+        suggestion.itemDate,
+        suggestion.day,
+      ).reduce((latest, shift) => {
+        const end = parseStartTimeToMinutes(shift.endTime);
+        return end === null ? latest : Math.max(latest, end);
+      }, 0);
+      return proposalStart === null || (workEnd > 0 && proposalStart < workEnd + buffer);
+    });
+    if (violatesBuffer) {
+      return NextResponse.json(
+        {
+          error:
+            "The proposed times no longer satisfy the requested buffer after work. Nothing was applied.",
+        },
+        { status: 409 },
+      );
+    }
+  }
+  if (pendingDecision) {
+    const decisionResult = await persistPlanningDecision(
+      authResult.supabase,
+      pendingDecision,
+    );
+    if (decisionResult.error) {
+      return NextResponse.json(
+        {
+          error:
+            "I couldn’t create an audit record for automatic scheduling. Nothing was applied.",
+        },
+        { status: 500 },
+      );
+    }
+  }
+  const applyingWorkflow = {
+    ...workflowResult.data.workflow,
+    lastUpdatedAt: new Date().toISOString(),
+    state: "applying" as const,
+  };
+  const applyingPersistence = await persistAssistantWorkflow(
+    authResult.supabase,
+    applyingWorkflow,
+    workflowResult.data.proposals,
+    workflowResult.data.batch,
+  );
+  if (applyingPersistence.error || !applyingPersistence.data) {
+    if (pendingDecision) {
+      await persistPlanningDecision(authResult.supabase, {
+        ...pendingDecision,
+        status: "failed",
+      });
+    }
+    return NextResponse.json(
+      {
+        error:
+          "I couldn’t record the applying state safely. Nothing was applied.",
+      },
+      { status: 500 },
+    );
+  }
   const importedCalendarEvents =
     importedEventsResult.error == null
       ? getRelevantImportedCalendarEvents(importedEventsResult.data)
@@ -1218,6 +1433,136 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let automationReceipt: CompactActionReceipt | null = null;
+  if (pendingDecision && automationGrant && decisionId) {
+    const appliedWeeklyResults = results.filter(
+      (result) =>
+        result.status === "applied" &&
+        result.type === "suggested_weekly_block" &&
+        Boolean(result.savedRecordId),
+    );
+    const targetRecordIds = appliedWeeklyResults.flatMap((result) =>
+      result.savedRecordId ? [result.savedRecordId] : [],
+    );
+    const snapshotResult = targetRecordIds.length
+      ? await authResult.supabase
+          .from("weekly_plan_blocks")
+          .select(
+            "block_id, project_name, planned_task, estimated_hours, start_time, scheduled_date, series_id, inserted_at, updated_at",
+          )
+          .eq("user_id", authResult.userId)
+          .in("block_id", targetRecordIds)
+      : { data: [], error: null };
+    const finalDecision: PlanningDecisionRecord = {
+      ...pendingDecision,
+      afterState: { records: snapshotResult.data ?? [] },
+      status:
+        appliedWeeklyResults.length === 0
+          ? "failed"
+          : appliedWeeklyResults.length === proposalIds.length
+            ? "applied"
+            : "partially_applied",
+      targetRecordIds,
+    };
+    const sortedApplied = [...appliedWeeklyResults].sort(
+      (first, second) =>
+        `${first.createdDate ?? ""}${first.createdBlock?.startTime ?? ""}`.localeCompare(
+          `${second.createdDate ?? ""}${second.createdBlock?.startTime ?? ""}`,
+        ),
+    );
+    const firstApplied = sortedApplied[0];
+    const activityTitle =
+      workflowUpdate.data.workflow.context?.semanticRequest?.activity.title ??
+      firstApplied?.suggestionTitle ??
+      "Automated plan";
+    automationReceipt = {
+      actionType:
+        appliedWeeklyResults.length > 0 ? "plan_applied" : "action_failed",
+      availableActions:
+        appliedWeeklyResults.length > 0 ? ["undo", "view"] : ["view"],
+      createdAt: decisionCreatedAt,
+      decisionRecordId: decisionId,
+      id: `receipt-${decisionId}`,
+      itemCount: appliedWeeklyResults.length,
+      nextOccurrenceAt:
+        firstApplied?.createdDate && firstApplied.createdBlock?.startTime
+          ? `${firstApplied.createdDate}T${firstApplied.createdBlock.startTime}:00`
+          : undefined,
+      primaryTime:
+        firstApplied?.createdDate && firstApplied.createdBlock?.startTime
+          ? `${firstApplied.createdDate}T${firstApplied.createdBlock.startTime}:00`
+          : undefined,
+      summary:
+        appliedWeeklyResults.length === proposalIds.length
+          ? `${appliedWeeklyResults.length} Schedule Builder time blocks were added.`
+          : `${appliedWeeklyResults.length} of ${proposalIds.length} Schedule Builder time blocks were added.`,
+      title: `${activityTitle} plan`,
+      userId: authResult.userId,
+    };
+    const [decisionResult, receiptResult, grantResult] = await Promise.all([
+      persistPlanningDecision(authResult.supabase, finalDecision),
+      persistActionReceipt(authResult.supabase, automationReceipt),
+      updateAutomationGrantStatus(
+        authResult.supabase,
+        authResult.userId,
+        automationGrant.id,
+        "consumed",
+      ),
+    ]);
+    if (
+      snapshotResult.error ||
+      snapshotResult.data?.length !== targetRecordIds.length ||
+      decisionResult.error ||
+      receiptResult.error ||
+      grantResult.error
+    ) {
+      await Promise.all(
+        targetRecordIds.map((blockId) =>
+          deleteWeeklyPlanBlockForUser(
+            authResult.supabase,
+            authResult.userId,
+            blockId,
+          ),
+        ),
+      );
+      await updateAssistantProposalResults(
+        authResult.supabase,
+        workflowUpdate.data.workflow,
+        appliedWeeklyResults.map((result) => ({
+          approvalStatus: "pending" as const,
+          proposalId: result.suggestionId,
+        })),
+      );
+      await persistPlanningDecision(authResult.supabase, {
+        ...finalDecision,
+        afterState: null,
+        status: "failed",
+        targetRecordIds: [],
+      });
+      await persistActionReceipt(authResult.supabase, {
+        ...automationReceipt,
+        actionType: "action_failed",
+        availableActions: ["view"],
+        itemCount: 0,
+        summary:
+          "The automatic changes were rolled back because a reversible receipt could not be recorded.",
+      });
+      await updateAutomationGrantStatus(
+        authResult.supabase,
+        authResult.userId,
+        automationGrant.id,
+        "revoked",
+      );
+      return NextResponse.json(
+        {
+          error:
+            "I couldn’t record a reversible automation receipt, so the automatic changes were rolled back. Nothing was confirmed as scheduled.",
+        },
+        { status: 500 },
+      );
+    }
+  }
+
   const context = await loadContextSummary(authResult.supabase, authResult.userId);
   const series = workflowUpdate.data.workflow.context?.seriesProposal;
   const activityTitle =
@@ -1235,6 +1580,7 @@ export async function POST(request: NextRequest) {
         ? `${failedCount > 0 ? "Partly." : "Yes."} ${appliedMessages.join(" ")}`
         : "No. I couldn’t apply the approved sessions. No success confirmation was recorded.";
   const response: AssistantApplyResponse = {
+    automationReceipt,
     canonicalProposals: workflowUpdate.data.proposals,
     completionStatus: workflowUpdate.data.workflow.completionStatus,
     context,
@@ -1242,6 +1588,9 @@ export async function POST(request: NextRequest) {
     proposalBatch: workflowUpdate.data.batch,
     results,
     workflow: workflowUpdate.data.workflow,
+    workflowStatus: resolveAssistantWorkflowStatus({
+      workflow: workflowUpdate.data.workflow,
+    }),
   };
 
   return NextResponse.json(response);

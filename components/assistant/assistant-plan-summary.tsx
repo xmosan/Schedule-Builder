@@ -4,6 +4,7 @@ import Link from "next/link";
 import React from "react";
 import { Button } from "@/components/ui/button";
 import type { AssistantSuggestion } from "@/lib/assistant";
+import type { CompactActionReceipt } from "@/lib/assistant-automation";
 import {
   getPlanApplyLabel,
   getPlanPresentationKind,
@@ -20,10 +21,13 @@ type AssistantPlanSummaryProps = {
   appliedProposalIds: string[];
   batchId?: string | null;
   isApplying: boolean;
+  isUndoing?: boolean;
   onApplyAll: (suggestions: AssistantSuggestion[]) => void;
+  onUndo?: (decisionRecordId: string) => void;
   pendingProposalIds: string[];
   series?: RecurringSeriesProposal | null;
   suggestions: AssistantSuggestion[];
+  automationReceipt?: CompactActionReceipt | null;
 };
 
 function addMinutesToTime(startTime: string, durationHours: number) {
@@ -67,9 +71,12 @@ function getUniqueDays(suggestions: AssistantSuggestion[]) {
 
 export function AssistantPlanSummary({
   appliedProposalIds,
+  automationReceipt,
   batchId,
   isApplying,
+  isUndoing = false,
   onApplyAll,
+  onUndo,
   pendingProposalIds,
   series,
   suggestions,
@@ -89,8 +96,12 @@ export function AssistantPlanSummary({
     "Plan",
   );
   const seriesTitle = getSafeAssistantLabel(series?.title, activityTitle);
+  const isUndone = automationReceipt?.actionType === "action_undone";
+  const undoDecisionId = automationReceipt?.decisionRecordId;
   const title =
-    kind === "applied_result"
+    isUndone
+      ? `${seriesTitle} removed`
+      : kind === "applied_result"
       ? `${seriesTitle} added`
       : kind === "multi_item_week"
         ? "Proposed week"
@@ -126,7 +137,11 @@ export function AssistantPlanSummary({
           <h3 className="text-base font-semibold tracking-[-0.02em] text-brand-ink sm:text-lg">
             {title}
           </h3>
-          {kind === "applied_result" ? (
+          {isUndone ? (
+            <p aria-live="polite" className="mt-1 text-sm text-brand-teal">
+              {automationReceipt.summary}
+            </p>
+          ) : kind === "applied_result" ? (
             <p aria-live="polite" className="mt-1 text-sm text-brand-teal">
               {appliedSummary}
             </p>
@@ -159,7 +174,7 @@ export function AssistantPlanSummary({
         ) : null}
       </div>
 
-      {kind !== "applied_result" && kind !== "routine" ? (
+      {!isUndone && kind !== "applied_result" && kind !== "routine" ? (
         <div className="mt-4 border-y border-brand-ink/7 py-2">
           {kind === "linked_changes" ? (
             preview.map((suggestion) => (
@@ -205,8 +220,22 @@ export function AssistantPlanSummary({
       ) : null}
 
       <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-        {kind === "applied_result" ? (
+        {isUndone || kind === "applied_result" ? (
           <>
+            {!isUndone &&
+            undoDecisionId &&
+            automationReceipt.availableActions.includes("undo") &&
+            onUndo ? (
+              <Button
+                className="h-11 rounded-2xl px-5 text-sm"
+                disabled={isUndoing}
+                type="button"
+                variant="outline"
+                onClick={() => onUndo(undoDecisionId)}
+              >
+                {isUndoing ? "Undoing…" : "Undo"}
+              </Button>
+            ) : null}
             <Link
               className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
               href="/plan"

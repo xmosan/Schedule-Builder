@@ -1,5 +1,9 @@
 import type { PlannerType } from "@/lib/onboarding";
 import type {
+  AssistantWorkflowStatus,
+  CompactActionReceipt,
+} from "@/lib/assistant-automation";
+import type {
   AssistantCompletionStatus,
   AssistantTurnResult,
 } from "@/lib/assistant-intelligence";
@@ -213,6 +217,8 @@ export type AssistantPlanReviewResponse = {
   proposalBatch?: ProposalBatch | null;
   responsePlan?: AssistantResponsePlan;
   workflow?: SchedulingWorkflowContext | null;
+  workflowStatus?: AssistantWorkflowStatus;
+  automationReceipt?: CompactActionReceipt | null;
 };
 
 export type AssistantApplyResultStatus = "applied" | "error" | "skipped";
@@ -239,6 +245,21 @@ export type AssistantApplyResponse = {
   canonicalProposals?: CanonicalAssistantProposal[];
   proposalBatch?: ProposalBatch | null;
   workflow?: SchedulingWorkflowContext | null;
+  workflowStatus?: AssistantWorkflowStatus;
+  automationReceipt?: CompactActionReceipt | null;
+};
+
+export type AssistantUndoResponse = {
+  automationReceipt: CompactActionReceipt;
+  message: string;
+  reversedRecords: Array<{
+    block_id: string;
+    project_name: string;
+    scheduled_date: string | null;
+    start_time: string | null;
+  }>;
+  workflow: SchedulingWorkflowContext;
+  workflowStatus: AssistantWorkflowStatus;
 };
 
 type AssistantHistoryItem = {

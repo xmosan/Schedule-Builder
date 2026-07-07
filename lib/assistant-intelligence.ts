@@ -498,7 +498,12 @@ export function validateAssistantCompletionLanguage(
         ? !explicitlyNegative &&
           (completionClaimPattern.test(text) ||
             /\b(?:i|we) (?:added|applied|saved|scheduled|put)\b/i.test(text))
-        : false;
+        : completionStatus === "records_applied"
+          ? explicitlyNegative ||
+            /\b(?:drafted|ready for review|awaiting (?:your )?approval|waiting for (?:your )?approval|nothing (?:has been|was) added)\b/i.test(
+              text,
+            )
+          : false;
 
   if (!mismatch) {
     return { mismatch: false, responseText: text };
@@ -513,7 +518,9 @@ export function validateAssistantCompletionLanguage(
     responseText:
       completionStatus === "proposal_created"
         ? "I drafted the requested change for your review. Nothing has been added yet; review and approve the proposal first."
-        : "It has not been scheduled yet. I still need the missing planning details before I can prepare a proposal.",
+        : completionStatus === "records_applied"
+          ? "Yes. The server-confirmed schedule records were applied."
+          : "It has not been scheduled yet. I still need the missing planning details before I can prepare a proposal.",
   };
 }
 

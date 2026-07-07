@@ -1,6 +1,7 @@
 import type { AssistantSuggestion } from "@/lib/assistant";
 import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
 import type { SemanticPlanningRequest } from "@/lib/assistant-semantics";
+import type { AssistantWorkflowStatus } from "@/lib/assistant-automation";
 
 export type AssistantResponseMode =
   | "direct_answer"
@@ -8,6 +9,10 @@ export type AssistantResponseMode =
   | "recommendation"
   | "proposal_summary"
   | "applied_confirmation"
+  | "auto_applied"
+  | "partially_applied"
+  | "undo_result"
+  | "social_reply"
   | "warning"
   | "failure";
 
@@ -34,13 +39,23 @@ export function createRelevantNoticeId(
 
 export type AssistantResponsePlan = {
   activityReference?: string;
+  allowAppliedLanguage: boolean;
+  allowDraftLanguage: boolean;
+  appliedRecordCount: number;
+  automationDecision?: {
+    mode: "manual_review" | "batch_approval" | "auto_applied";
+    reasonCodes: string[];
+  };
+  failedCount: number;
   maximumDetailLevel: "brief" | "standard" | "expanded";
   mode: AssistantResponseMode;
   needsAttentionItems: RelevantNotice[];
   primaryMessage: string;
+  pendingProposalCount: number;
   proposalIds?: string[];
   showAlternatives: boolean;
   showNeedsAttention: boolean;
+  workflowStatus?: AssistantWorkflowStatus;
 };
 
 const cannedPhrasePattern =
@@ -154,6 +169,19 @@ export function createAssistantResponsePlan({
 
   return {
     activityReference: context?.semanticRequest?.activity.title,
+    allowAppliedLanguage: context?.state === "applied",
+    allowDraftLanguage: context?.state === "awaiting_apply",
+    appliedRecordCount: context?.appliedRecords.length ?? 0,
+    automationDecision: context?.automationDecision
+      ? {
+          mode:
+            context.automationDecision.outcome === "auto_apply"
+              ? "auto_applied"
+              : "manual_review",
+          reasonCodes: context.automationDecision.reasonCodes,
+        }
+      : undefined,
+    failedCount: 0,
     maximumDetailLevel: asksForAllOptions
       ? "expanded"
       : context?.seriesProposal
@@ -162,6 +190,7 @@ export function createAssistantResponsePlan({
     mode,
     needsAttentionItems: notices,
     primaryMessage: safePrimaryMessage(message, mode, context),
+    pendingProposalCount: context?.pendingProposals.length ?? 0,
     proposalIds: actions.map((action) => action.id),
     showAlternatives: asksForAllOptions,
     showNeedsAttention: notices.length > 0,

@@ -16,11 +16,27 @@ import {
   normalizeAssistantSuggestions,
   shouldGenerateAssistantActionCards,
   type AssistantContextStatus,
+  type AssistantApplyResponse,
+  type AssistantUndoResponse,
   type AssistantGoogleSyncRow,
   type AssistantPlanReviewResponse,
   type AssistantPlanningContext,
   type AssistantSuggestionType,
 } from "@/lib/assistant";
+import {
+  decideAssistantAutomation,
+  extractAutomationGrant,
+  isAssistantAppliedDetailsQuestion,
+  isAssistantSocialReply,
+  isAssistantUndoRequest,
+  resolveAssistantWorkflowStatus,
+  type AutomationGrant,
+} from "@/lib/assistant-automation";
+import {
+  loadLatestReversibleDecision,
+  loadReceiptForDecision,
+  persistAutomationGrant,
+} from "@/lib/assistant-automation-store";
 import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
 import { getScheduleExceptionLoadStatus } from "@/lib/schedule-exceptions";
 import {
@@ -61,6 +77,7 @@ import {
   gateAssistantInsights,
   validateResponsePlan,
 } from "@/lib/assistant-presentation";
+import { extractSemanticPlanningRequest } from "@/lib/assistant-semantics";
 import {
   fetchPlannerProfileForUser,
   fetchImportedCalendarEventsForUser,
@@ -331,6 +348,7 @@ function createWorkflowPersistenceFailureResponse({
         }
       : undefined,
     workflow,
+    workflowStatus: "failed",
   };
 }
 
@@ -530,6 +548,7 @@ async function persistCanonicalWorkflowResponse({
         }
       : undefined,
     workflow: loaded.workflow,
+    workflowStatus: resolveAssistantWorkflowStatus({ workflow: loaded.workflow }),
   } satisfies AssistantPlanReviewResponse;
 }
 
@@ -563,6 +582,12 @@ function createAuthoritativeStatusResponse({
     "The requested item";
   let message: string;
   const series = loaded.workflow.context?.seriesProposal;
+  const authoritativeCompletionStatus =
+    applied.length > 0
+      ? ("records_applied" as const)
+      : pending.length > 0
+        ? ("proposal_created" as const)
+        : ("nothing_created" as const);
 
   if (applied.length > 0 && pending.length === 0) {
     const lines = applied
@@ -596,10 +621,10 @@ function createAuthoritativeStatusResponse({
 
   const guarded = validateAssistantCompletionLanguage(
     message,
-    loaded.workflow.completionStatus,
+    authoritativeCompletionStatus,
   );
   const turnResult = createAssistantTurnResult({
-    completionStatus: loaded.workflow.completionStatus,
+    completionStatus: authoritativeCompletionStatus,
     contextStatus: baseResponse.contextStatus,
     extractedItems: loaded.workflow.extractedItems,
     intent: "status_question",
@@ -638,7 +663,232 @@ function createAuthoritativeStatusResponse({
     suggestions: [],
     turnResult,
     workflow: loaded.workflow,
+    workflowStatus: resolveAssistantWorkflowStatus({ workflow: loaded.workflow }),
   };
+}
+
+function formatSavedResultLine(result: AssistantApplyResponse["results"][number]) {
+  if (!result.createdBlock?.startTime || !result.createdDate) return null;
+  const start = result.createdBlock.startTime;
+  const end = addMinutesToTimeInput(
+    start,
+    Math.round(result.createdBlock.estimatedHours * 60),
+  );
+  return `${result.createdDate} · ${formatTimeInputLabel(start)}–${formatTimeInputLabel(end)}`;
+}
+
+async function autoApplyPersistedPlan({
+  grant,
+  request,
+  response,
+  supabase,
+  userId,
+}: {
+  grant: AutomationGrant;
+  request: NextRequest;
+  response: AssistantPlanReviewResponse;
+  supabase: SupabaseClient;
+  userId: string;
+}) {
+  if (!response.workflow || response.actions.length === 0) return response;
+  const grantResult = await persistAutomationGrant(supabase, grant);
+  if (grantResult.error) {
+    const message =
+      "I built the plan, but I couldn’t record the automation permission safely. Nothing was applied; the plan is waiting for review.";
+    return {
+      ...response,
+      assistantMessage: message,
+      message,
+      workflowStatus: resolveAssistantWorkflowStatus({ workflow: response.workflow }),
+    };
+  }
+
+  const authorization = request.headers.get("authorization");
+  const applyRequest = await fetch(new URL("/api/assistant/apply", request.url), {
+    body: JSON.stringify({
+      automationGrantId: grant.id,
+      proposalIds: response.workflow.pendingProposalIds,
+      workflowId: response.workflow.workflowId,
+    }),
+    headers: {
+      ...(authorization ? { Authorization: authorization } : {}),
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const applyResponse = (await applyRequest.json().catch(() => null)) as
+    | AssistantApplyResponse
+    | { error?: string }
+    | null;
+  if (!applyRequest.ok || !applyResponse || !("results" in applyResponse)) {
+    const message =
+      "I couldn’t safely apply that plan automatically. Nothing was confirmed as scheduled; the saved plan is available for review.";
+    return {
+      ...response,
+      assistantMessage: message,
+      message,
+      workflowStatus: resolveAssistantWorkflowStatus({ workflow: response.workflow }),
+    };
+  }
+
+  const appliedResults = applyResponse.results.filter(
+    (result) => result.status === "applied",
+  );
+  const failedCount = applyResponse.results.length - appliedResults.length;
+  const lines = appliedResults
+    .map(formatSavedResultLine)
+    .filter((line): line is string => Boolean(line));
+  const exceptionNote =
+    response.schedulingContext?.temporaryScheduleContext
+      ?.affectedCandidateCalculation
+      ? "\n\nI accounted for today’s early departure."
+      : "";
+  const title =
+    applyResponse.workflow?.context?.semanticRequest?.activity.title ??
+    response.workflow.extractedItems[0]?.title ??
+    "the requested plan";
+  const sessionMinutes = appliedResults[0]?.createdBlock
+    ? Math.round(appliedResults[0].createdBlock.estimatedHours * 60)
+    : null;
+  const sessionLength =
+    sessionMinutes === 60
+      ? "one-hour "
+      : sessionMinutes
+        ? `${sessionMinutes}-minute `
+        : "";
+  const activityReference = title.replace(/^Read\s+/i, "");
+  const message =
+    appliedResults.length === 0
+      ? "I couldn’t apply the automated plan after revalidation. Nothing was scheduled; the saved plan remains available for review."
+      : failedCount > 0
+      ? `Partly. I scheduled ${appliedResults.length} ${title} session${appliedResults.length === 1 ? "" : "s"}, and ${failedCount} could not be applied.${lines.length ? `\n\n${lines.join("\n")}` : ""}${exceptionNote}`
+      : `I scheduled ${appliedResults.length} ${sessionLength}${activityReference} session${appliedResults.length === 1 ? "" : "s"} this week:${lines.length ? `\n\n${lines.join("\n")}` : ""}${exceptionNote}`;
+  const workflow = applyResponse.workflow ?? response.workflow;
+  const canonicalActions =
+    applyResponse.canonicalProposals
+      ?.filter((proposal) => proposal.approvalStatus !== "rejected")
+      .map((proposal) => proposal.suggestion) ?? [];
+  return {
+    ...response,
+    actions: canonicalActions,
+    assistantMessage: message,
+    automationReceipt: applyResponse.automationReceipt ?? null,
+    canonicalProposals: applyResponse.canonicalProposals,
+    message,
+    proposalBatch: applyResponse.proposalBatch,
+    responsePlan: response.responsePlan
+      ? {
+          ...response.responsePlan,
+          allowAppliedLanguage: appliedResults.length > 0,
+          allowDraftLanguage: failedCount > 0,
+          appliedRecordCount: appliedResults.length,
+          automationDecision: {
+            mode: "auto_applied",
+            reasonCodes:
+              response.schedulingContext?.automationDecision?.reasonCodes ?? [],
+          },
+          failedCount,
+          mode:
+            appliedResults.length === 0
+              ? "failure"
+              : failedCount > 0
+                ? "partially_applied"
+                : "auto_applied",
+          pendingProposalCount: workflow.pendingProposalIds.length,
+          primaryMessage: message,
+          workflowStatus: resolveAssistantWorkflowStatus({ workflow }),
+        }
+      : undefined,
+    schedulingContext: workflow.context,
+    turnResult: response.turnResult
+      ? {
+          ...response.turnResult,
+          completionStatus: workflow.completionStatus,
+          outcome: failedCount > 0 ? "apply_failed" : "apply_succeeded",
+          responseText: message,
+          workflowState: workflow.state,
+        }
+      : undefined,
+    workflow,
+    workflowStatus: resolveAssistantWorkflowStatus({ workflow }),
+  } satisfies AssistantPlanReviewResponse;
+}
+
+function createSocialAppliedResponse({
+  baseResponse,
+  loaded,
+  receipt,
+}: {
+  baseResponse: AssistantPlanReviewResponse;
+  loaded: LoadedAssistantWorkflow;
+  receipt: AssistantPlanReviewResponse["automationReceipt"];
+}) {
+  const message = "You’re welcome.";
+  const responsePlan = createAssistantResponsePlan({
+    actions: [],
+    context: loaded.workflow.context,
+    insights: [],
+    message,
+    prompt: "Thank you",
+  });
+  return {
+    ...baseResponse,
+    actions: [],
+    assistantMessage: message,
+    automationReceipt: receipt,
+    canonicalProposals: loaded.proposals,
+    insights: [],
+    message,
+    proposalBatch: loaded.batch,
+    responsePlan: {
+      ...responsePlan,
+      allowAppliedLanguage: true,
+      allowDraftLanguage: false,
+      appliedRecordCount: loaded.workflow.appliedProposalIds.length,
+      mode: "social_reply",
+      pendingProposalCount: 0,
+      workflowStatus: "applied",
+    },
+    schedulingContext: loaded.workflow.context,
+    suggestions: [],
+    workflow: loaded.workflow,
+    workflowStatus: resolveAssistantWorkflowStatus({ workflow: loaded.workflow }),
+  } satisfies AssistantPlanReviewResponse;
+}
+
+function createUndoPlanResponse({
+  baseResponse,
+  undo,
+}: {
+  baseResponse: AssistantPlanReviewResponse;
+  undo: AssistantUndoResponse;
+}) {
+  return {
+    ...baseResponse,
+    actions: [],
+    assistantMessage: undo.message,
+    automationReceipt: undo.automationReceipt,
+    message: undo.message,
+    responsePlan: {
+      ...createAssistantResponsePlan({
+        actions: [],
+        context: undo.workflow.context,
+        insights: [],
+        message: undo.message,
+        prompt: "Undo that",
+      }),
+      allowAppliedLanguage: false,
+      allowDraftLanguage: false,
+      appliedRecordCount: 0,
+      mode: "undo_result",
+      pendingProposalCount: 0,
+      workflowStatus: undo.workflowStatus,
+    },
+    schedulingContext: undo.workflow.context,
+    suggestions: [],
+    workflow: undo.workflow,
+    workflowStatus: undo.workflowStatus,
+  } satisfies AssistantPlanReviewResponse;
 }
 
 const assistantResponseJsonSchema = {
@@ -1823,6 +2073,22 @@ export async function GET(request: NextRequest) {
     ? getCanonicalPendingProposals(loaded.workflow, loaded.proposals)
         .map((proposal) => proposal.suggestion)
     : [];
+  const latestDecision = loaded
+    ? await loadLatestReversibleDecision(
+        authResult.supabase,
+        authResult.userId,
+        loaded.workflow.workflowId,
+      )
+    : { data: null, error: null };
+  const receipt = latestDecision.data
+    ? (
+        await loadReceiptForDecision(
+          authResult.supabase,
+          authResult.userId,
+          latestDecision.data.id,
+        )
+      ).data
+    : null;
 
   return NextResponse.json({
     ...response,
@@ -1836,6 +2102,10 @@ export async function GET(request: NextRequest) {
     schedulingContext: loaded?.workflow.context ?? null,
     suggestions: [],
     workflow: loaded?.workflow ?? null,
+    workflowStatus: resolveAssistantWorkflowStatus({
+      workflow: loaded?.workflow ?? null,
+    }),
+    automationReceipt: receipt,
   });
 }
 
@@ -1850,12 +2120,17 @@ export async function POST(request: NextRequest) {
     activeSchedulingContext?: unknown;
     prompt?: unknown;
     recentMessages?: unknown;
+    sourceMessageId?: unknown;
     threadId?: unknown;
     timezone?: unknown;
   };
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const recentMessages = normalizeRecentMessages(body.recentMessages);
   const timezone = normalizeTimezone(body.timezone);
+  const sourceMessageId =
+    typeof body.sourceMessageId === "string" && body.sourceMessageId.length <= 120
+      ? body.sourceMessageId
+      : `message-${Date.now()}`;
   let activeSchedulingContext: AssistantSchedulingContext | null = null;
   let loadedWorkflow: LoadedAssistantWorkflow | null = null;
   const threadId =
@@ -1896,13 +2171,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (
-    loadedWorkflow?.workflow.state === "applied" &&
-    !isAssistantStatusQuestion(prompt)
-  ) {
-    activeSchedulingContext = null;
-    loadedWorkflow = null;
-  }
   const baseResponse = createContextOnlyAssistantResponse(context);
   const baseWithWarning: AssistantPlanReviewResponse = {
     ...baseResponse,
@@ -1912,7 +2180,7 @@ export async function POST(request: NextRequest) {
     message: baseResponse.message,
   };
 
-  if (isAssistantStatusQuestion(prompt)) {
+  if (isAssistantStatusQuestion(prompt) || isAssistantAppliedDetailsQuestion(prompt)) {
     const response = loadedWorkflow
       ? createAuthoritativeStatusResponse({
           baseResponse: baseWithWarning,
@@ -1940,7 +2208,104 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  if (
+    loadedWorkflow?.workflow.state === "applied" &&
+    isAssistantSocialReply(prompt)
+  ) {
+    const latestDecision = await loadLatestReversibleDecision(
+      authResult.supabase,
+      authResult.userId,
+      loadedWorkflow.workflow.workflowId,
+    );
+    const receipt = latestDecision.data
+      ? (
+          await loadReceiptForDecision(
+            authResult.supabase,
+            authResult.userId,
+            latestDecision.data.id,
+          )
+        ).data
+      : null;
+    const response = createSocialAppliedResponse({
+      baseResponse: baseWithWarning,
+      loaded: loadedWorkflow,
+      receipt,
+    });
+    return createNdjsonStream(async (send) => {
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
+    });
+  }
+
+  if (isAssistantUndoRequest(prompt)) {
+    const latestDecision = await loadLatestReversibleDecision(
+      authResult.supabase,
+      authResult.userId,
+      loadedWorkflow?.workflow.workflowId,
+    );
+    if (!latestDecision.data) {
+      const message = "I couldn’t find a reversible automated action in this conversation.";
+      const response = { ...baseWithWarning, assistantMessage: message, message };
+      return createNdjsonStream(async (send) => {
+        await streamFallbackMessage(message, send);
+        send({ type: "final", response });
+      });
+    }
+    const authorization = request.headers.get("authorization");
+    const undoRequest = await fetch(new URL("/api/assistant/undo", request.url), {
+      body: JSON.stringify({ decisionRecordId: latestDecision.data.id }),
+      headers: {
+        ...(authorization ? { Authorization: authorization } : {}),
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+    const undoPayload = (await undoRequest.json().catch(() => null)) as
+      | AssistantUndoResponse
+      | { error?: string }
+      | null;
+    if (!undoRequest.ok || !undoPayload || !("reversedRecords" in undoPayload)) {
+      const message =
+        undoPayload && "error" in undoPayload && undoPayload.error
+          ? undoPayload.error
+          : "I couldn’t safely undo that automated action.";
+      const response = { ...baseWithWarning, assistantMessage: message, message };
+      return createNdjsonStream(async (send) => {
+        await streamFallbackMessage(message, send);
+        send({ type: "final", response });
+      });
+    }
+    const response = createUndoPlanResponse({
+      baseResponse: baseWithWarning,
+      undo: undoPayload,
+    });
+    return createNdjsonStream(async (send) => {
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
+    });
+  }
+
+  if (loadedWorkflow?.workflow.state === "applied") {
+    activeSchedulingContext = null;
+    loadedWorkflow = null;
+  }
+
+  const semanticPreview = extractSemanticPlanningRequest({
+    previous: activeSchedulingContext?.semanticRequest,
+    projects: context.projects,
+    prompt,
+    workflowId: activeSchedulingContext?.workflowId,
+  });
+  const automationGrant = extractAutomationGrant({
+    prompt,
+    semanticRequest: semanticPreview,
+    sourceMessageId,
+    userId: authResult.userId,
+    weekStartDate: context.googleSync.currentWeekStart,
+  });
+
   const scheduleInput = {
+    automationGrant,
     importedCalendarEvents: context.importedCalendarEvents,
     projects: context.projects,
     scheduleExceptions: context.scheduleExceptions,
@@ -1968,7 +2333,7 @@ export async function POST(request: NextRequest) {
       (schedulingTurn.proposal
         ? { ...schedulingTurn.proposal, sourceConversationId: threadId }
         : null);
-    const schedulingContext = {
+    let schedulingContext = {
       ...schedulingTurn.context,
       pendingProposal: proposal,
       pendingProposals: proposals.length > 0 ? proposals : proposal ? [proposal] : [],
@@ -2061,6 +2426,35 @@ export async function POST(request: NextRequest) {
         : []),
       ...timeBlockSuggestions,
     ];
+    const sourceDataComplete =
+      !warning &&
+      [
+        contextStatus.weeklyPlan.state,
+        contextStatus.workSchedule.state,
+        contextStatus.scheduleExceptions.state,
+        contextStatus.externalCalendars.state,
+      ].every((state) => state !== "failed");
+    const decision = decideAssistantAutomation({
+      grant: schedulingContext.automationGrant ?? null,
+      sourceDataComplete,
+      suggestions,
+      workflowId: schedulingContext.workflowId,
+    });
+    schedulingContext = {
+      ...schedulingContext,
+      automationDecision: decision,
+    };
+    if (schedulingContext.temporaryScheduleContext) {
+      logAssistantDiagnostic("temporary_schedule_context_used", {
+        candidateCount: schedulingContext.candidateWindows.length,
+        fallbackPath: schedulingContext.temporaryScheduleContext
+          .affectedCandidateCalculation
+          ? "affected_candidates"
+          : "no_candidate_effect",
+        threadId,
+        workflowId: schedulingContext.workflowId,
+      });
+    }
     const finalizedResponse = finalizeAssistantResponse({
       contextStatus,
       planningContext: context,
@@ -2077,7 +2471,7 @@ export async function POST(request: NextRequest) {
         suggestions,
       },
     });
-    const response = threadId
+    const persistedResponse = threadId
       ? await persistCanonicalWorkflowResponse({
           previous: loadedWorkflow,
           response: finalizedResponse,
@@ -2090,6 +2484,16 @@ export async function POST(request: NextRequest) {
           threadId: "missing-thread",
           userId: authResult.userId,
         });
+    const response =
+      decision.outcome === "auto_apply" && schedulingContext.automationGrant
+        ? await autoApplyPersistedPlan({
+            grant: schedulingContext.automationGrant,
+            request,
+            response: persistedResponse,
+            supabase: authResult.supabase,
+            userId: authResult.userId,
+          })
+        : persistedResponse;
 
     return createNdjsonStream(async (send) => {
       await streamFallbackMessage(response.message, send);

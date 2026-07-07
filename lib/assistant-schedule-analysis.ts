@@ -6,6 +6,7 @@ import {
 import type { ScheduledItem } from "@/lib/scheduled-items";
 import {
   formatEstimatedHours,
+  normalizeStartTime,
   parseStartTimeToMinutes,
   weekDays,
   type WeekDay,
@@ -40,6 +41,12 @@ import {
   type RecurringSeriesProposal,
   type SemanticPlanningRequest,
 } from "@/lib/assistant-semantics";
+import type {
+  AutomationDecision,
+  AutomationGrant,
+  TemporaryScheduleContext,
+} from "@/lib/assistant-automation";
+import { shouldAskClarification } from "@/lib/assistant-automation";
 
 const dayStartDefault = 8 * 60;
 const dayEndDefault = 22 * 60;
@@ -232,6 +239,8 @@ export type AssistantPendingWorkExceptionProposal = {
 
 export type AssistantSchedulingContext = {
   appliedRecords: AssistantAppliedScheduleRecord[];
+  automationDecision?: AutomationDecision | null;
+  automationGrant?: AutomationGrant | null;
   batchId: string | null;
   candidateWindows: AssistantOpenWindow[];
   confirmationStatus:
@@ -263,6 +272,7 @@ export type AssistantSchedulingContext = {
   selectedWindowEnd: string | null;
   selectedWindowStart: string | null;
   state: AssistantWorkflowState;
+  temporaryScheduleContext?: TemporaryScheduleContext | null;
   workflowId: string;
 };
 
@@ -364,6 +374,16 @@ export function normalizeAssistantSchedulingContext(
             typeof record.endTime === "string",
         )
       : [],
+    automationDecision:
+      typeof candidate.automationDecision === "object" &&
+      candidate.automationDecision !== null
+        ? candidate.automationDecision
+        : null,
+    automationGrant:
+      typeof candidate.automationGrant === "object" &&
+      candidate.automationGrant !== null
+        ? candidate.automationGrant
+        : null,
     batchId: typeof candidate.batchId === "string" ? candidate.batchId : null,
     candidateWindows: candidateWindows.slice(0, 120),
     confirmationStatus: candidate.confirmationStatus,
@@ -439,6 +459,11 @@ export function normalizeAssistantSchedulingContext(
         ? candidate.selectedWindowStart
         : null,
     state,
+    temporaryScheduleContext:
+      typeof candidate.temporaryScheduleContext === "object" &&
+      candidate.temporaryScheduleContext !== null
+        ? candidate.temporaryScheduleContext
+        : null,
     workflowId:
       typeof candidate.workflowId === "string" && candidate.workflowId
         ? candidate.workflowId
@@ -447,6 +472,7 @@ export function normalizeAssistantSchedulingContext(
 }
 
 export type AssistantScheduleAnalysisInput = {
+  automationGrant?: AutomationGrant | null;
   currentDate?: string;
   importedCalendarEvents: ImportedCalendarEvent[];
   projects?: Project[];
@@ -457,6 +483,105 @@ export type AssistantScheduleAnalysisInput = {
   weeklyPlanBlocks: WeeklyPlanBlock[];
   workShifts: WorkShift[];
 };
+
+function parseTemporaryWorkContext(
+  prompt: string,
+  input: AssistantScheduleAnalysisInput,
+): { context: TemporaryScheduleContext; exception: ScheduleException } | null {
+  if (!/\btoday\b/i.test(prompt)) return null;
+  const match = prompt.match(
+    /\bleav(?:e|ing)\s+work\s+at\s+(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)\s+instead\s+of\s+(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)\b/i,
+  );
+  if (!match) return null;
+  const parse = (hoursValue: string, minutesValue: string | undefined, period: string) => {
+    let hours = Number(hoursValue);
+    if (hours === 12) hours = 0;
+    if (/^p/i.test(period)) hours += 12;
+    return `${String(hours).padStart(2, "0")}:${String(Number(minutesValue ?? 0)).padStart(2, "0")}`;
+  };
+  const overrideEndTime = parse(match[1], match[2], match[3]);
+  const originalEndTime = parse(match[4], match[5], match[6]);
+  const date =
+    input.currentDate ??
+    getIsoDateInTimeZone(new Date(), input.timezone ?? getDefaultTimeZone());
+  const parsedDate = parseIsoDate(date);
+  const day = parsedDate ? getDayFromDate(parsedDate) : null;
+  const shift = input.workShifts.find(
+    (candidate) =>
+      candidate.day === day &&
+      normalizeStartTime(candidate.endTime) === originalEndTime,
+  );
+  if (!shift) return null;
+
+  return {
+    context: {
+      affectedCandidateCalculation: true,
+      date,
+      originalEndTime,
+      overrideEndTime,
+      relatedWorkShiftId: shift.id,
+      source: "user_message",
+    },
+    exception: {
+      createdBy: "assistant_approved",
+      date,
+      exceptionType: "modify_shift",
+      id: `workflow-context-${date}-${shift.id}`,
+      notes: "Used as temporary Assistant planning context; not persisted.",
+      originalEndTime,
+      originalStartTime: shift.startTime,
+      overrideEndTime,
+      overrideStartTime: shift.startTime,
+      relatedWorkShiftId: shift.id,
+      title: "Temporary early departure context",
+    },
+  };
+}
+
+function constrainAutomationWindows({
+  durationMinutes,
+  grant,
+  input,
+  windows,
+}: {
+  durationMinutes: number;
+  grant: AutomationGrant | null;
+  input: AssistantScheduleAnalysisInput;
+  windows: AssistantOpenWindow[];
+}) {
+  if (!grant) return windows;
+  const earliest = parseStartTimeToMinutes(grant.guardrails.earliestTime);
+  const latest = parseStartTimeToMinutes(grant.guardrails.latestTime);
+  const buffer = grant.guardrails.minimumBufferAfterWorkMinutes ?? 0;
+
+  return windows.flatMap((window) => {
+    const workEnd = getEffectiveWorkShiftsForDate(
+      input.workShifts,
+      input.scheduleExceptions ?? [],
+      window.date,
+      window.day,
+    ).reduce((latestEnd, shift) => {
+      const end = parseStartTimeToMinutes(shift.endTime);
+      return end === null ? latestEnd : Math.max(latestEnd, end);
+    }, 0);
+    const startMinutes = Math.max(
+      window.startMinutes,
+      earliest ?? window.startMinutes,
+      workEnd > 0 ? workEnd + buffer : 0,
+    );
+    const endLimit = Math.min(window.endMinutes, latest ?? window.endMinutes);
+    return startMinutes + durationMinutes <= endLimit
+      ? [
+          createAssistantOpenWindow({
+            date: window.date,
+            day: window.day,
+            endMinutes: endLimit,
+            startMinutes,
+          }),
+        ]
+      : [];
+  });
+}
 
 type DateScope = {
   date: string;
@@ -2826,6 +2951,23 @@ function createRecurringSchedulingTurn({
   if (!item) return null;
   const workflowId = activeContext?.workflowId ?? semanticRequest.workflowId;
   const batchId = activeContext?.batchId ?? `batch-${Date.now()}`;
+  const automationGrant = input.automationGrant
+    ? {
+        ...input.automationGrant,
+        id: `grant-${workflowId}`,
+        workflowId,
+      }
+    : activeContext?.automationGrant ?? null;
+  const temporaryWorkContext = parseTemporaryWorkContext(prompt, input);
+  const effectiveInput: AssistantScheduleAnalysisInput = temporaryWorkContext
+    ? {
+        ...input,
+        scheduleExceptions: [
+          ...(input.scheduleExceptions ?? []),
+          temporaryWorkContext.exception,
+        ],
+      }
+    : input;
   semanticRequest = {
     ...semanticRequest,
     activity: {
@@ -3034,7 +3176,9 @@ function createRecurringSchedulingTurn({
   const missingFields = [
     ...(!count ? ["frequency"] : []),
     ...(!durationMinutes ? ["duration"] : []),
-  ];
+  ].filter((field) =>
+    shouldAskClarification(field, semanticRequest, activeContext?.state ?? "idle"),
+  );
 
   if (missingFields.length > 0) {
     const pendingItem: ExtractedPlanningItem = {
@@ -3133,7 +3277,7 @@ function createRecurringSchedulingTurn({
     ].filter((value, index, values) => values.indexOf(value) === index);
     const periodWindows = calendarWeekStarts.flatMap((weekStartDate) => {
       const weekInput: AssistantScheduleAnalysisInput = {
-        ...input,
+        ...effectiveInput,
         weekStartDate,
       };
       const request = createScheduleRequest(
@@ -3143,7 +3287,7 @@ function createRecurringSchedulingTurn({
         input.timezone,
       );
       const commitments = buildNormalizedScheduleTimeline(weekInput);
-      return validateOpenWindows(
+      const validated = validateOpenWindows(
         calculateOpenWindows({
           commitments,
           minimumMinutes: durationMinutes,
@@ -3153,6 +3297,12 @@ function createRecurringSchedulingTurn({
         request,
         commitments,
       );
+      return constrainAutomationWindows({
+        durationMinutes,
+        grant: automationGrant,
+        input: weekInput,
+        windows: validated,
+      });
     });
     const windows = [
       ...new Map(periodWindows.map((window) => [window.id, window])).values(),
@@ -3383,6 +3533,8 @@ function createRecurringSchedulingTurn({
   return {
     context: {
       appliedRecords: activeContext?.appliedRecords ?? [],
+      automationDecision: activeContext?.automationDecision ?? null,
+      automationGrant,
       batchId,
       candidateWindows: allWindows,
       confirmationStatus: "ready_for_review",
@@ -3414,6 +3566,10 @@ function createRecurringSchedulingTurn({
       semanticRequest,
       seriesProposal,
       state: "awaiting_apply",
+      temporaryScheduleContext:
+        temporaryWorkContext?.context ??
+        activeContext?.temporaryScheduleContext ??
+        null,
       workflowId,
     },
     message,

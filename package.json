@@ -14,6 +14,7 @@
     "test:assistant-intelligence": "tsx scripts/assistant-intelligence-tests.ts",
     "test:assistant-semantics": "tsx scripts/assistant-semantic-tests.ts",
     "test:assistant-ui": "tsx scripts/assistant-ui-tests.tsx",
+    "test:assistant-automation": "tsx scripts/assistant-automation-tests.ts",
     "lint": "next lint"
   },
   "dependencies": {

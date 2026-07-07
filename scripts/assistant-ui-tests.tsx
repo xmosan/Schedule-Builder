@@ -8,6 +8,7 @@ import {
   type AssistantProposalRowState,
 } from "../components/assistant/assistant-proposal-series";
 import type { AssistantSuggestion } from "../lib/assistant";
+import type { CompactActionReceipt } from "../lib/assistant-automation";
 import {
   getPlanPresentationKind,
   type PlanPresentationKind,
@@ -89,21 +90,25 @@ function renderSummary({
   planSeries = series,
   planSuggestions = suggestions,
   pendingIds = planSuggestions.map((suggestion) => suggestion.id),
+  automationReceipt = null,
 }: {
   appliedIds?: string[];
   planSeries?: RecurringSeriesProposal | null;
   planSuggestions?: AssistantSuggestion[];
   pendingIds?: string[];
+  automationReceipt?: CompactActionReceipt | null;
 } = {}) {
   return renderToStaticMarkup(
     <AssistantPlanSummary
       appliedProposalIds={appliedIds}
+      automationReceipt={automationReceipt}
       batchId="batch-1"
       isApplying={false}
       pendingProposalIds={pendingIds}
       series={planSeries}
       suggestions={planSuggestions}
       onApplyAll={noOp}
+      onUndo={noOp}
     />,
   );
 }
@@ -167,12 +172,41 @@ function runCompactSummaryCases() {
 
   const applied = renderSummary({
     appliedIds: suggestions.map((suggestion) => suggestion.id),
+    automationReceipt: {
+      actionType: "plan_applied",
+      availableActions: ["undo", "view"],
+      createdAt: "2026-07-06T18:00:00.000Z",
+      decisionRecordId: "decision-1",
+      id: "receipt-1",
+      itemCount: 9,
+      summary: "9 Schedule Builder time blocks were added.",
+      title: "Sealed Nectar Reading Plan",
+      userId: "user-1",
+    },
     pendingIds: [],
   });
   assert.match(applied, /Sealed Nectar Reading Plan added/);
   assert.match(applied, /9 sessions across 3 weeks/);
   assert.match(applied, /View Weekly Plan/);
+  assert.match(applied, />Undo</);
   assert.doesNotMatch(applied, /Apply all|awaiting approval/);
+
+  const undone = renderSummary({
+    automationReceipt: {
+      actionType: "action_undone",
+      availableActions: ["view"],
+      createdAt: "2026-07-06T18:00:00.000Z",
+      decisionRecordId: "decision-1",
+      id: "receipt-1",
+      itemCount: 9,
+      summary: "The automatically created Schedule Builder blocks were removed.",
+      title: "Sealed Nectar Reading Plan",
+      userId: "user-1",
+    },
+    pendingIds: [],
+  });
+  assert.match(undone, /Sealed Nectar Reading Plan removed/);
+  assert.doesNotMatch(undone, />Undo|>Apply/);
 
   const partial = renderSummary({
     appliedIds: [suggestions[0].id, suggestions[1].id],
@@ -443,6 +477,8 @@ function runWorkspaceSourceCases() {
 
   assert.equal(countMatches(assistantPage, /overflow-y-auto/g), 2);
   assert.match(assistantPage, /View schedule context/);
+  assert.match(assistantPage, /resolveAssistantWorkflowStatus/);
+  assert.doesNotMatch(assistantPage, /function getWorkflowStatus/);
   assert.match(assistantPage, /open=\{isScheduleContextOpen\}/);
   assert.doesNotMatch(assistantPage, /lg:grid-cols-\[[^\]]*context/i);
   assert.doesNotMatch(contextPanel, /Pending review/i);
