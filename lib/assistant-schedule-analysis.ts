@@ -47,6 +47,16 @@ import type {
   TemporaryScheduleContext,
 } from "@/lib/assistant-automation";
 import { shouldAskClarification } from "@/lib/assistant-automation";
+import {
+  buildCompleteCandidatePlans,
+  classifySchedulingRequestKind,
+  extractMultiSessionPlanningRequest,
+  getWeekDayForIsoDate,
+  type CandidateSessionPlan,
+  type MultiSessionPlanningRequest,
+  type SchedulingRequestKind,
+  type SessionCandidate,
+} from "@/lib/assistant-multi-session";
 
 const dayStartDefault = 8 * 60;
 const dayEndDefault = 22 * 60;
@@ -215,6 +225,13 @@ export type AssistantPendingTimeBlockProposal = {
   title: string;
   batchId?: string;
   id?: string;
+  planningSessionId?: string;
+  constraintSnapshot?: {
+    excludedDateRanges?: Array<{ endsAt: string; startsAt: string }>;
+    preferredTimeRanges?: Array<{ end: string; start: string }>;
+    requireDifferentDays?: boolean;
+    temporaryOverrideDates?: string[];
+  };
 };
 
 export type AssistantAppliedScheduleRecord = {
@@ -243,6 +260,7 @@ export type AssistantSchedulingContext = {
   automationGrant?: AutomationGrant | null;
   batchId: string | null;
   candidateWindows: AssistantOpenWindow[];
+  candidatePlanCount?: number;
   confirmationStatus:
     | "awaiting_window_confirmation"
     | "awaiting_window_selection"
@@ -258,6 +276,7 @@ export type AssistantSchedulingContext = {
     | "multi_action_request";
   lastUpdatedAt: string;
   maximumDurationMinutes: number | null;
+  multiSessionRequest?: MultiSessionPlanningRequest | null;
   pendingQuestion: string | null;
   pendingProposal: AssistantPendingTimeBlockProposal | null;
   pendingProposals: AssistantPendingTimeBlockProposal[];
@@ -268,10 +287,12 @@ export type AssistantSchedulingContext = {
   semanticRequest?: SemanticPlanningRequest | null;
   seriesProposal?: RecurringSeriesProposal | null;
   selectedDate: string | null;
+  selectedCandidatePlan?: CandidateSessionPlan | null;
   selectedWindowId: string | null;
   selectedWindowEnd: string | null;
   selectedWindowStart: string | null;
   state: AssistantWorkflowState;
+  requestKind?: SchedulingRequestKind;
   temporaryScheduleContext?: TemporaryScheduleContext | null;
   workflowId: string;
 };
@@ -386,6 +407,11 @@ export function normalizeAssistantSchedulingContext(
         : null,
     batchId: typeof candidate.batchId === "string" ? candidate.batchId : null,
     candidateWindows: candidateWindows.slice(0, 120),
+    candidatePlanCount:
+      typeof candidate.candidatePlanCount === "number" &&
+      candidate.candidatePlanCount >= 0
+        ? candidate.candidatePlanCount
+        : undefined,
     confirmationStatus: candidate.confirmationStatus,
     intent:
       candidate.intent === "find_open_time"
@@ -406,6 +432,11 @@ export function normalizeAssistantSchedulingContext(
       typeof candidate.maximumDurationMinutes === "number" &&
       candidate.maximumDurationMinutes > 0
         ? candidate.maximumDurationMinutes
+        : null,
+    multiSessionRequest:
+      typeof candidate.multiSessionRequest === "object" &&
+      candidate.multiSessionRequest !== null
+        ? candidate.multiSessionRequest
         : null,
     originalDateBoundary: candidate.originalDateBoundary,
     pendingQuestion:
@@ -446,6 +477,11 @@ export function normalizeAssistantSchedulingContext(
     seriesProposal: normalizeRecurringSeriesProposal(candidate.seriesProposal),
     selectedDate:
       typeof candidate.selectedDate === "string" ? candidate.selectedDate : null,
+    selectedCandidatePlan:
+      typeof candidate.selectedCandidatePlan === "object" &&
+      candidate.selectedCandidatePlan !== null
+        ? candidate.selectedCandidatePlan
+        : null,
     selectedWindowId:
       typeof candidate.selectedWindowId === "string"
         ? candidate.selectedWindowId
@@ -459,6 +495,10 @@ export function normalizeAssistantSchedulingContext(
         ? candidate.selectedWindowStart
         : null,
     state,
+    requestKind:
+      typeof candidate.requestKind === "string"
+        ? candidate.requestKind
+        : undefined,
     temporaryScheduleContext:
       typeof candidate.temporaryScheduleContext === "object" &&
       candidate.temporaryScheduleContext !== null
@@ -2698,6 +2738,441 @@ function parseAllDurations(prompt: string) {
     .filter((duration): duration is number => Boolean(duration));
 }
 
+function overlapsExcludedRange(
+  startsAt: string,
+  endsAt: string,
+  request: MultiSessionPlanningRequest,
+) {
+  return (request.globalConstraints.excludedDateRanges ?? []).some(
+    (range) => startsAt < range.endsAt && endsAt > range.startsAt,
+  );
+}
+
+function createBoundedMultiSessionSchedulingTurn({
+  activeContext,
+  input,
+  prompt,
+}: {
+  activeContext?: AssistantSchedulingContext | null;
+  input: AssistantScheduleAnalysisInput;
+  prompt: string;
+}): AssistantSchedulingConversationTurn | null {
+  const requestKind = classifySchedulingRequestKind(prompt);
+  const isContinuation =
+    activeContext?.requestKind === "bounded_multi_session_plan" &&
+    activeContext.state === "needs_clarification";
+  if (!isContinuation && requestKind !== "bounded_multi_session_plan") return null;
+
+  const timezone = input.timezone ?? getDefaultTimeZone();
+  const resolvedAt = new Date().toISOString();
+  const currentDate =
+    input.currentDate ?? getIsoDateInTimeZone(new Date(resolvedAt), timezone);
+  const weekStartDate = toIsoDate(getWeekStart(input.weekStartDate, timezone));
+  const workflowId = activeContext?.workflowId ?? `workflow-${Date.now()}-bounded`;
+  const extractedRequest = isContinuation
+    ? activeContext.multiSessionRequest ?? null
+    : extractMultiSessionPlanningRequest({
+        currentDate,
+        prompt,
+        resolvedAt,
+        timezone,
+        weekStartDate,
+        workflowId,
+      });
+  if (!extractedRequest) return null;
+
+  const temporaryAvailabilityOverrides =
+    extractedRequest.temporaryAvailabilityOverrides.map((override) => {
+      const day = getWeekDayForIsoDate(override.date);
+      const shift = input.workShifts.find(
+        (candidate) =>
+          candidate.day === day &&
+          normalizeStartTime(candidate.endTime) === override.replaces.originalEnd,
+      );
+      return shift
+        ? {
+            ...override,
+            relatedWorkShiftId: shift.id,
+            replaces: {
+              ...override.replaces,
+              originalStart: shift.startTime,
+            },
+          }
+        : override;
+    });
+  const request: MultiSessionPlanningRequest = {
+    ...extractedRequest,
+    temporaryAvailabilityOverrides,
+  };
+  const temporaryExceptions: ScheduleException[] =
+    temporaryAvailabilityOverrides.flatMap((override) => {
+      if (!override.relatedWorkShiftId) return [];
+      return [
+        {
+          createdBy: "assistant_approved",
+          date: override.date,
+          exceptionType: "modify_shift",
+          id: override.id,
+          notes: "Temporary Assistant planning context; not persisted.",
+          originalEndTime: override.replaces.originalEnd,
+          originalStartTime: override.replaces.originalStart ?? "",
+          overrideEndTime: override.effectiveEnd,
+          overrideStartTime: override.replaces.originalStart ?? "",
+          relatedWorkShiftId: override.relatedWorkShiftId,
+          title: "Temporary early departure context",
+        },
+      ];
+    });
+  const effectiveInput: AssistantScheduleAnalysisInput = {
+    ...input,
+    currentDate,
+    scheduleExceptions: [
+      ...(input.scheduleExceptions ?? []),
+      ...temporaryExceptions,
+    ],
+  };
+  const extractedItems: ExtractedPlanningItem[] = request.sessions.map(
+    (session) => ({
+      confidence: 1,
+      details: session.sequenceRole ?? session.activityTitle,
+      durationMinutes: session.durationMinutes,
+      durationSource: "user_explicit",
+      flexibility: session.flexibility === "fixed" ? "fixed" : "flexible",
+      frequency: { count: 1, period: "week", recurring: false },
+      id: session.id,
+      missingFields: [],
+      purpose: request.purpose,
+      title: session.activityTitle,
+      type:
+        session.activityType === "reading"
+          ? "reading"
+          : session.activityType === "workout"
+            ? "workout"
+            : session.activityType === "errand"
+              ? "errand"
+              : session.activityType === "project_work"
+                ? "work_activity"
+                : "study",
+    }),
+  );
+  const batchId = activeContext?.batchId ?? `batch-${Date.now()}-bounded`;
+
+  if (request.missingFields.length > 0) {
+    const question =
+      "I have the session plan, but one session is missing a valid duration. How long should that session be?";
+    return {
+      context: {
+        appliedRecords: activeContext?.appliedRecords ?? [],
+        automationGrant: input.automationGrant ?? activeContext?.automationGrant ?? null,
+        batchId,
+        candidatePlanCount: 0,
+        candidateWindows: [],
+        confirmationStatus: "awaiting_session_details",
+        extractedItems,
+        intent: "create_multiple_time_blocks",
+        lastUpdatedAt: resolvedAt,
+        maximumDurationMinutes: null,
+        multiSessionRequest: request,
+        pendingProposal: null,
+        pendingProposals: [],
+        pendingQuestion: question,
+        pendingWorkException: null,
+        purpose: request.title,
+        requestKind: "bounded_multi_session_plan",
+        requestedDurationMinutes: null,
+        requestedSessionCount: request.sessions.length,
+        selectedCandidatePlan: null,
+        selectedDate: null,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "needs_clarification",
+        workflowId,
+      },
+      message: question,
+      proposal: null,
+    };
+  }
+
+  const scopes: DateScope[] = [];
+  let scopeDate = request.planningHorizon.startDate;
+  while (scopeDate <= request.planningHorizon.endDate) {
+    scopes.push({ date: scopeDate, day: getWeekDayForIsoDate(scopeDate) });
+    const parsedScopeDate = parseIsoDate(scopeDate);
+    if (!parsedScopeDate) break;
+    scopeDate = toIsoDate(addDays(parsedScopeDate, 1));
+  }
+  const commitments = buildNormalizedScheduleTimeline(effectiveInput);
+  const rawWindows = calculateOpenWindows({
+    commitments,
+    minimumMinutes: Math.min(...request.sessions.map((session) => session.durationMinutes)),
+    scopes,
+    startMinutes: dayStartDefault,
+  });
+  const candidatesBySession = new Map<string, SessionCandidate[]>();
+  const preferredRanges = request.preferences.preferredTimeRanges ?? [];
+  const bufferMinutes = request.preferences.afterWorkBufferMinutes ?? 0;
+
+  request.sessions.forEach((session) => {
+    const seen = new Set<string>();
+    const candidates: SessionCandidate[] = [];
+    rawWindows.forEach((window) => {
+      const workEnd = getEffectiveWorkShiftsForDate(
+        input.workShifts,
+        effectiveInput.scheduleExceptions ?? [],
+        window.date,
+        window.day,
+      ).reduce((latest, shift) => {
+        const end = parseStartTimeToMinutes(shift.endTime);
+        return end === null ? latest : Math.max(latest, end);
+      }, 0);
+      const earliestStart = Math.max(
+        window.startMinutes,
+        workEnd > 0 ? workEnd + bufferMinutes : window.startMinutes,
+      );
+      const possibleStarts = new Set<number>();
+      preferredRanges.forEach((range) => {
+        const preferredStart = parseStartTimeToMinutes(range.start);
+        const preferredEnd = parseStartTimeToMinutes(range.end);
+        if (preferredStart === null || preferredEnd === null) return;
+        const first = Math.max(earliestStart, preferredStart);
+        for (
+          let start = Math.ceil(first / 30) * 30;
+          start + session.durationMinutes <= Math.min(window.endMinutes, preferredEnd);
+          start += 30
+        ) {
+          possibleStarts.add(start);
+        }
+      });
+      if (possibleStarts.size === 0) {
+        for (
+          let start = Math.ceil(earliestStart / 30) * 30;
+          start + session.durationMinutes <= window.endMinutes;
+          start += 30
+        ) {
+          possibleStarts.add(start);
+        }
+      }
+      possibleStarts.forEach((start) => {
+        const end = start + session.durationMinutes;
+        const startsAt = `${window.date}T${minutesToTimeInput(start)}:00`;
+        const endsAt = `${window.date}T${minutesToTimeInput(end)}:00`;
+        if (overlapsExcludedRange(startsAt, endsAt, request)) return;
+        const excludedWeekdays = request.globalConstraints.excludedWeekdays ?? [];
+        if (excludedWeekdays.includes(parseIsoDate(window.date)?.getDay() ?? -1)) return;
+        const key = `${session.id}-${startsAt}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        const preferred = preferredRanges.some((range) => {
+          const rangeStart = parseStartTimeToMinutes(range.start);
+          const rangeEnd = parseStartTimeToMinutes(range.end);
+          return (
+            rangeStart !== null &&
+            rangeEnd !== null &&
+            start >= rangeStart &&
+            end <= rangeEnd
+          );
+        });
+        candidates.push({
+          date: window.date,
+          endsAt,
+          preferenceScores: {
+            afterWorkBuffer: workEnd === 0 || start >= workEnd + bufferMinutes ? 10 : 0,
+            dayDistribution: 0,
+            preferredTime: preferred ? 20 : 0,
+            workloadBalance: 0,
+          },
+          satisfiesHardConstraints: true,
+          sessionId: session.id,
+          sourceVersion: "bounded-multi-session-v1",
+          startsAt,
+        });
+      });
+    });
+    candidates.sort(
+      (first, second) =>
+        second.preferenceScores.preferredTime - first.preferenceScores.preferredTime ||
+        first.startsAt.localeCompare(second.startsAt),
+    );
+    candidatesBySession.set(session.id, candidates);
+  });
+
+  const planResult = buildCompleteCandidatePlans({ candidatesBySession, request });
+  if (!planResult.selectedPlan) {
+    const availableSessionCount = Object.values(
+      planResult.candidateCountBySession,
+    ).filter((count) => count > 0).length;
+    const question =
+      availableSessionCount >= request.sessions.length - 1
+        ? "I can fit only two sessions without breaking the different-day or Friday-evening rule. May I use Saturday afternoon for the remaining session?"
+        : "I couldn’t fit all three sessions within the stated rules. May I widen the preferred time range?";
+    return {
+      context: {
+        appliedRecords: activeContext?.appliedRecords ?? [],
+        automationGrant: input.automationGrant ?? activeContext?.automationGrant ?? null,
+        batchId,
+        candidatePlanCount: 0,
+        candidateWindows: rawWindows,
+        confirmationStatus: "awaiting_session_details",
+        extractedItems,
+        intent: "create_multiple_time_blocks",
+        lastUpdatedAt: resolvedAt,
+        maximumDurationMinutes: null,
+        multiSessionRequest: request,
+        pendingProposal: null,
+        pendingProposals: [],
+        pendingQuestion: question,
+        pendingWorkException: null,
+        purpose: request.title,
+        requestKind: "bounded_multi_session_plan",
+        requestedDurationMinutes: null,
+        requestedSessionCount: request.sessions.length,
+        selectedCandidatePlan: null,
+        selectedDate: null,
+        selectedWindowEnd: null,
+        selectedWindowId: null,
+        selectedWindowStart: null,
+        state: "needs_clarification",
+        workflowId,
+      },
+      message: `${question} Nothing has been scheduled.`,
+      proposal: null,
+    };
+  }
+
+  const selectedAssignments = [...planResult.selectedPlan.assignments].sort(
+    (first, second) => first.candidate.startsAt.localeCompare(second.candidate.startsAt),
+  );
+  const proposals = selectedAssignments.map(
+    (assignment, index): AssistantPendingTimeBlockProposal => {
+      const session = request.sessions.find(
+        (candidate) => candidate.id === assignment.sessionId,
+      );
+      const startTime = assignment.candidate.startsAt.slice(11, 16);
+      const endTime = assignment.candidate.endsAt.slice(11, 16);
+      return {
+        actionType: "create_time_block",
+        batchId,
+        date: assignment.candidate.date,
+        details: session?.purpose ?? `Complete ${session?.activityTitle ?? request.title}.`,
+        durationMinutes: session?.durationMinutes ?? null,
+        id: `${workflowId}-proposal-${index + 1}`,
+        planningSessionId: assignment.sessionId,
+        constraintSnapshot: {
+          excludedDateRanges: request.globalConstraints.excludedDateRanges,
+          preferredTimeRanges: request.preferences.preferredTimeRanges,
+          requireDifferentDays: request.globalConstraints.requireDifferentDays,
+          temporaryOverrideDates: request.temporaryAvailabilityOverrides.map(
+            (override) => override.date,
+          ),
+        },
+        selectedWindowEnd: endTime,
+        sourceConversationId: null,
+        startTime,
+        status: "ready_for_review",
+        title: session?.activityTitle ?? request.title,
+      };
+    },
+  );
+  const semanticBase = extractSemanticPlanningRequest({
+    projects: input.projects,
+    prompt,
+    workflowId,
+  });
+  const { sessionDurationMinutes: _discardedUniformDuration, ...instructions } =
+    semanticBase.scheduleInstructions;
+  const semanticRequest: SemanticPlanningRequest = {
+    ...semanticBase,
+    activity: {
+      ...semanticBase.activity,
+      details: prompt,
+      object: request.title,
+      title: request.title.replace(/\s+(?:Study\s+)?Plan$/i, ""),
+    },
+    itemType: "time_block_series",
+    missingFields: [],
+    scheduleInstructions: {
+      ...instructions,
+      avoidDays: request.globalConstraints.excludedDateRanges?.length
+        ? ["Friday"]
+        : instructions.avoidDays,
+      desiredFrequency: { count: request.sessions.length, period: "week" },
+      planningHorizon: { count: 1, unit: "week" },
+      preferredTimes: request.preferences.preferredTimeRanges?.map(
+        (range) => range.start,
+      ),
+      weeklyMinutes: request.sessions.reduce(
+        (total, session) => total + session.durationMinutes,
+        0,
+      ),
+    },
+    weeklyGoal: undefined,
+  };
+  const selectedWindow = rawWindows.find((window) => {
+    const first = selectedAssignments[0];
+    if (!first) return false;
+    const start = parseStartTimeToMinutes(first.candidate.startsAt.slice(11, 16));
+    return (
+      start !== null &&
+      window.date === first.candidate.date &&
+      start >= window.startMinutes &&
+      start < window.endMinutes
+    );
+  });
+  const temporaryOverride = temporaryAvailabilityOverrides[0];
+  const automationGrant = input.automationGrant
+    ? { ...input.automationGrant, id: `grant-${workflowId}`, workflowId }
+    : activeContext?.automationGrant ?? null;
+  const context: AssistantSchedulingContext = {
+    appliedRecords: activeContext?.appliedRecords ?? [],
+    automationDecision: activeContext?.automationDecision ?? null,
+    automationGrant,
+    batchId,
+    candidatePlanCount: planResult.completePlans.length,
+    candidateWindows: rawWindows,
+    confirmationStatus: "ready_for_review",
+    extractedItems,
+    intent: "create_multiple_time_blocks",
+    lastUpdatedAt: resolvedAt,
+    maximumDurationMinutes: Math.max(
+      ...request.sessions.map((session) => session.durationMinutes),
+    ),
+    multiSessionRequest: request,
+    pendingProposal: proposals[0] ?? null,
+    pendingProposals: proposals,
+    pendingQuestion: null,
+    pendingWorkException: null,
+    purpose: request.title,
+    requestKind: "bounded_multi_session_plan",
+    requestedDurationMinutes: null,
+    requestedSessionCount: request.sessions.length,
+    selectedCandidatePlan: planResult.selectedPlan,
+    selectedDate: proposals[0]?.date ?? null,
+    selectedWindowEnd: proposals[0]?.selectedWindowEnd ?? null,
+    selectedWindowId: selectedWindow?.id ?? null,
+    selectedWindowStart: proposals[0]?.startTime ?? null,
+    semanticRequest,
+    seriesProposal: null,
+    state: "awaiting_apply",
+    temporaryScheduleContext: temporaryOverride
+      ? {
+          affectedCandidateCalculation: true,
+          date: temporaryOverride.date,
+          originalEndTime: temporaryOverride.replaces.originalEnd,
+          overrideEndTime: temporaryOverride.effectiveEnd,
+          relatedWorkShiftId: temporaryOverride.relatedWorkShiftId,
+          source: "user_message",
+        }
+      : null,
+    workflowId,
+  };
+  return {
+    context,
+    message: `I built ${proposals.length} ${request.title.replace(/\s+(?:Study\s+)?Plan$/i, "")} sessions on different days. Nothing has been added yet.`,
+    proposal: proposals[0] ?? null,
+  };
+}
+
 function createMultiItemSchedulingTurn({
   activeContext,
   input,
@@ -3677,6 +4152,16 @@ export function advanceAssistantSchedulingConversation({
         message: `I recalculated the plan using different validated openings. ${recalculated.message}`,
       };
     }
+  }
+
+  const boundedMultiSessionTurn = createBoundedMultiSessionSchedulingTurn({
+    activeContext,
+    input,
+    prompt,
+  });
+
+  if (boundedMultiSessionTurn) {
+    return boundedMultiSessionTurn;
   }
 
   const multiItemTurn = createMultiItemSchedulingTurn({

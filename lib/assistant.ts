@@ -199,6 +199,13 @@ export type AssistantSuggestion = {
   weeklyHours?: number;
   batchId?: string;
   workflowId?: string;
+  planningSessionId?: string;
+  constraintSnapshot?: {
+    excludedDateRanges?: Array<{ endsAt: string; startsAt: string }>;
+    preferredTimeRanges?: Array<{ end: string; start: string }>;
+    requireDifferentDays?: boolean;
+    temporaryOverrideDates?: string[];
+  };
 };
 
 export type AssistantPlanReviewResponse = {

@@ -41,7 +41,7 @@ assert.equal(grant.guardrails.maximumSessionMinutes, 60);
 assert.equal(grant.guardrails.maximumWeeklyMinutes, 180);
 assert.equal(grant.guardrails.earliestTime, "17:00");
 assert.equal(grant.guardrails.latestTime, "21:00");
-assert.equal(grant.guardrails.minimumBufferAfterWorkMinutes, 60);
+assert.equal(grant.guardrails.minimumBufferAfterWorkMinutes, 30);
 assert.equal(grant.allowedActions.includes("move_flexible_block"), false);
 assert.equal(grant.allowedActions.some((action) => /google/i.test(action)), false);
 assert.equal(

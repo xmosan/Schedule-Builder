@@ -79,6 +79,10 @@ import {
 } from "@/lib/assistant-presentation";
 import { extractSemanticPlanningRequest } from "@/lib/assistant-semantics";
 import {
+  extractMultiSessionPlanningRequest,
+  getIsoDateInTimezone,
+} from "@/lib/assistant-multi-session";
+import {
   fetchPlannerProfileForUser,
   fetchImportedCalendarEventsForUser,
   fetchProjectsForUser,
@@ -284,6 +288,12 @@ type AssistantDiagnostic = {
   proposalCount?: number;
   purpose?: string;
   recurrence?: string;
+  requestKind?: string;
+  resolvedRelativeDates?: string[];
+  sessionDurations?: number[];
+  completePlanCount?: number;
+  selectedPlanScore?: number;
+  temporaryOverrideDate?: string;
   responseLength?: number;
   responseValidation?: string;
   suppressedNoteCount?: number;
@@ -595,7 +605,7 @@ function createAuthoritativeStatusResponse({
       .filter((proposal): proposal is NonNullable<typeof proposal> => Boolean(proposal))
       .map(
         (proposal) =>
-          `- ${proposal.date}, ${formatTimeInputLabel(
+          `- ${proposal.title} · ${proposal.date}, ${formatTimeInputLabel(
             proposal.startTime,
           )}–${formatTimeInputLabel(proposal.endTime)}`,
       );
@@ -674,7 +684,10 @@ function formatSavedResultLine(result: AssistantApplyResponse["results"][number]
     start,
     Math.round(result.createdBlock.estimatedHours * 60),
   );
-  return `${result.createdDate} · ${formatTimeInputLabel(start)}–${formatTimeInputLabel(end)}`;
+  const day = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(
+    new Date(`${result.createdDate}T12:00:00`),
+  );
+  return `${day} · ${formatTimeInputLabel(start)}–${formatTimeInputLabel(end)} · ${result.suggestionTitle}`;
 }
 
 async function autoApplyPersistedPlan({
@@ -741,7 +754,9 @@ async function autoApplyPersistedPlan({
   const exceptionNote =
     response.schedulingContext?.temporaryScheduleContext
       ?.affectedCandidateCalculation
-      ? "\n\nI accounted for today’s early departure."
+      ? `\n\nI accounted for the early departure on ${
+          response.schedulingContext.temporaryScheduleContext.date
+        }.`
       : "";
   const title =
     applyResponse.workflow?.context?.semanticRequest?.activity.title ??
@@ -757,12 +772,24 @@ async function autoApplyPersistedPlan({
         ? `${sessionMinutes}-minute `
         : "";
   const activityReference = title.replace(/^Read\s+/i, "");
+  const multiSessionRequest =
+    response.schedulingContext?.multiSessionRequest ??
+    applyResponse.workflow?.context?.multiSessionRequest;
+  const multiSessionTitle = multiSessionRequest?.title.replace(
+    /\s+(?:Study\s+)?Plan$/i,
+    "",
+  );
+  const constraintNote = multiSessionRequest
+    ? "\n\nFriday evening remains free."
+    : "";
   const message =
     appliedResults.length === 0
       ? "I couldn’t apply the automated plan after revalidation. Nothing was scheduled; the saved plan remains available for review."
       : failedCount > 0
-      ? `Partly. I scheduled ${appliedResults.length} ${title} session${appliedResults.length === 1 ? "" : "s"}, and ${failedCount} could not be applied.${lines.length ? `\n\n${lines.join("\n")}` : ""}${exceptionNote}`
-      : `I scheduled ${appliedResults.length} ${sessionLength}${activityReference} session${appliedResults.length === 1 ? "" : "s"} this week:${lines.length ? `\n\n${lines.join("\n")}` : ""}${exceptionNote}`;
+      ? `Partly. I scheduled ${appliedResults.length} ${multiSessionTitle ?? title} session${appliedResults.length === 1 ? "" : "s"}, and ${failedCount} could not be applied.${lines.length ? `\n\n${lines.join("\n")}` : ""}${constraintNote}${exceptionNote}`
+      : multiSessionRequest
+        ? `I scheduled your ${multiSessionTitle} sessions for this week:${lines.length ? `\n\n${lines.join("\n")}` : ""}${constraintNote}${exceptionNote}`
+        : `I scheduled ${appliedResults.length} ${sessionLength}${activityReference} session${appliedResults.length === 1 ? "" : "s"} this week:${lines.length ? `\n\n${lines.join("\n")}` : ""}${exceptionNote}`;
   const workflow = applyResponse.workflow ?? response.workflow;
   const canonicalActions =
     applyResponse.canonicalProposals
@@ -2110,6 +2137,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const requestReceivedAt = new Date();
   const authResult = await getAuthenticatedUser(request);
 
   if (authResult instanceof NextResponse) {
@@ -2296,7 +2324,21 @@ export async function POST(request: NextRequest) {
     prompt,
     workflowId: activeSchedulingContext?.workflowId,
   });
+  const authoritativeCurrentDate = getIsoDateInTimezone(
+    requestReceivedAt,
+    context.timezone,
+  );
+  const multiSessionPreview = extractMultiSessionPlanningRequest({
+    currentDate: authoritativeCurrentDate,
+    prompt,
+    resolvedAt: requestReceivedAt.toISOString(),
+    timezone: context.timezone,
+    weekStartDate: context.googleSync.currentWeekStart,
+    workflowId:
+      activeSchedulingContext?.workflowId ?? semanticPreview.workflowId,
+  });
   const automationGrant = extractAutomationGrant({
+    multiSessionRequest: multiSessionPreview,
     prompt,
     semanticRequest: semanticPreview,
     sourceMessageId,
@@ -2306,6 +2348,7 @@ export async function POST(request: NextRequest) {
 
   const scheduleInput = {
     automationGrant,
+    currentDate: authoritativeCurrentDate,
     importedCalendarEvents: context.importedCalendarEvents,
     projects: context.projects,
     scheduleExceptions: context.scheduleExceptions,
@@ -2393,6 +2436,8 @@ export async function POST(request: NextRequest) {
             estimatedHours: pendingProposal.durationMinutes / 60,
             batchId: pendingProposal.batchId,
             workflowId: schedulingContext.workflowId,
+            planningSessionId: pendingProposal.planningSessionId,
+            constraintSnapshot: pendingProposal.constraintSnapshot,
             conflictWarnings: [] as string[],
           },
         ];
@@ -2451,6 +2496,32 @@ export async function POST(request: NextRequest) {
           .affectedCandidateCalculation
           ? "affected_candidates"
           : "no_candidate_effect",
+        threadId,
+        workflowId: schedulingContext.workflowId,
+      });
+    }
+    if (schedulingContext.multiSessionRequest) {
+      logAssistantDiagnostic("bounded_multi_session_plan_built", {
+        candidateCount: schedulingContext.candidateWindows.length,
+        completePlanCount: schedulingContext.candidatePlanCount ?? 0,
+        extractedItemCount: schedulingContext.multiSessionRequest.sessions.length,
+        intent: schedulingContext.intent,
+        missingFields: schedulingContext.multiSessionRequest.missingFields,
+        nextState: schedulingContext.state,
+        requestKind: schedulingContext.requestKind,
+        resolvedRelativeDates:
+          schedulingContext.multiSessionRequest.temporaryAvailabilityOverrides.map(
+            (override) =>
+              `${override.resolvedRelativeDate.originalText}:${override.date}`,
+          ),
+        selectedPlanScore:
+          schedulingContext.selectedCandidatePlan?.totalScore,
+        sessionDurations:
+          schedulingContext.multiSessionRequest.sessions.map(
+            (session) => session.durationMinutes,
+          ),
+        temporaryOverrideDate:
+          schedulingContext.temporaryScheduleContext?.date,
         threadId,
         workflowId: schedulingContext.workflowId,
       });

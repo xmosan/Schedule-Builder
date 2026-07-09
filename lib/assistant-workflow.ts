@@ -48,6 +48,8 @@ export type TimeBlockProposal = {
   startTime: string;
   title: string;
   workflowId: string;
+  planningSessionId?: string;
+  constraintSnapshot?: AssistantSuggestion["constraintSnapshot"];
 };
 
 export type CanonicalAssistantProposal = {
@@ -241,6 +243,8 @@ export function createCanonicalProposal(
               startMinutes + Math.round(suggestion.estimatedHours * 60),
             ),
             id: suggestion.id,
+            planningSessionId: suggestion.planningSessionId,
+            constraintSnapshot: suggestion.constraintSnapshot,
             purpose: suggestion.plannedTask,
             startTime: suggestion.startTime,
             title: suggestion.projectName ?? suggestion.title,

@@ -1,6 +1,7 @@
 import type { AssistantSuggestion } from "@/lib/assistant";
 import type { SemanticPlanningRequest } from "@/lib/assistant-semantics";
 import type { SchedulingWorkflowContext } from "@/lib/assistant-workflow";
+import type { MultiSessionPlanningRequest } from "@/lib/assistant-multi-session";
 
 export type AutomationScope =
   | "current_request"
@@ -30,6 +31,7 @@ export type AutomationGrant = {
     planningEndDate?: string;
     planningStartDate?: string;
     preferredTimeRanges?: Array<{ end: string; start: string }>;
+    requireDifferentDays?: boolean;
     requireDeterministicAvailability: boolean;
     requireNoConflicts: boolean;
     requireReversibleAction: boolean;
@@ -164,12 +166,14 @@ function getLatestTime(prompt: string) {
 }
 
 export function extractAutomationGrant({
+  multiSessionRequest,
   prompt,
   semanticRequest,
   sourceMessageId,
   userId,
   weekStartDate,
 }: {
+  multiSessionRequest?: MultiSessionPlanningRequest | null;
   prompt: string;
   semanticRequest: SemanticPlanningRequest;
   sourceMessageId: string;
@@ -184,33 +188,71 @@ export function extractAutomationGrant({
     return null;
   }
 
-  const count = semanticRequest.scheduleInstructions.desiredFrequency?.count;
-  const duration = semanticRequest.scheduleInstructions.sessionDurationMinutes;
-  const weeklyMinutes = semanticRequest.scheduleInstructions.weeklyMinutes;
+  const count =
+    multiSessionRequest?.sessions.length ??
+    semanticRequest.scheduleInstructions.desiredFrequency?.count;
+  const duration = multiSessionRequest
+    ? Math.max(
+        ...multiSessionRequest.sessions.map((session) => session.durationMinutes),
+      )
+    : semanticRequest.scheduleInstructions.sessionDurationMinutes;
+  const weeklyMinutes = multiSessionRequest
+    ? multiSessionRequest.sessions.reduce(
+        (total, session) => total + session.durationMinutes,
+        0,
+      )
+    : semanticRequest.scheduleInstructions.weeklyMinutes;
   const weekRange = getCurrentWeekRange(weekStartDate);
-  const latestTime = getLatestTime(prompt);
+  const structuredPreferredRange =
+    multiSessionRequest?.preferences.preferredTimeRanges?.[0];
+  const latestTime = structuredPreferredRange?.end ?? getLatestTime(prompt);
   const prefersEvenings = /\bevenings?\b/i.test(prompt);
-  const requiresWorkBuffer = /\bnot immediately after work\b/i.test(prompt);
+  const requiresWorkBuffer =
+    Boolean(multiSessionRequest?.preferences.afterWorkBufferMinutes) ||
+    /\b(?:not|do not|don['’]t)\b[^.!?]{0,60}\bimmediately after work\b/i.test(
+      prompt,
+    );
   const scope: AutomationScope = /\bthis week|starting this week\b/i.test(prompt)
     ? "current_week"
     : "current_request";
 
   return {
-    activityTitle: semanticRequest.activity.title,
+    activityTitle:
+      multiSessionRequest?.title.replace(/\s+(?:Study\s+)?Plan$/i, "") ||
+      semanticRequest.activity.title,
     allowedActions: [
       count && count > 1 ? "create_time_block_series" : "create_time_block",
     ],
     expiresAt: `${addDays(weekRange.endDate, 1)}T00:00:00.000Z`,
     guardrails: {
-      ...(prefersEvenings ? { earliestTime: "17:00" } : {}),
+      ...(structuredPreferredRange?.start
+        ? { earliestTime: structuredPreferredRange.start }
+        : prefersEvenings
+          ? { earliestTime: "17:00" }
+          : {}),
+      ...(multiSessionRequest?.globalConstraints.excludedDateRanges?.length
+        ? { excludedDays: [5] }
+        : {}),
+      ...(multiSessionRequest?.globalConstraints.requireDifferentDays
+        ? { requireDifferentDays: true }
+        : {}),
       ...(latestTime ? { latestTime } : {}),
       ...(count ? { maximumOccurrences: count } : {}),
       ...(duration ? { maximumSessionMinutes: duration } : {}),
       ...(weeklyMinutes ? { maximumWeeklyMinutes: weeklyMinutes } : {}),
-      ...(requiresWorkBuffer ? { minimumBufferAfterWorkMinutes: 60 } : {}),
-      planningEndDate: weekRange.endDate,
-      planningStartDate: weekRange.startDate,
-      ...(prefersEvenings && latestTime
+      ...(requiresWorkBuffer
+        ? {
+            minimumBufferAfterWorkMinutes:
+              multiSessionRequest?.preferences.afterWorkBufferMinutes ?? 30,
+          }
+        : {}),
+      planningEndDate:
+        multiSessionRequest?.planningHorizon.endDate ?? weekRange.endDate,
+      planningStartDate:
+        multiSessionRequest?.planningHorizon.startDate ?? weekRange.startDate,
+      ...(structuredPreferredRange
+        ? { preferredTimeRanges: [structuredPreferredRange] }
+        : prefersEvenings && latestTime
         ? { preferredTimeRanges: [{ end: latestTime, start: "17:00" }] }
         : {}),
       requireDeterministicAvailability: true,
@@ -329,6 +371,9 @@ export function decideAssistantAutomation({
   );
   const requiredAction =
     suggestions.length > 1 ? "create_time_block_series" : "create_time_block";
+  const suggestionDates = suggestions.flatMap((suggestion) =>
+    suggestion.itemDate ? [suggestion.itemDate] : [],
+  );
   const scopeMatched = Boolean(
     grant &&
       grant.status === "active" &&
@@ -345,6 +390,10 @@ export function decideAssistantAutomation({
           normalizeTitle(title).includes(normalizeTitle(grant.activityTitle ?? title)) &&
           (!date || !grant.guardrails.planningStartDate || date >= grant.guardrails.planningStartDate) &&
           (!date || !grant.guardrails.planningEndDate || date <= grant.guardrails.planningEndDate) &&
+          (!date ||
+            !grant.guardrails.excludedDays?.includes(
+              new Date(`${date}T12:00:00Z`).getUTCDay(),
+            )) &&
           (!grant.guardrails.maximumSessionMinutes || duration <= grant.guardrails.maximumSessionMinutes) &&
           (start === null || earliest === null || start >= earliest) &&
           (start === null || latest === null || start + duration <= latest)
@@ -353,7 +402,9 @@ export function decideAssistantAutomation({
       (!grant.guardrails.maximumOccurrences ||
         suggestions.length <= grant.guardrails.maximumOccurrences) &&
       (!grant.guardrails.maximumWeeklyMinutes ||
-        totalMinutes <= grant.guardrails.maximumWeeklyMinutes),
+        totalMinutes <= grant.guardrails.maximumWeeklyMinutes) &&
+      (!grant.guardrails.requireDifferentDays ||
+        new Set(suggestionDates).size === suggestions.length),
   );
   const noConflicts = suggestions.every(
     (suggestion) => (suggestion.conflictWarnings?.length ?? 0) === 0,
@@ -461,7 +512,7 @@ export function isAssistantSocialReply(prompt: string) {
 }
 
 export function isAssistantAppliedDetailsQuestion(prompt: string) {
-  return /\b(?:what did you (?:add|schedule|create)|where did you put|which (?:times?|sessions?) did you (?:add|schedule))\b/i.test(
+  return /\b(?:what (?:exactly )?did you (?:add|schedule|create)|where did you put|which (?:times?|sessions?) did you (?:add|schedule))\b/i.test(
     prompt,
   );
 }
