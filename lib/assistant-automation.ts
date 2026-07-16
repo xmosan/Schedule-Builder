@@ -212,9 +212,11 @@ export function extractAutomationGrant({
     /\b(?:not|do not|don['’]t)\b[^.!?]{0,60}\bimmediately after work\b/i.test(
       prompt,
     );
-  const scope: AutomationScope = /\bthis week|starting this week\b/i.test(prompt)
-    ? "current_week"
-    : "current_request";
+  const scope: AutomationScope = multiSessionRequest
+    ? "current_request"
+    : /\bthis week|starting this week\b/i.test(prompt)
+      ? "current_week"
+      : "current_request";
 
   return {
     activityTitle:

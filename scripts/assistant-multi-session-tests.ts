@@ -129,6 +129,7 @@ const grant = extractAutomationGrant({
   weekStartDate,
 });
 assert.ok(grant, "Explicit current-request automation permission is preserved");
+assert.equal(grant.scope, "current_request");
 assert.deepEqual(grant.allowedActions, ["create_time_block_series"]);
 assert.equal(grant.activityTitle, "FE Civil");
 assert.equal(grant.guardrails.maximumOccurrences, 3);
