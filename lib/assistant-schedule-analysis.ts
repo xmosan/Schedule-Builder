@@ -2748,6 +2748,106 @@ function overlapsExcludedRange(
   );
 }
 
+function isAffirmativeSchedulingFollowUp(prompt: string) {
+  return /^(?:yes|yeah|yep|yup|sure|ok|okay|sounds good|that works|go ahead|do it|please do|works for me)[.!\s]*$/i.test(
+    prompt.trim(),
+  );
+}
+
+type BoundedMultiSessionRelaxation =
+  | "allow_same_day_with_afternoon"
+  | "widen_preferred_time_range";
+
+function getBoundedMultiSessionRelaxation({
+  activeContext,
+  prompt,
+}: {
+  activeContext?: AssistantSchedulingContext | null;
+  prompt: string;
+}): BoundedMultiSessionRelaxation | null {
+  if (!isAffirmativeSchedulingFollowUp(prompt)) return null;
+  const question = activeContext?.pendingQuestion ?? "";
+  if (
+    /\b(?:two\s+sessions?\s+on|same\s+day|saturday\s+afternoon|remaining\s+session|only\s+two\s+(?:different\s+)?(?:evening\s+)?days?)\b/i.test(
+      question,
+    )
+  ) {
+    return "allow_same_day_with_afternoon";
+  }
+  if (/\b(?:widen|outside|relax).{0,40}\b(?:preferred|time\s+range|evening)\b/i.test(question)) {
+    return "widen_preferred_time_range";
+  }
+  return null;
+}
+
+function applyBoundedMultiSessionRelaxation(
+  request: MultiSessionPlanningRequest,
+  relaxation: BoundedMultiSessionRelaxation | null,
+): MultiSessionPlanningRequest {
+  if (relaxation === "allow_same_day_with_afternoon") {
+    return {
+      ...request,
+      globalConstraints: {
+        ...request.globalConstraints,
+        requireDifferentDays: false,
+      },
+      relaxations: {
+        ...request.relaxations,
+        allowSameDayWithAfternoon: true,
+      },
+      sessions: request.sessions.map(({ mustUseDifferentDayFrom: _ignored, ...session }) => ({
+        ...session,
+      })),
+    };
+  }
+  if (relaxation === "widen_preferred_time_range") {
+    return {
+      ...request,
+      relaxations: {
+        ...request.relaxations,
+        widenPreferredTimeRange: true,
+      },
+    };
+  }
+  return request;
+}
+
+function relaxAutomationGrantForBoundedPlan(
+  grant: AutomationGrant | null,
+  relaxation: BoundedMultiSessionRelaxation | null,
+) {
+  if (!grant || relaxation === null) return grant;
+  if (relaxation === "allow_same_day_with_afternoon") {
+    const {
+      earliestTime: _discardedEarliest,
+      preferredTimeRanges: _discardedPreferredRanges,
+      requireDifferentDays: _discardedDifferentDays,
+      ...guardrails
+    } = grant.guardrails;
+    return {
+      ...grant,
+      guardrails: {
+        ...guardrails,
+      },
+    };
+  }
+  if (relaxation === "widen_preferred_time_range") {
+    const {
+      earliestTime: _discardedEarliest,
+      latestTime: _discardedLatest,
+      preferredTimeRanges: _discardedPreferredRanges,
+      ...guardrails
+    } = grant.guardrails;
+    return {
+      ...grant,
+      guardrails: {
+        ...guardrails,
+      },
+    };
+  }
+  return grant;
+}
+
 function createBoundedMultiSessionSchedulingTurn({
   activeContext,
   input,
@@ -2780,6 +2880,9 @@ function createBoundedMultiSessionSchedulingTurn({
         workflowId,
       });
   if (!extractedRequest) return null;
+  const continuationRelaxation = isContinuation
+    ? getBoundedMultiSessionRelaxation({ activeContext, prompt })
+    : null;
 
   const temporaryAvailabilityOverrides =
     extractedRequest.temporaryAvailabilityOverrides.map((override) => {
@@ -2801,7 +2904,10 @@ function createBoundedMultiSessionSchedulingTurn({
         : override;
     });
   const request: MultiSessionPlanningRequest = {
-    ...extractedRequest,
+    ...applyBoundedMultiSessionRelaxation(
+      extractedRequest,
+      continuationRelaxation,
+    ),
     temporaryAvailabilityOverrides,
   };
   const temporaryExceptions: ScheduleException[] =
@@ -2931,27 +3037,39 @@ function createBoundedMultiSessionSchedulingTurn({
         workEnd > 0 ? workEnd + bufferMinutes : window.startMinutes,
       );
       const possibleStarts = new Set<number>();
+      const addStarts = ({
+        endBoundary,
+        startBoundary,
+      }: {
+        endBoundary: number;
+        startBoundary: number;
+      }) => {
+        const first = Math.max(earliestStart, startBoundary);
+        for (
+          let start = Math.ceil(first / 30) * 30;
+          start + session.durationMinutes <= Math.min(window.endMinutes, endBoundary);
+          start += 30
+        ) {
+          possibleStarts.add(start);
+        }
+      };
       preferredRanges.forEach((range) => {
         const preferredStart = parseStartTimeToMinutes(range.start);
         const preferredEnd = parseStartTimeToMinutes(range.end);
         if (preferredStart === null || preferredEnd === null) return;
-        const first = Math.max(earliestStart, preferredStart);
-        for (
-          let start = Math.ceil(first / 30) * 30;
-          start + session.durationMinutes <= Math.min(window.endMinutes, preferredEnd);
-          start += 30
-        ) {
-          possibleStarts.add(start);
-        }
+        addStarts({ endBoundary: preferredEnd, startBoundary: preferredStart });
       });
+      if (
+        request.relaxations?.allowSameDayWithAfternoon &&
+        window.day === "Saturday"
+      ) {
+        addStarts({ endBoundary: 17 * 60, startBoundary: 12 * 60 });
+      }
+      if (request.relaxations?.widenPreferredTimeRange) {
+        addStarts({ endBoundary: window.endMinutes, startBoundary: earliestStart });
+      }
       if (possibleStarts.size === 0) {
-        for (
-          let start = Math.ceil(earliestStart / 30) * 30;
-          start + session.durationMinutes <= window.endMinutes;
-          start += 30
-        ) {
-          possibleStarts.add(start);
-        }
+        addStarts({ endBoundary: window.endMinutes, startBoundary: earliestStart });
       }
       possibleStarts.forEach((start) => {
         const end = start + session.durationMinutes;
@@ -3002,10 +3120,25 @@ function createBoundedMultiSessionSchedulingTurn({
     const availableSessionCount = Object.values(
       planResult.candidateCountBySession,
     ).filter((count) => count > 0).length;
+    const candidateDates = new Set(
+      [...candidatesBySession.values()]
+        .flat()
+        .map((candidate) => candidate.date),
+    );
+    const hasSaturdayOpening = rawWindows.some(
+      (window) =>
+        window.day === "Saturday" &&
+        window.endMinutes - Math.max(window.startMinutes, 12 * 60) >=
+          Math.min(...request.sessions.map((session) => session.durationMinutes)),
+    );
     const question =
-      availableSessionCount >= request.sessions.length - 1
-        ? "I can fit only two sessions without breaking the different-day or Friday-evening rule. May I use Saturday afternoon for the remaining session?"
-        : "I couldn’t fit all three sessions within the stated rules. May I widen the preferred time range?";
+      request.globalConstraints.requireDifferentDays &&
+      candidateDates.size < request.sessions.length &&
+      hasSaturdayOpening
+        ? "I can fit only two different evening days this week while keeping Friday evening free. May I place two sessions on Saturday, with one in the afternoon?"
+        : availableSessionCount >= request.sessions.length - 1
+          ? "I can fit only two sessions within the original rules. May I relax the preferred evening range for the remaining session?"
+          : "I couldn’t fit all three sessions within the stated rules. May I widen the preferred time range?";
     return {
       context: {
         appliedRecords: activeContext?.appliedRecords ?? [],
@@ -3120,9 +3253,13 @@ function createBoundedMultiSessionSchedulingTurn({
     );
   });
   const temporaryOverride = temporaryAvailabilityOverrides[0];
-  const automationGrant = input.automationGrant
+  const baseAutomationGrant = input.automationGrant
     ? { ...input.automationGrant, id: `grant-${workflowId}`, workflowId }
     : activeContext?.automationGrant ?? null;
+  const automationGrant = relaxAutomationGrantForBoundedPlan(
+    baseAutomationGrant,
+    continuationRelaxation,
+  );
   const context: AssistantSchedulingContext = {
     appliedRecords: activeContext?.appliedRecords ?? [],
     automationDecision: activeContext?.automationDecision ?? null,
@@ -3166,9 +3303,12 @@ function createBoundedMultiSessionSchedulingTurn({
       : null,
     workflowId,
   };
+  const relaxedSameDay = request.relaxations?.allowSameDayWithAfternoon;
   return {
     context,
-    message: `I built ${proposals.length} ${request.title.replace(/\s+(?:Study\s+)?Plan$/i, "")} sessions on different days. Nothing has been added yet.`,
+    message: `I built ${proposals.length} ${request.title.replace(/\s+(?:Study\s+)?Plan$/i, "")} sessions${
+      relaxedSameDay ? ", including one afternoon session" : " on different days"
+    }. Nothing has been added yet.`,
     proposal: proposals[0] ?? null,
   };
 }

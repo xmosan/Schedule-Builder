@@ -73,6 +73,10 @@ export type MultiSessionPlanningRequest = {
     preferredTimeRanges?: Array<{ end: string; start: string }>;
   };
   purpose?: string;
+  relaxations?: {
+    allowSameDayWithAfternoon?: boolean;
+    widenPreferredTimeRange?: boolean;
+  };
   requestKind: "bounded_multi_session_plan";
   sessions: RequestedPlanningSession[];
   temporaryAvailabilityOverrides: TemporaryAvailabilityOverride[];
@@ -511,6 +515,24 @@ export function buildCompleteCandidatePlans({
   const visit = (index: number) => {
     if (completePlans.length >= 25_000) return;
     if (index >= orderedSessions.length) {
+      if (request.relaxations?.allowSameDayWithAfternoon) {
+        const assignmentsByDate = assignments.reduce((grouped, assignment) => {
+          const current = grouped.get(assignment.candidate.date) ?? [];
+          current.push(assignment);
+          grouped.set(assignment.candidate.date, current);
+          return grouped;
+        }, new Map<string, CandidateSessionPlan["assignments"]>());
+        const invalidSameDayShape = [...assignmentsByDate.values()].some(
+          (sameDateAssignments) =>
+            sameDateAssignments.length > 2 ||
+            (sameDateAssignments.length > 1 &&
+              sameDateAssignments.every(
+                (assignment) =>
+                  assignment.candidate.preferenceScores.preferredTime > 0,
+              )),
+        );
+        if (invalidSameDayShape) return;
+      }
       const dates = assignments.map((assignment) => assignment.candidate.date).sort();
       const preferenceMatch = assignments.reduce(
         (score, assignment) =>
@@ -569,6 +591,16 @@ export function buildCompleteCandidatePlans({
     for (const candidate of candidates) {
       if (!candidate.satisfiesHardConstraints) continue;
       if (request.globalConstraints.requireDifferentDays && usedDates.has(candidate.date)) {
+        continue;
+      }
+      if (
+        assignments.some(
+          (assignment) =>
+            assignment.candidate.date === candidate.date &&
+            assignment.candidate.startsAt < candidate.endsAt &&
+            assignment.candidate.endsAt > candidate.startsAt,
+        )
+      ) {
         continue;
       }
       assignments.push({ candidate, sessionId: session.id });

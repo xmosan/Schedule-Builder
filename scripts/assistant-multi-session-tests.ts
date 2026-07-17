@@ -263,6 +263,134 @@ assert.equal(
 );
 assert.equal(isAssistantAppliedDetailsQuestion("What exactly did you schedule?"), true);
 
+const fridayCurrentDate = "2026-07-17";
+const fridayWeekStartDate = "2026-07-13";
+const fridayWorkflowId = "workflow-fe-civil-friday";
+const fridayRequest = extractMultiSessionPlanningRequest({
+  currentDate: fridayCurrentDate,
+  prompt,
+  resolvedAt: "2026-07-17T14:00:00.000Z",
+  timezone,
+  weekStartDate: fridayWeekStartDate,
+  workflowId: fridayWorkflowId,
+});
+assert.ok(fridayRequest);
+const fridayGrant = extractAutomationGrant({
+  multiSessionRequest: fridayRequest,
+  prompt,
+  semanticRequest: extractSemanticPlanningRequest({
+    prompt,
+    workflowId: fridayWorkflowId,
+  }),
+  sourceMessageId: "message-fe-civil-friday",
+  userId: "user-fe-civil",
+  weekStartDate: fridayWeekStartDate,
+});
+const fridayInput: AssistantScheduleAnalysisInput = {
+  ...input,
+  automationGrant: fridayGrant,
+  currentDate: fridayCurrentDate,
+  scheduleExceptions: [],
+  weekStartDate: fridayWeekStartDate,
+};
+const fridayTurn = advanceAssistantSchedulingConversation({
+  input: fridayInput,
+  prompt,
+});
+assert.ok(fridayTurn, "Late-week bounded requests still use the bounded planner");
+assert.equal(fridayTurn.context.requestKind, "bounded_multi_session_plan");
+assert.equal(fridayTurn.context.state, "needs_clarification");
+assert.match(
+  fridayTurn.context.pendingQuestion ?? "",
+  /two different evening days|two sessions on Saturday/i,
+);
+assert.doesNotMatch(
+  fridayTurn.message,
+  /strongest opening|Which opening should I use|Waiting for a duration|How much time should I reserve/i,
+);
+
+const relaxedFridayTurn = advanceAssistantSchedulingConversation({
+  activeContext: fridayTurn.context,
+  input: fridayInput,
+  prompt: "Yeah",
+});
+assert.ok(relaxedFridayTurn, "A yes follow-up advances the active bounded workflow");
+assert.equal(relaxedFridayTurn.context.requestKind, "bounded_multi_session_plan");
+assert.equal(relaxedFridayTurn.context.state, "awaiting_apply");
+assert.equal(relaxedFridayTurn.context.pendingQuestion, null);
+assert.equal(relaxedFridayTurn.context.pendingProposals.length, 3);
+assert.equal(
+  relaxedFridayTurn.context.multiSessionRequest?.relaxations
+    ?.allowSameDayWithAfternoon,
+  true,
+);
+assert.equal(
+  relaxedFridayTurn.context.multiSessionRequest?.globalConstraints
+    .requireDifferentDays,
+  false,
+);
+assert.doesNotMatch(
+  relaxedFridayTurn.message,
+  /May I|only two sessions|strongest opening|Which opening should I use|Waiting for a duration|How much time should I reserve/i,
+);
+assert.ok(
+  relaxedFridayTurn.context.pendingProposals.some(
+    (proposal) =>
+      proposal.date === "2026-07-18" && proposal.startTime < "17:00",
+  ),
+  "The approved relaxation creates a Saturday afternoon candidate",
+);
+assert.equal(
+  relaxedFridayTurn.context.pendingProposals.some(
+    (proposal) =>
+      proposal.date === "2026-07-17" && proposal.startTime >= "17:00",
+  ),
+  false,
+  "Friday evening remains excluded after the relaxation",
+);
+relaxedFridayTurn.context.pendingProposals.forEach((proposal, index, all) => {
+  all.slice(index + 1).forEach((other) => {
+    assert.equal(
+      proposal.date === other.date &&
+        proposal.startTime < other.selectedWindowEnd &&
+        proposal.selectedWindowEnd > other.startTime,
+      false,
+      "Same-day relaxed sessions cannot overlap",
+    );
+  });
+});
+const relaxedSuggestions = relaxedFridayTurn.context.pendingProposals.map(
+  (proposal, index) => ({
+    confidence: 1,
+    conflictWarnings: [],
+    day: relaxedFridayTurn.context.candidateWindows.find(
+      (window) => window.date === proposal.date,
+    )?.day,
+    description: proposal.details,
+    estimatedHours: (proposal.durationMinutes ?? 0) / 60,
+    id: proposal.id ?? `relaxed-proposal-${index}`,
+    itemDate: proposal.date,
+    projectName: proposal.title,
+    rationale: "Validated deterministic candidate plan.",
+    severity: "important" as const,
+    startTime: proposal.startTime,
+    summary: proposal.details,
+    title: proposal.title,
+    type: "suggested_weekly_block" as const,
+    workflowId: relaxedFridayTurn.context.workflowId,
+  }),
+);
+assert.equal(
+  decideAssistantAutomation({
+    grant: relaxedFridayTurn.context.automationGrant ?? null,
+    sourceDataComplete: true,
+    suggestions: relaxedSuggestions,
+    workflowId: relaxedFridayTurn.context.workflowId,
+  }).outcome,
+  "auto_apply",
+  "The yes follow-up carries the relaxed current-request automation guardrails",
+);
+
 const emptyCandidates = new Map(
   request.sessions.map((session) => [session.id, []]),
 );
