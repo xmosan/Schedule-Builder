@@ -46,6 +46,10 @@ import type {
   AutomationGrant,
   TemporaryScheduleContext,
 } from "@/lib/assistant-automation";
+import {
+  normalizeApplyWorkflowResult,
+  type ApplyWorkflowResult,
+} from "@/lib/assistant-apply-result";
 import { shouldAskClarification } from "@/lib/assistant-automation";
 import {
   buildCompleteCandidatePlans,
@@ -210,7 +214,10 @@ export type AssistantWorkflowState =
   | "proposal_ready"
   | "awaiting_apply"
   | "applied"
+  | "applied_with_warning"
+  | "partially_applied"
   | "needs_clarification"
+  | "undone"
   | "failed";
 
 export type AssistantPendingTimeBlockProposal = {
@@ -255,6 +262,7 @@ export type AssistantPendingWorkExceptionProposal = {
 };
 
 export type AssistantSchedulingContext = {
+  applyResult?: ApplyWorkflowResult | null;
   appliedRecords: AssistantAppliedScheduleRecord[];
   automationDecision?: AutomationDecision | null;
   automationGrant?: AutomationGrant | null;
@@ -294,6 +302,7 @@ export type AssistantSchedulingContext = {
   state: AssistantWorkflowState;
   requestKind?: SchedulingRequestKind;
   temporaryScheduleContext?: TemporaryScheduleContext | null;
+  timezone?: string;
   workflowId: string;
 };
 
@@ -328,7 +337,10 @@ export function normalizeAssistantSchedulingContext(
     "proposal_ready",
     "awaiting_apply",
     "applied",
+    "applied_with_warning",
+    "partially_applied",
     "needs_clarification",
+    "undone",
     "failed",
   ];
 
@@ -365,7 +377,9 @@ export function normalizeAssistantSchedulingContext(
     candidate.state !== "failed" &&
     candidate.state !== "awaiting_session_details" &&
     candidate.state !== "needs_clarification" &&
-    candidate.state !== "applied"
+    candidate.state !== "applied" &&
+    candidate.state !== "applied_with_warning" &&
+    candidate.state !== "partially_applied"
   ) {
     return null;
   }
@@ -382,6 +396,7 @@ export function normalizeAssistantSchedulingContext(
           : "awaiting_window_selection";
 
   return {
+    applyResult: normalizeApplyWorkflowResult(candidate.applyResult),
     appliedRecords: Array.isArray(candidate.appliedRecords)
       ? candidate.appliedRecords.filter(
           (record): record is AssistantAppliedScheduleRecord =>
@@ -504,6 +519,10 @@ export function normalizeAssistantSchedulingContext(
       candidate.temporaryScheduleContext !== null
         ? candidate.temporaryScheduleContext
         : null,
+    timezone:
+      typeof candidate.timezone === "string" && candidate.timezone.trim()
+        ? candidate.timezone.trim().slice(0, 80)
+        : candidate.multiSessionRequest?.planningHorizon.timezone,
     workflowId:
       typeof candidate.workflowId === "string" && candidate.workflowId
         ? candidate.workflowId
@@ -3023,6 +3042,16 @@ function createBoundedMultiSessionSchedulingTurn({
     const seen = new Set<string>();
     const candidates: SessionCandidate[] = [];
     rawWindows.forEach((window) => {
+      const windowWeekday = parseIsoDate(window.date)?.getDay() ?? -1;
+      const fallbackRanges = (
+        request.preferences.fallbackTimeRanges ?? []
+      ).filter(
+        (range) =>
+          range.weekday === windowWeekday &&
+          range.activityTitle === session.activityTitle &&
+          (!range.durationMinutes ||
+            range.durationMinutes === session.durationMinutes),
+      );
       const workEnd = getEffectiveWorkShiftsForDate(
         input.workShifts,
         effectiveInput.scheduleExceptions ?? [],
@@ -3059,6 +3088,12 @@ function createBoundedMultiSessionSchedulingTurn({
         if (preferredStart === null || preferredEnd === null) return;
         addStarts({ endBoundary: preferredEnd, startBoundary: preferredStart });
       });
+      fallbackRanges.forEach((range) => {
+        const fallbackStart = parseStartTimeToMinutes(range.start);
+        const fallbackEnd = parseStartTimeToMinutes(range.end);
+        if (fallbackStart === null || fallbackEnd === null) return;
+        addStarts({ endBoundary: fallbackEnd, startBoundary: fallbackStart });
+      });
       if (
         request.relaxations?.allowSameDayWithAfternoon &&
         window.day === "Saturday"
@@ -3091,13 +3126,23 @@ function createBoundedMultiSessionSchedulingTurn({
             end <= rangeEnd
           );
         });
+        const explicitFallback = fallbackRanges.some((range) => {
+          const rangeStart = parseStartTimeToMinutes(range.start);
+          const rangeEnd = parseStartTimeToMinutes(range.end);
+          return (
+            rangeStart !== null &&
+            rangeEnd !== null &&
+            start >= rangeStart &&
+            end <= rangeEnd
+          );
+        });
         candidates.push({
           date: window.date,
           endsAt,
           preferenceScores: {
             afterWorkBuffer: workEnd === 0 || start >= workEnd + bufferMinutes ? 10 : 0,
             dayDistribution: 0,
-            preferredTime: preferred ? 20 : 0,
+            preferredTime: preferred ? 20 : explicitFallback ? 10 : 0,
             workloadBalance: 0,
           },
           satisfiesHardConstraints: true,

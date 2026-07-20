@@ -15,6 +15,9 @@
     "test:assistant-semantics": "tsx scripts/assistant-semantic-tests.ts",
     "test:assistant-ui": "tsx scripts/assistant-ui-tests.tsx",
     "test:assistant-automation": "tsx scripts/assistant-automation-tests.ts",
+    "test:assistant-apply-result": "tsx scripts/assistant-apply-result-tests.ts",
+    "test:assistant-apply-sql": "tsx scripts/assistant-apply-sql-tests.ts",
+    "test:assistant-apply-store": "tsx scripts/assistant-apply-store-tests.ts",
     "test:assistant-multi-session": "tsx scripts/assistant-multi-session-tests.ts",
     "lint": "next lint"
   },
@@ -26,6 +29,7 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.14",
     "@types/node": "^22.8.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

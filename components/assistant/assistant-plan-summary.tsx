@@ -4,6 +4,13 @@ import Link from "next/link";
 import React from "react";
 import { Button } from "@/components/ui/button";
 import type { AssistantSuggestion } from "@/lib/assistant";
+import {
+  getAppliedPlanTitle,
+  normalizeApplyWorkflowResult,
+  type AppliedWorkflowRecord,
+  type ApplyResponsePlan,
+  type ApplyWorkflowResult,
+} from "@/lib/assistant-apply-result";
 import type { CompactActionReceipt } from "@/lib/assistant-automation";
 import {
   getPlanApplyLabel,
@@ -18,7 +25,8 @@ import {
 import { formatStartTime } from "@/lib/weekly-plan";
 
 type AssistantPlanSummaryProps = {
-  appliedProposalIds: string[];
+  applyResponsePlan?: ApplyResponsePlan | null;
+  applyResult?: ApplyWorkflowResult | null;
   batchId?: string | null;
   isApplying: boolean;
   isUndoing?: boolean;
@@ -57,6 +65,20 @@ function formatOccurrenceTime(suggestion: AssistantSuggestion) {
   )}`;
 }
 
+function formatAppliedRecordDate(record: AppliedWorkflowRecord) {
+  const date = new Date(`${record.date}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return record.date;
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    weekday: "short",
+  }).format(date);
+}
+
+function formatAppliedRecordTime(record: AppliedWorkflowRecord) {
+  return `${formatStartTime(record.startTime)}–${formatStartTime(record.endTime)}`;
+}
+
 function formatDuration(minutes: number) {
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
@@ -70,7 +92,8 @@ function getUniqueDays(suggestions: AssistantSuggestion[]) {
 }
 
 export function AssistantPlanSummary({
-  appliedProposalIds,
+  applyResponsePlan,
+  applyResult: rawApplyResult,
   automationReceipt,
   batchId,
   isApplying,
@@ -81,28 +104,35 @@ export function AssistantPlanSummary({
   series,
   suggestions,
 }: AssistantPlanSummaryProps) {
-  const pendingSet = new Set(pendingProposalIds);
-  const appliedSet = new Set(appliedProposalIds);
+  const applyResult = normalizeApplyWorkflowResult(rawApplyResult);
+  const authoritativePendingProposalIds =
+    applyResult?.pendingProposalIds ?? pendingProposalIds;
+  const pendingSet = new Set(authoritativePendingProposalIds);
   const pending = suggestions.filter((suggestion) => pendingSet.has(suggestion.id));
-  const applied = suggestions.filter((suggestion) => appliedSet.has(suggestion.id));
+  const appliedRecords =
+    applyResult && !applyResult.nothingChanged ? applyResult.applied : [];
+  const hasVerifiedAppliedRecords = appliedRecords.length > 0;
   const kind = getPlanPresentationKind({
-    appliedCount: applied.length,
+    appliedCount: appliedRecords.length,
     pendingCount: pending.length,
     series,
     suggestions,
   });
   const activityTitle = getSafeAssistantLabel(
-    suggestions[0]?.projectName || suggestions[0]?.title,
+    applyResponsePlan?.activityTitle ||
+      suggestions[0]?.projectName ||
+      suggestions[0]?.title,
     "Plan",
   );
   const seriesTitle = getSafeAssistantLabel(series?.title, activityTitle);
   const isUndone = automationReceipt?.actionType === "action_undone";
-  const undoDecisionId = automationReceipt?.decisionRecordId;
+  const appliedPlanTitle = getAppliedPlanTitle(appliedRecords, seriesTitle);
+  const undoDecisionId = applyResult?.planningDecisionId;
   const title =
     isUndone
-      ? `${seriesTitle} removed`
-      : kind === "applied_result"
-      ? `${seriesTitle} added`
+      ? `${appliedPlanTitle} removed`
+      : hasVerifiedAppliedRecords
+      ? appliedPlanTitle
       : kind === "multi_item_week"
         ? "Proposed week"
         : kind === "linked_changes"
@@ -117,14 +147,16 @@ export function AssistantPlanSummary({
     (total, suggestion) => total + Math.round((suggestion.estimatedHours ?? 0) * 60),
     0,
   );
-  const appliedSummary = series
-    ? `${applied.length} sessions across ${series.planningHorizon.weeks} ${
-        series.planningHorizon.weeks === 1 ? "week" : "weeks"
-      }`
-    : `${applied.length} ${applied.length === 1 ? "change" : "changes"} applied`;
+  const appliedMinutes = appliedRecords.reduce(
+    (total, record) => total + record.durationMinutes,
+    0,
+  );
+  const appliedSummary = `${appliedRecords.length} ${
+    appliedRecords.length === 1 ? "session" : "sessions"
+  } · ${formatDuration(appliedMinutes)} total`;
   const statusSummary =
-    applied.length > 0 && pending.length > 0
-      ? `${applied.length} applied · ${pending.length} awaiting approval`
+    appliedRecords.length > 0 && pending.length > 0
+      ? `${appliedRecords.length} added · ${pending.length} awaiting approval`
       : `${pending.length} awaiting approval`;
 
   return (
@@ -141,7 +173,7 @@ export function AssistantPlanSummary({
             <p aria-live="polite" className="mt-1 text-sm text-brand-teal">
               {automationReceipt.summary}
             </p>
-          ) : kind === "applied_result" ? (
+          ) : hasVerifiedAppliedRecords ? (
             <p aria-live="polite" className="mt-1 text-sm text-brand-teal">
               {appliedSummary}
             </p>
@@ -174,7 +206,28 @@ export function AssistantPlanSummary({
         ) : null}
       </div>
 
-      {!isUndone && kind !== "applied_result" && kind !== "routine" ? (
+      {!isUndone && hasVerifiedAppliedRecords ? (
+        <div className="mt-4 border-y border-brand-ink/7 py-2">
+          {appliedRecords.map((record) => (
+            <div
+              key={`${record.proposalId}:${record.recordId}`}
+              className="flex flex-col gap-0.5 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-brand-ink/76">
+                  {getSafeAssistantLabel(record.title, activityTitle)}
+                </p>
+                <p className="text-xs text-brand-ink/48">
+                  {formatAppliedRecordDate(record)}
+                </p>
+              </div>
+              <p className="shrink-0 text-sm text-brand-ink/54">
+                {formatAppliedRecordTime(record)}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : !isUndone && kind !== "routine" ? (
         <div className="mt-4 border-y border-brand-ink/7 py-2">
           {kind === "linked_changes" ? (
             preview.map((suggestion) => (
@@ -220,11 +273,11 @@ export function AssistantPlanSummary({
       ) : null}
 
       <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-        {isUndone || kind === "applied_result" ? (
+        {isUndone || hasVerifiedAppliedRecords ? (
           <>
             {!isUndone &&
             undoDecisionId &&
-            automationReceipt.availableActions.includes("undo") &&
+            applyResult?.undoAvailable &&
             onUndo ? (
               <Button
                 className="h-11 rounded-2xl px-5 text-sm"
@@ -236,18 +289,22 @@ export function AssistantPlanSummary({
                 {isUndoing ? "Undoing…" : "Undo"}
               </Button>
             ) : null}
-            <Link
-              className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
-              href="/plan"
-            >
-              View Weekly Plan
-            </Link>
-            <Link
-              className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
-              href="/calendar"
-            >
-              View Calendar
-            </Link>
+            {!isUndone && hasVerifiedAppliedRecords ? (
+              <>
+                <Link
+                  className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
+                  href="/plan"
+                >
+                  View Weekly Plan
+                </Link>
+                <Link
+                  className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-brand-ink/10 px-4 text-sm font-semibold text-brand-ink hover:border-brand-teal/30 hover:text-brand-teal"
+                  href="/calendar"
+                >
+                  View Calendar
+                </Link>
+              </>
+            ) : null}
           </>
         ) : (
           <>
@@ -273,6 +330,14 @@ export function AssistantPlanSummary({
           </>
         )}
       </div>
+      {!isUndone &&
+      hasVerifiedAppliedRecords &&
+      !applyResult?.undoAvailable &&
+      applyResult?.undoUnavailableReason ? (
+        <p className="mt-3 text-xs leading-5 text-brand-ink/48">
+          {sanitizeAssistantUserFacingText(applyResult.undoUnavailableReason)}
+        </p>
+      ) : null}
     </section>
   );
 }

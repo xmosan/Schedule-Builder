@@ -23,6 +23,8 @@ import { getPlanPresentationKind } from "../lib/assistant-plan-presentation";
 
 const prompt =
   "Starting this week, schedule two 90-minute FE Civil study sessions and one 60-minute review session on three different days. Prefer evenings between 6:00 and 9:00 PM, do not place anything immediately after work, and keep Friday evening free. Tomorrow I am leaving work at 2:30 PM instead of 5:00 PM. You may automatically add the sessions if they fit these rules without conflicts; otherwise ask me one clear question. Keep your response brief.";
+const conditionalFallbackPrompt =
+  "Starting this week, schedule two 90-minute FE Civil study sessions and one 60-minute review session on three different days. Prefer evenings between 6:00 and 9:00 PM, keep Friday evening free, and do not place anything immediately after work. If you cannot fit all three sessions in the evening, you may use Saturday afternoon for the 60-minute review session. You may automatically add the sessions if they fit these rules without conflicts. Keep your response brief.";
 const workflowId = "workflow-fe-civil";
 const currentDate = "2026-07-07";
 const weekStartDate = "2026-07-06";
@@ -71,6 +73,29 @@ assert.equal(request.planningHorizon.startDate, "2026-07-07");
 assert.equal(request.planningHorizon.endDate, "2026-07-12");
 assert.equal(validateSessionDurations(request.sessions).valid, true);
 assert.equal(request.missingFields.length, 0);
+
+const conditionalFallbackRequest = extractMultiSessionPlanningRequest({
+  currentDate: "2026-07-20",
+  prompt: conditionalFallbackPrompt,
+  resolvedAt: "2026-07-20T15:00:00.000Z",
+  timezone,
+  weekStartDate: "2026-07-20",
+  workflowId: "workflow-fe-civil-conditional-fallback",
+});
+assert.ok(conditionalFallbackRequest);
+assert.deepEqual(
+  conditionalFallbackRequest.preferences.fallbackTimeRanges,
+  [
+    {
+      activityTitle: "FE Civil Review",
+      durationMinutes: 60,
+      end: "17:00",
+      start: "12:00",
+      weekday: 6,
+    },
+  ],
+  "The explicit Saturday-afternoon exception remains scoped to the 60-minute review",
+);
 
 const override = request.temporaryAvailabilityOverrides[0];
 assert.ok(override);
@@ -142,6 +167,23 @@ assert.deepEqual(grant.guardrails.excludedDays, [5]);
 assert.equal(grant.guardrails.requireDifferentDays, true);
 assert.equal(grant.allowedActions.some((action) => /google/i.test(action)), false);
 
+const conditionalFallbackGrant = extractAutomationGrant({
+  multiSessionRequest: conditionalFallbackRequest,
+  prompt: conditionalFallbackPrompt,
+  semanticRequest: extractSemanticPlanningRequest({
+    prompt: conditionalFallbackPrompt,
+    workflowId: conditionalFallbackRequest.workflowId,
+  }),
+  sourceMessageId: "message-fe-civil-conditional-fallback",
+  userId: "user-fe-civil",
+  weekStartDate: "2026-07-20",
+});
+assert.ok(conditionalFallbackGrant);
+assert.deepEqual(
+  conditionalFallbackGrant.guardrails.allowedTimeExceptions,
+  conditionalFallbackRequest.preferences.fallbackTimeRanges,
+);
+
 const input: AssistantScheduleAnalysisInput = {
   automationGrant: grant,
   currentDate,
@@ -201,6 +243,67 @@ assert.equal(input.scheduleExceptions?.length, 0);
 assert.ok(input.workShifts.every((shift) => shift.endTime === "17:00"));
 assert.doesNotMatch(turn.message, /strongest opening|choose an opening|how much time/i);
 
+const conditionalFallbackTurn = advanceAssistantSchedulingConversation({
+  input: {
+    ...input,
+    automationGrant: conditionalFallbackGrant,
+    currentDate: "2026-07-20",
+    weekStartDate: "2026-07-20",
+    weeklyPlanBlocks: [
+      ...[
+        ["Tuesday", "2026-07-21"],
+        ["Thursday", "2026-07-23"],
+        ["Saturday", "2026-07-25"],
+        ["Sunday", "2026-07-26"],
+      ].map(([day, scheduledDate], index) => ({
+        day: day as "Tuesday" | "Thursday" | "Saturday" | "Sunday",
+        estimatedHours: 5,
+        id: `evening-commitment-${index}`,
+        plannedTask: "Existing evening commitment",
+        projectName: "Existing commitment",
+        scheduledDate,
+        startTime: "17:00",
+      })),
+      {
+        day: "Saturday",
+        estimatedHours: 6,
+        id: "saturday-morning-commitment",
+        plannedTask: "Existing Saturday morning commitment",
+        projectName: "Existing commitment",
+        scheduledDate: "2026-07-25",
+        startTime: "08:00",
+      },
+    ],
+  },
+  prompt: conditionalFallbackPrompt,
+});
+assert.ok(conditionalFallbackTurn);
+assert.equal(conditionalFallbackTurn.context.state, "awaiting_apply");
+assert.equal(conditionalFallbackTurn.context.pendingQuestion, null);
+assert.equal(
+  conditionalFallbackTurn.context.semanticRequest?.activity.title,
+  "FE Civil",
+  "The bounded workflow preserves the canonical activity identity for status and apply responses",
+);
+assert.deepEqual(
+  conditionalFallbackTurn.context.pendingProposals.map((proposal) => [
+    proposal.title,
+    proposal.date,
+    proposal.startTime,
+    proposal.durationMinutes,
+  ]),
+  [
+    ["FE Civil Study", "2026-07-20", "18:00", 90],
+    ["FE Civil Study", "2026-07-22", "18:00", 90],
+    ["FE Civil Review", "2026-07-25", "14:00", 60],
+  ],
+  "The exact request uses the explicit Saturday-afternoon fallback without another question",
+);
+assert.doesNotMatch(
+  conditionalFallbackTurn.message,
+  /May I|strongest opening|Which opening should I use|Waiting for a duration|How much time should I reserve/i,
+);
+
 const suggestions = turn.context.pendingProposals.map((proposal, index) => ({
   confidence: 1,
   conflictWarnings: [],
@@ -238,6 +341,43 @@ const decision = decideAssistantAutomation({
 });
 assert.equal(decision.outcome, "auto_apply");
 assert.equal(decision.validation.scopeMatched, true);
+
+const conditionalFallbackSuggestions = suggestions.map((suggestion, index) => ({
+  ...suggestion,
+  estimatedHours: index < 2 ? 1.5 : 1,
+  id: `conditional-fallback-proposal-${index + 1}`,
+  itemDate: ["2026-07-20", "2026-07-22", "2026-07-25"][index],
+  projectName: index < 2 ? "FE Civil Study" : "FE Civil Review",
+  startTime: index < 2 ? "18:00" : "14:00",
+  title: index < 2 ? "FE Civil Study" : "FE Civil Review",
+  workflowId: conditionalFallbackRequest.workflowId,
+}));
+assert.equal(
+  decideAssistantAutomation({
+    grant: conditionalFallbackGrant,
+    sourceDataComplete: true,
+    suggestions: conditionalFallbackSuggestions,
+    workflowId: conditionalFallbackRequest.workflowId,
+  }).outcome,
+  "auto_apply",
+  "The exact prompt authorizes two evening study sessions plus the Saturday-afternoon review",
+);
+assert.equal(
+  decideAssistantAutomation({
+    grant: conditionalFallbackGrant,
+    sourceDataComplete: true,
+    suggestions: conditionalFallbackSuggestions.map((suggestion, index) =>
+      index === 0
+        ? { ...suggestion, itemDate: "2026-07-25", startTime: "14:00" }
+        : index === 2
+          ? { ...suggestion, itemDate: "2026-07-20", startTime: "18:00" }
+          : suggestion,
+    ),
+    workflowId: conditionalFallbackRequest.workflowId,
+  }).outcome,
+  "create_review_batch",
+  "The Saturday-afternoon exception cannot be reused for a 90-minute study session",
+);
 assert.equal(
   decideAssistantAutomation({
     grant: turn.context.automationGrant ?? null,

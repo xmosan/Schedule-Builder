@@ -1,6 +1,6 @@
 # Google Calendar One-Way Sync Plan
 
-This document plans the next Google Calendar phase for Schedule Builder. It is a technical plan only. Do not request Google write scopes, change runtime code, or run the SQL until implementation begins.
+This document describes the manual, one-way Google Calendar sync implemented by Schedule Builder. The executable database migration is `supabase/google-calendar-sync.sql`.
 
 ## Recommended V1 Behavior
 
@@ -45,10 +45,10 @@ https://www.googleapis.com/auth/calendar
 
 ## Database Changes
 
-Not to run yet.
+Run `supabase/google-calendar-sync.sql` as listed in the README. The SQL below is retained as a design reference; use the migration file as the authoritative version.
 
 ```sql
--- NOT TO RUN YET
+-- DESIGN REFERENCE — run supabase/google-calendar-sync.sql instead
 
 create or replace function public.handle_updated_at()
 returns trigger

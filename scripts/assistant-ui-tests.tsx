@@ -10,6 +10,10 @@ import {
 import type { AssistantSuggestion } from "../lib/assistant";
 import type { CompactActionReceipt } from "../lib/assistant-automation";
 import {
+  createApplyWorkflowResult,
+  type ApplyWorkflowResult,
+} from "../lib/assistant-apply-result";
+import {
   getPlanPresentationKind,
   type PlanPresentationKind,
 } from "../lib/assistant-plan-presentation";
@@ -85,6 +89,14 @@ function countMatches(value: string, pattern: RegExp) {
   return value.match(pattern)?.length ?? 0;
 }
 
+function addTestMinutes(startTime: string, durationMinutes: number) {
+  const [hours, minutes] = startTime.split(":").map(Number);
+  const total = hours * 60 + minutes + durationMinutes;
+  return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(
+    total % 60,
+  ).padStart(2, "0")}`;
+}
+
 function renderSummary({
   appliedIds = [],
   planSeries = series,
@@ -98,9 +110,43 @@ function renderSummary({
   pendingIds?: string[];
   automationReceipt?: CompactActionReceipt | null;
 } = {}) {
+  const applyResult: ApplyWorkflowResult | null =
+    appliedIds.length > 0
+      ? createApplyWorkflowResult({
+          applied: planSuggestions
+            .filter((suggestion) => appliedIds.includes(suggestion.id))
+            .map((suggestion) => {
+              const durationMinutes = Math.round(
+                (suggestion.estimatedHours ?? 0) * 60,
+              );
+              const startTime = suggestion.startTime ?? "";
+              const endTime = addTestMinutes(startTime, durationMinutes);
+              return {
+                date: suggestion.itemDate ?? "",
+                durationMinutes,
+                endsAt: `${suggestion.itemDate}T${endTime}:00-04:00`,
+                endTime,
+                proposalId: suggestion.id,
+                recordId: `record-${suggestion.id}`,
+                recordType: "weekly_plan_block" as const,
+                startsAt: `${suggestion.itemDate}T${startTime}:00-04:00`,
+                startTime,
+                title: suggestion.projectName ?? suggestion.title,
+              };
+            }),
+          automationMode:
+            pendingIds.length === 0 ? "auto_apply" : "manual_batch_apply",
+          pendingProposalIds: pendingIds,
+          planningDecisionId: "decision-1",
+          requestedProposalIds: [...new Set([...appliedIds, ...pendingIds])],
+          undoAvailable: pendingIds.length === 0,
+          workflowId: "workflow-1",
+        })
+      : null;
+
   return renderToStaticMarkup(
     <AssistantPlanSummary
-      appliedProposalIds={appliedIds}
+      applyResult={applyResult}
       automationReceipt={automationReceipt}
       batchId="batch-1"
       isApplying={false}
@@ -185,13 +231,14 @@ function runCompactSummaryCases() {
     },
     pendingIds: [],
   });
-  assert.match(applied, /Sealed Nectar Reading Plan added/);
-  assert.match(applied, /9 sessions across 3 weeks/);
+  assert.match(applied, /Read The Sealed Nectar Plan/);
+  assert.match(applied, /9 sessions · 9 hours total/);
   assert.match(applied, /View Weekly Plan/);
   assert.match(applied, />Undo</);
   assert.doesNotMatch(applied, /Apply all|awaiting approval/);
 
   const undone = renderSummary({
+    appliedIds: suggestions.map((suggestion) => suggestion.id),
     automationReceipt: {
       actionType: "action_undone",
       availableActions: ["view"],
@@ -205,14 +252,79 @@ function runCompactSummaryCases() {
     },
     pendingIds: [],
   });
-  assert.match(undone, /Sealed Nectar Reading Plan removed/);
+  assert.match(undone, /Read The Sealed Nectar Plan removed/);
   assert.doesNotMatch(undone, />Undo|>Apply/);
 
   const partial = renderSummary({
     appliedIds: [suggestions[0].id, suggestions[1].id],
     pendingIds: suggestions.slice(2).map((suggestion) => suggestion.id),
   });
-  assert.match(partial, /2 applied · 7 awaiting approval/);
+  assert.match(partial, /2 added · 7 awaiting approval/);
+
+  const feSuggestions = suggestions.slice(0, 3).map((suggestion, index) => ({
+    ...suggestion,
+    estimatedHours: index < 2 ? 1.5 : 1,
+    projectName: index < 2 ? "FE Civil Study" : "FE Civil Review",
+    title: index < 2 ? "FE Civil Study" : "FE Civil Review",
+  }));
+  const feApplyResult = createApplyWorkflowResult({
+    applied: feSuggestions.map((suggestion) => {
+      const durationMinutes = Math.round((suggestion.estimatedHours ?? 0) * 60);
+      const startTime = suggestion.startTime ?? "";
+      const endTime = addTestMinutes(startTime, durationMinutes);
+      return {
+        date: suggestion.itemDate ?? "",
+        durationMinutes,
+        endsAt: `${suggestion.itemDate}T${endTime}:00-04:00`,
+        endTime,
+        proposalId: suggestion.id,
+        recordId: `record-${suggestion.id}`,
+        recordType: "weekly_plan_block" as const,
+        startsAt: `${suggestion.itemDate}T${startTime}:00-04:00`,
+        startTime,
+        title: suggestion.title,
+      };
+    }),
+    automationMode: "auto_apply",
+    requestedProposalIds: feSuggestions.map((suggestion) => suggestion.id),
+    undoAvailable: false,
+    undoUnavailableReason: "No planning decision was saved, so Undo is unavailable.",
+    workflowId: "workflow-fe",
+  });
+  const feApplied = renderToStaticMarkup(
+    <AssistantPlanSummary
+      applyResult={feApplyResult}
+      batchId="batch-fe"
+      isApplying={false}
+      pendingProposalIds={[]}
+      series={null}
+      suggestions={feSuggestions}
+      onApplyAll={noOp}
+      onUndo={noOp}
+    />,
+  );
+  assert.match(feApplied, /FE Civil Study and Review Plan/);
+  assert.equal(countMatches(feApplied, />FE Civil Study</g), 2);
+  assert.equal(countMatches(feApplied, />FE Civil Review</g), 1);
+  assert.match(feApplied, /3 sessions · 4 hours total/);
+  assert.doesNotMatch(feApplied, />Undo</);
+  assert.match(feApplied, /Undo is unavailable/);
+
+  const receiptWithoutSavedRows = renderSummary({
+    automationReceipt: {
+      actionType: "plan_applied",
+      availableActions: ["undo", "view"],
+      createdAt: "2026-07-06T18:00:00.000Z",
+      decisionRecordId: "decision-without-rows",
+      id: "receipt-without-rows",
+      itemCount: 9,
+      summary: "9 changes applied.",
+      title: "Unverified plan",
+      userId: "user-1",
+    },
+    pendingIds: [],
+  });
+  assert.doesNotMatch(receiptWithoutSavedRows, /View Weekly Plan|View Calendar|>Undo</);
 
   const weeklyItems = suggestions.slice(0, 3).map((suggestion, index) => ({
     ...suggestion,
@@ -474,24 +586,48 @@ function runWorkspaceSourceCases() {
     new URL("../app/api/assistant/proposals/route.ts", import.meta.url),
     "utf8",
   );
+  const undoRoute = readFileSync(
+    new URL("../app/api/assistant/undo/route.ts", import.meta.url),
+    "utf8",
+  );
 
   assert.equal(countMatches(assistantPage, /overflow-y-auto/g), 2);
   assert.match(assistantPage, /View schedule context/);
   assert.match(assistantPage, /resolveAssistantWorkflowStatus/);
   assert.doesNotMatch(assistantPage, /function getWorkflowStatus/);
+  assert.match(assistantPage, /getCanonicalApplyResult\(message\.response\)/);
+  assert.match(assistantPage, /reconcileMessagesAfterApply/);
+  assert.match(assistantPage, /reconcileCanonicalPlanAfterMutation/);
+  assert.match(
+    assistantPage,
+    /I couldn’t verify any saved changes, so no success confirmation was recorded/,
+  );
+  assert.doesNotMatch(assistantPage, /appliedProposalIds=\{activeWorkflow/);
+  assert.doesNotMatch(assistantPage, /updateSchedulingContextAfterApply/);
   assert.match(assistantPage, /open=\{isScheduleContextOpen\}/);
   assert.doesNotMatch(assistantPage, /lg:grid-cols-\[[^\]]*context/i);
   assert.doesNotMatch(contextPanel, /Pending review/i);
   assert.match(contextPanel, /if \(!open\) return null/);
   assert.match(contextPanel, /aria-modal="true"/);
   assert.doesNotMatch(summary, /overflow-y-auto|overflow-y-scroll|max-h-\[/);
+  assert.match(summary, /applyResult\.applied/);
+  assert.match(summary, /applyResult\?\.undoAvailable/);
+  assert.doesNotMatch(summary, /automationReceipt\.availableActions\.includes\("undo"\)/);
   assert.doesNotMatch(reviewPage, /overflow-y-auto|overflow-y-scroll|max-h-\[/);
   assert.match(reviewPage, /proposalIds: suggestions\.map/);
   assert.match(reviewPage, /action: "update"/);
   assert.match(reviewPage, /action: "reject"/);
+  assert.match(reviewPage, /reloadReviewAfterMutation/);
+  assert.match(reviewPage, /final server state could not be confirmed/);
   assert.match(reviewRoute, /proposalBatchId/);
   assert.match(proposalApi, /loadAssistantWorkflowByBatchId/);
   assert.match(proposalApi, /authResult\.userId/);
+  assert.match(undoRoute, /undo_committed_reload_failed/);
+  assert.match(undoRoute, /reloadWarning/);
+  assert.doesNotMatch(
+    undoRoute,
+    /blocks were reversed, but I couldn’t reload[\s\S]{0,240}status: 500/,
+  );
 }
 
 runCompactSummaryCases();
@@ -500,4 +636,4 @@ runReviewCases();
 runClarificationGuardCases();
 runWorkspaceSourceCases();
 
-console.log("Assistant UI tests passed: 41 focused cases");
+console.log("Assistant UI tests passed: 49 focused cases");

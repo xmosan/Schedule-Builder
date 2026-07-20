@@ -33,8 +33,8 @@ Use Node 20 or Node 22 LTS locally. This app is configured for supported Next.js
    - `work_shifts` stores manual work availability and uses Row Level Security so each user only sees their own shifts.
    - `imported_calendar_events` stores reviewed ICS imports and synced external calendar events. Row Level Security keeps each user's events scoped to their account.
    - `google_calendar_connections` stores server-only Google Calendar OAuth tokens. RLS is enabled with no client policies; app API routes access it with `SUPABASE_SERVICE_ROLE_KEY`.
-   - Run `supabase/assistant-conversations.sql`, `supabase/assistant-workflows.sql`, `supabase/schedule-exceptions.sql`, and `supabase/weekly-plan-occurrences.sql` to enable persisted Assistant threads, canonical proposals, temporary schedule changes, and date-specific recurring-series occurrences.
-   - If your existing Supabase project already has the scheduler tables, run the relevant standalone SQL files, including `supabase/assistant-workflows.sql` before deploying the canonical Assistant workflow routes.
+   - For every Supabase project, including a new one, run the remaining scheduler and Assistant migrations after `supabase/schema.sql` in this order: `supabase/scheduled-items.sql`, `supabase/assistant-conversations.sql`, `supabase/assistant-workflows.sql`, `supabase/schedule-exceptions.sql`, `supabase/weekly-plan-occurrences.sql`, `supabase/google-calendar-sync.sql`, `supabase/assistant-automation.sql`, then `supabase/assistant-apply-integrity.sql`.
+   - `supabase/google-calendar-sync.sql` installs the backing table used by manual, one-way Google Calendar sync and the Assistant Undo guard. `supabase/assistant-automation.sql` must run after `supabase/assistant-workflows.sql`; `supabase/assistant-apply-integrity.sql` must run last. The final migration adds idempotent apply attempts, exact applied-record mappings, authoritative result reads, and read-only owner access to automation audit evidence. Automatic Assistant application also requires the server-only `SUPABASE_SERVICE_ROLE_KEY`; if it is unavailable, the Assistant safely falls back to review without writing schedule records.
 8. Keep the Email provider enabled in Supabase Auth.
    - Email/password is enabled by default.
    - Magic link sign-in also uses the Email provider.
@@ -68,9 +68,9 @@ Google login uses Supabase Auth as the OAuth broker. This is only for sign-in wi
    - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 9. Keep the Google Client Secret only in Supabase. It does not belong in `.env.local` or Vercel for this browser app.
 
-## Google Calendar read-only setup
+## Google Calendar setup
 
-Google Calendar connection is read-only. It imports upcoming Google Calendar events into Schedule Builder as external commitments; it does not create, edit, or delete Google Calendar events.
+The normal Google Calendar connection is read-only: it imports upcoming events into Schedule Builder as external commitments, and imported events always remain read-only. Users may separately opt in to manual, one-way sync for timed Weekly Plan blocks. That second permission uses Google's `calendar.app.created` scope and limits writes to the dedicated `Schedule Builder` calendar created by the app. Nothing is pushed automatically by the Assistant; a user must explicitly choose a sync, update, or remove action in the Calendar UI.
 
 1. In Supabase SQL Editor, run `supabase/google-calendar.sql` if you have not already run the full `supabase/schema.sql`.
 2. In Google Cloud Console, use a Web application OAuth client.
@@ -87,7 +87,8 @@ Google Calendar connection is read-only. It imports upcoming Google Calendar eve
    - `NEXT_PUBLIC_SITE_URL`
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-6. Open `/integrations`, choose **Connect Google Calendar**, approve read-only calendar access, then use **Sync calendar** when you want to refresh upcoming events.
+6. Open `/integrations`, choose **Connect Google Calendar**, approve read-only calendar access, then use **Sync calendar** when you want to refresh imported events.
+7. Optional: choose **Enable Calendar Sync** to grant `https://www.googleapis.com/auth/calendar.app.created`. This enables explicit one-way actions for selected timed Weekly Plan blocks on the dedicated `Schedule Builder` calendar; it does not make imported events editable or enable automatic Assistant writes.
 
 Tokens are stored in `google_calendar_connections` and are never returned to the browser. The client only receives connection status and sync results from server routes.
 
@@ -204,7 +205,8 @@ For local testing, run `npm run dev` and open `http://localhost:3000`. For produ
 - `lib/work-schedule.ts` holds work shift types, validation, sorting, and time formatting helpers.
 - `lib/supabase/` contains the Supabase browser client and scheduler sync helpers.
 - `public/` contains PWA icons and the lightweight service worker.
-- `supabase/schema.sql` contains the database tables and RLS policies required for sync.
+- `supabase/schema.sql` contains the core scheduler tables and RLS policies.
+- `supabase/google-calendar-sync.sql` contains the server-owned mapping table for manual, one-way Google Calendar sync.
 - `supabase/imported-calendar-events.sql` contains the standalone migration for ICS imported calendar events.
 - `supabase/assistant-workflows.sql` contains the canonical Assistant workflow, proposal-batch, proposal, RLS, and atomic persistence schema.
 - `supabase/weekly-plan-occurrences.sql` adds exact occurrence dates and series IDs for multi-week Weekly Plan blocks.

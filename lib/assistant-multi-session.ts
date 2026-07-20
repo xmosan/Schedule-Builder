@@ -55,6 +55,14 @@ export type TemporaryAvailabilityOverride = {
   source: "current_message" | "stored_schedule_exception";
 };
 
+export type ConditionalSessionTimeRange = {
+  activityTitle: string;
+  durationMinutes?: number;
+  end: string;
+  start: string;
+  weekday: number;
+};
+
 export type MultiSessionPlanningRequest = {
   globalConstraints: {
     excludedDateRanges?: Array<{ endsAt: string; startsAt: string }>;
@@ -70,6 +78,7 @@ export type MultiSessionPlanningRequest = {
   };
   preferences: {
     afterWorkBufferMinutes?: number;
+    fallbackTimeRanges?: ConditionalSessionTimeRange[];
     preferredTimeRanges?: Array<{ end: string; start: string }>;
   };
   purpose?: string;
@@ -261,6 +270,36 @@ function parsePreferredTimeRanges(prompt: string) {
   return start && end && start < end ? [{ end, start }] : [];
 }
 
+function parseConditionalSessionTimeRanges(
+  prompt: string,
+  sharedContext: string,
+) {
+  const daypartRanges = {
+    afternoon: { end: "17:00", start: "12:00" },
+    evening: { end: DEFAULT_EVENING_END, start: DEFAULT_EVENING_START },
+    morning: { end: "12:00", start: "08:00" },
+  } as const;
+  const pattern =
+    /\b(?:may|can)\s+use\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(morning|afternoon|evening)\s+for\s+(?:the\s+)?(?:(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*[- ]?\s*(minutes?|mins?|hours?|hrs?)\s+)?([^.!?]{1,60}?)\s+sessions?\b/gi;
+
+  return [...prompt.matchAll(pattern)].flatMap((match) => {
+    const weekday = weekdayIndex[match[1].toLowerCase()];
+    const range = daypartRanges[match[2].toLowerCase() as keyof typeof daypartRanges];
+    const durationMinutes =
+      match[3] && match[4] ? parseDuration(match[3], match[4]) : null;
+    const activity = cleanActivityPhrase(match[5]);
+    if (weekday === undefined || !range || !activity) return [];
+    return [
+      {
+        activityTitle: createSessionTitle(activity, sharedContext),
+        ...(durationMinutes ? { durationMinutes } : {}),
+        ...range,
+        weekday,
+      } satisfies ConditionalSessionTimeRange,
+    ];
+  });
+}
+
 function inferActivityType(value: string): RequestedPlanningSession["activityType"] {
   if (/\breview\b/i.test(value)) return "review";
   if (/\bstud(?:y|ying)\b/i.test(value)) return "study";
@@ -416,6 +455,17 @@ export function extractMultiSessionPlanningRequest({
     }),
   );
   const sessionIds = sessions.map((session) => session.id);
+  const fallbackTimeRanges = parseConditionalSessionTimeRanges(
+    prompt,
+    sharedContext,
+  ).filter((range) =>
+    sessions.some(
+      (session) =>
+        session.activityTitle === range.activityTitle &&
+        (!range.durationMinutes ||
+          session.durationMinutes === range.durationMinutes),
+    ),
+  );
   const requireDifferentDays = /\b(?:different|separate)\s+days?\b/i.test(prompt);
   sessions.forEach((session) => {
     if (requireDifferentDays) {
@@ -465,6 +515,7 @@ export function extractMultiSessionPlanningRequest({
       )
         ? { afterWorkBufferMinutes: DEFAULT_AFTER_WORK_BUFFER_MINUTES }
         : {}),
+      ...(fallbackTimeRanges.length > 0 ? { fallbackTimeRanges } : {}),
       ...(preferredTimeRanges.length > 0 ? { preferredTimeRanges } : {}),
     },
     requestKind: "bounded_multi_session_plan",

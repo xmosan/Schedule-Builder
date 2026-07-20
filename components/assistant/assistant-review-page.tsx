@@ -44,6 +44,14 @@ async function getAccessToken() {
   return data.session?.access_token ?? null;
 }
 
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Detroit";
+  } catch {
+    return "America/Detroit";
+  }
+}
+
 function mergeApplyResponse(
   current: LoadedAssistantWorkflow,
   response: AssistantApplyResponse,
@@ -308,6 +316,50 @@ export function AssistantReviewPage({ proposalBatchId }: AssistantReviewPageProp
     }
   }
 
+  async function reloadReviewAfterMutation() {
+    const accessToken = await getAccessToken();
+    if (!accessToken) throw new Error("Sign in before checking this plan.");
+    const response = await fetch(
+      `/api/assistant/proposals?batchId=${encodeURIComponent(proposalBatchId)}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const payload = (await response.json().catch(() => null)) as
+      | LoadedAssistantWorkflow
+      | { error?: string }
+      | null;
+    if (!response.ok || !isLoadedAssistantWorkflow(payload)) {
+      throw new Error(
+        payload && "error" in payload && payload.error
+          ? payload.error
+          : "The plan result could not be reloaded.",
+      );
+    }
+    setReview(payload);
+    const pendingIds = new Set(payload.workflow.pendingProposalIds);
+    setSelectedIds((current) =>
+      new Set([...current].filter((proposalId) => pendingIds.has(proposalId))),
+    );
+    setActionStates(
+      Object.fromEntries(
+        payload.proposals.map((proposal) => [
+          proposal.id,
+          {
+            editing: false,
+            status:
+              proposal.approvalStatus === "applied"
+                ? ("applied" as const)
+                : proposal.approvalStatus === "rejected"
+                  ? ("removed" as const)
+                  : payload.workflow.state === "applying"
+                    ? ("applying" as const)
+                    : ("pending" as const),
+          },
+        ]),
+      ),
+    );
+    return payload;
+  }
+
   async function applyProposals(suggestions: AssistantSuggestion[]) {
     if (!review || suggestions.length === 0) return;
     suggestions.forEach((suggestion) => {
@@ -328,6 +380,7 @@ export function AssistantReviewPage({ proposalBatchId }: AssistantReviewPageProp
         },
         body: JSON.stringify({
           proposalIds: suggestions.map((suggestion) => suggestion.id),
+          timezone: getBrowserTimeZone(),
           workflowId: review.workflow.workflowId,
         }),
       });
@@ -368,12 +421,30 @@ export function AssistantReviewPage({ proposalBatchId }: AssistantReviewPageProp
         applyError,
         "The selected proposals could not be applied.",
       );
+      try {
+        const refreshed = await reloadReviewAfterMutation();
+        const appliedIds = new Set(refreshed.workflow.appliedProposalIds);
+        if (suggestions.some((suggestion) => appliedIds.has(suggestion.id))) {
+          window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+          setError(null);
+          return;
+        }
+        if (refreshed.workflow.state === "applying") {
+          setError(
+            "The server is still applying this plan. No second attempt was started.",
+          );
+          return;
+        }
+      } catch {
+        // Keep the result explicitly unconfirmed below; the page never treats
+        // its previous local state as proof of success.
+      }
       suggestions.forEach((suggestion) => {
         setActionStates((current) => ({
           ...current,
           [suggestion.id]: {
             editing: false,
-            message,
+            message: `${message} The final server state could not be confirmed; check Weekly Plan before retrying.`,
             status: "error",
           },
         }));

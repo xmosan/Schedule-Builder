@@ -228,11 +228,18 @@ const migration = readFileSync(
   new URL("../supabase/assistant-automation.sql", import.meta.url),
   "utf8",
 );
+const integrityMigration = readFileSync(
+  new URL("../supabase/assistant-apply-integrity.sql", import.meta.url),
+  "utf8",
+);
 assert.match(planRoute, /\/api\/assistant\/apply/);
 assert.match(applyRoute, /loadAutomationGrantById/);
 assert.match(applyRoute, /persistPlanningDecision/);
 assert.match(applyRoute, /persistActionReceipt/);
-assert.match(applyRoute, /state: "applying" as const/);
+assert.match(
+  integrityMigration,
+  /update public\.assistant_workflows[\s\S]*set state = 'applying'/,
+);
 assert.match(undoRoute, /undo_assistant_decision/);
 assert.match(migration, /block\.updated_at = \(expected->>'updated_at'\)::timestamptz/);
 assert.match(migration, /user_id = \(select auth\.uid\(\)\)/);

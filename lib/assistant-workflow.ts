@@ -7,6 +7,7 @@ import type {
 } from "@/lib/assistant-intelligence";
 import { parseStartTimeToMinutes, weekDays } from "@/lib/weekly-plan";
 import { isCommandDerivedTitle } from "@/lib/assistant-semantics";
+import type { ApplyWorkflowResult } from "@/lib/assistant-apply-result";
 
 export const schedulingWorkflowStates = [
   "idle",
@@ -17,8 +18,11 @@ export const schedulingWorkflowStates = [
   "awaiting_approval",
   "applying",
   "applied",
+  "applied_with_warning",
+  "partially_applied",
   "failed",
   "canceled",
+  "undone",
 ] as const;
 
 export type SchedulingWorkflowState = (typeof schedulingWorkflowStates)[number];
@@ -274,6 +278,8 @@ export function getCanonicalWorkflowState(
 ): SchedulingWorkflowState {
   if (!context) return "idle";
   if (context.state === "failed") return "failed";
+  if (context.state === "applied_with_warning") return "applied_with_warning";
+  if (context.state === "partially_applied") return "partially_applied";
   if (context.state === "applied") return "applied";
   if (context.state === "calculating_availability") {
     return "calculating_availability";
@@ -396,6 +402,8 @@ export function deriveAssistantWorkflowAfterProposalUpdates(
             state:
               !hasPendingProposals && hasAppliedProposals
                 ? "applied"
+                : hasPendingProposals && hasAppliedProposals
+                  ? "partially_applied"
                 : "awaiting_apply",
           }
         : null,
@@ -404,12 +412,115 @@ export function deriveAssistantWorkflowAfterProposalUpdates(
     state:
       !hasPendingProposals && hasAppliedProposals
         ? "applied"
+        : hasPendingProposals && hasAppliedProposals
+          ? "partially_applied"
         : hasPendingProposals
           ? "awaiting_approval"
           : "idle",
   };
 
   return { proposals: updatedProposals, workflow: nextWorkflow };
+}
+
+export function reconcileAssistantWorkflowWithApplyResult(
+  loaded: {
+    batch: ProposalBatch | null;
+    proposals: CanonicalAssistantProposal[];
+    workflow: SchedulingWorkflowContext;
+  },
+  applyResult: ApplyWorkflowResult,
+  now = new Date().toISOString(),
+) {
+  const requestedIds = new Set(applyResult.requestedProposalIds);
+  const appliedRecordByProposalId = new Map(
+    applyResult.applied.map((record) => [record.proposalId, record]),
+  );
+  const failedIds = new Set(
+    applyResult.failed.map((failure) => failure.proposalId),
+  );
+  const pendingIds = new Set(applyResult.pendingProposalIds);
+  const proposals = loaded.proposals.map((proposal) => {
+    if (!requestedIds.has(proposal.id)) return proposal;
+    const appliedRecord = appliedRecordByProposalId.get(proposal.id);
+    return {
+      ...proposal,
+      approvalStatus: appliedRecord
+        ? ("applied" as const)
+        : pendingIds.has(proposal.id)
+          ? ("pending" as const)
+          : failedIds.has(proposal.id)
+            ? ("rejected" as const)
+            : proposal.approvalStatus,
+      savedRecordId: appliedRecord?.recordId ?? null,
+      updatedAt: now,
+    };
+  });
+  const appliedProposalIds = proposals
+    .filter((proposal) => proposal.approvalStatus === "applied")
+    .map((proposal) => proposal.id);
+  const pendingProposalIds = proposals
+    .filter((proposal) => proposal.approvalStatus === "pending")
+    .map((proposal) => proposal.id);
+  const hasApplied = appliedProposalIds.length > 0;
+  const hasPending = pendingProposalIds.length > 0;
+  const hasRejected = proposals.some(
+    (proposal) => proposal.approvalStatus === "rejected",
+  );
+  const hasPartialOutcome =
+    applyResult.authoritativeStatus === "partially_applied" ||
+    (hasApplied && hasRejected);
+  const state: SchedulingWorkflowState =
+    hasApplied && (hasPending || hasPartialOutcome)
+      ? "partially_applied"
+      : hasApplied
+        ? applyResult.authoritativeStatus === "applied_with_warning"
+          ? "applied_with_warning"
+          : "applied"
+        : hasPending
+          ? "awaiting_approval"
+          : "failed";
+  const workflow: SchedulingWorkflowContext = {
+    ...loaded.workflow,
+    appliedProposalIds,
+    completionStatus: hasApplied
+      ? "records_applied"
+      : hasPending
+        ? "proposal_created"
+        : "nothing_created",
+    context: loaded.workflow.context
+      ? {
+          ...loaded.workflow.context,
+          applyResult,
+          lastUpdatedAt: now,
+          state:
+            state === "awaiting_approval"
+              ? "awaiting_apply"
+              : state === "partially_applied"
+                ? "partially_applied"
+                : state === "applied_with_warning"
+                  ? "applied_with_warning"
+                  : state === "applied"
+                    ? "applied"
+                    : "failed",
+        }
+      : loaded.workflow.context,
+    lastUpdatedAt: now,
+    pendingProposalIds,
+    state,
+  };
+  const batch = loaded.batch
+    ? {
+        ...loaded.batch,
+        status: hasApplied && (hasPending || hasPartialOutcome)
+          ? ("partially_applied" as const)
+          : hasApplied
+            ? ("applied" as const)
+            : hasPending
+              ? ("pending" as const)
+              : ("rejected" as const),
+      }
+    : null;
+  return { batch, proposals, workflow };
 }
 
 export function getProposalBatchStatus(

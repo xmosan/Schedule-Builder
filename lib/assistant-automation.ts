@@ -21,6 +21,13 @@ export type AutomationGrant = {
   expiresAt?: string;
   guardrails: {
     allowedDays?: number[];
+    allowedTimeExceptions?: Array<{
+      activityTitle: string;
+      durationMinutes?: number;
+      end: string;
+      start: string;
+      weekday: number;
+    }>;
     earliestTime?: string;
     excludedDays?: number[];
     latestTime?: string;
@@ -82,8 +89,10 @@ export type AssistantWorkflowStatus =
   | "applying"
   | "partially_applied"
   | "applied"
+  | "applied_with_warning"
   | "failed"
-  | "canceled";
+  | "canceled"
+  | "undone";
 
 export type CompactActionReceipt = {
   actionType:
@@ -238,6 +247,12 @@ export function extractAutomationGrant({
       ...(multiSessionRequest?.globalConstraints.requireDifferentDays
         ? { requireDifferentDays: true }
         : {}),
+      ...(multiSessionRequest?.preferences.fallbackTimeRanges?.length
+        ? {
+            allowedTimeExceptions:
+              multiSessionRequest.preferences.fallbackTimeRanges,
+          }
+        : {}),
       ...(latestTime ? { latestTime } : {}),
       ...(count ? { maximumOccurrences: count } : {}),
       ...(duration ? { maximumSessionMinutes: duration } : {}),
@@ -388,6 +403,29 @@ export function decideAssistantAutomation({
         const latest = timeToMinutes(grant.guardrails.latestTime);
         const earliest = timeToMinutes(grant.guardrails.earliestTime);
         const date = suggestion.itemDate;
+        const primaryTimeRangeSatisfied =
+          start === null ||
+          ((earliest === null || start >= earliest) &&
+            (latest === null || start + duration <= latest));
+        const allowedTimeException =
+          date && start !== null
+            ? grant.guardrails.allowedTimeExceptions?.some((exception) => {
+                const exceptionStart = timeToMinutes(exception.start);
+                const exceptionEnd = timeToMinutes(exception.end);
+                return (
+                  new Date(`${date}T12:00:00Z`).getUTCDay() ===
+                    exception.weekday &&
+                  normalizeTitle(title) ===
+                    normalizeTitle(exception.activityTitle) &&
+                  (!exception.durationMinutes ||
+                    duration === exception.durationMinutes) &&
+                  exceptionStart !== null &&
+                  exceptionEnd !== null &&
+                  start >= exceptionStart &&
+                  start + duration <= exceptionEnd
+                );
+              }) ?? false
+            : false;
         return (
           normalizeTitle(title).includes(normalizeTitle(grant.activityTitle ?? title)) &&
           (!date || !grant.guardrails.planningStartDate || date >= grant.guardrails.planningStartDate) &&
@@ -397,8 +435,7 @@ export function decideAssistantAutomation({
               new Date(`${date}T12:00:00Z`).getUTCDay(),
             )) &&
           (!grant.guardrails.maximumSessionMinutes || duration <= grant.guardrails.maximumSessionMinutes) &&
-          (start === null || earliest === null || start >= earliest) &&
-          (start === null || latest === null || start + duration <= latest)
+          (primaryTimeRangeSatisfied || allowedTimeException)
         );
       }) &&
       (!grant.guardrails.maximumOccurrences ||
@@ -466,8 +503,12 @@ export function resolveAssistantWorkflowStatus({
     return "building_plan";
   }
   if (!workflow) return "ready";
-  if (workflow.state === "canceled") return "canceled";
+  if (workflow.state === "canceled" || workflow.state === "undone") {
+    return "undone";
+  }
   if (workflow.state === "failed") return "failed";
+  if (workflow.state === "applied_with_warning") return "applied_with_warning";
+  if (workflow.state === "partially_applied") return "partially_applied";
   if (
     workflow.appliedProposalIds.length > 0 &&
     workflow.pendingProposalIds.length > 0
@@ -495,6 +536,7 @@ export function resolveAssistantWorkflowStatus({
 export function getAssistantWorkflowStatusLabel(status: AssistantWorkflowStatus) {
   return {
     applied: "Plan applied",
+    applied_with_warning: "Plan applied with a warning",
     applying: "Applying",
     building_plan: "Building your plan",
     canceled: "Automated plan undone",
@@ -504,6 +546,7 @@ export function getAssistantWorkflowStatusLabel(status: AssistantWorkflowStatus)
     ready_for_review: "Ready for review",
     understanding_request: "Understanding your request",
     waiting_for_details: "Waiting for details",
+    undone: "Automated plan undone",
   }[status];
 }
 

@@ -71,7 +71,7 @@ type UndoRpcResult = {
 function formatRecord(record: UndoRpcResult["reversed_records"][number]) {
   const date = record.scheduled_date ?? "saved date";
   const time = record.start_time?.slice(0, 5);
-  return `- ${date}${time ? ` at ${time}` : ""}`;
+  return `- ${record.project_name} · ${date}${time ? ` at ${time}` : ""}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -109,6 +109,8 @@ export async function POST(request: NextRequest) {
   }
 
   const undo = result.data as UndoRpcResult;
+  const lines = undo.reversed_records.map(formatRecord);
+  const message = `Undone. I removed ${undo.reversed_records.length} automatically scheduled block${undo.reversed_records.length === 1 ? "" : "s"}.${lines.length ? `\n\n${lines.join("\n")}` : ""}`;
   const [workflowResult, receiptResult] = await Promise.all([
     loadAssistantWorkflowById(auth.supabase, auth.userId, undo.workflow_id),
     loadReceiptForDecision(auth.supabase, auth.userId, decisionRecordId),
@@ -119,17 +121,27 @@ export async function POST(request: NextRequest) {
     receiptResult.error ||
     !receiptResult.data
   ) {
-    return NextResponse.json(
-      {
-        error:
-          "The blocks were reversed, but I couldn’t reload the updated automation receipt.",
-      },
-      { status: 500 },
-    );
+    console.error("assistant_workflow", {
+      decisionRecordId,
+      event: "undo_committed_reload_failed",
+      receiptReloadResult: receiptResult.error ? "failed" : "missing",
+      reversedRecordCount: undo.reversed_records.length,
+      workflowId: undo.workflow_id,
+      workflowReloadResult: workflowResult.error ? "failed" : "missing",
+    });
+    return NextResponse.json({
+      automationReceipt: receiptResult.data ?? null,
+      message,
+      reloadWarning:
+        "The blocks were removed, but the updated Assistant details could not be reloaded. Refresh to confirm the latest plan state.",
+      reversedRecords: undo.reversed_records,
+      workflow: workflowResult.data?.workflow ?? null,
+      workflowStatus: workflowResult.data
+        ? resolveAssistantWorkflowStatus({ workflow: workflowResult.data.workflow })
+        : "undone",
+    } satisfies AssistantUndoResponse);
   }
 
-  const lines = undo.reversed_records.map(formatRecord);
-  const message = `Undone. I removed ${undo.reversed_records.length} automatically scheduled block${undo.reversed_records.length === 1 ? "" : "s"}.${lines.length ? `\n\n${lines.join("\n")}` : ""}`;
   const response: AssistantUndoResponse = {
     automationReceipt: receiptResult.data,
     message,

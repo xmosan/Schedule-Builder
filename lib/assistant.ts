@@ -13,6 +13,10 @@ import type {
   SchedulingWorkflowContext,
 } from "@/lib/assistant-workflow";
 import type { AssistantResponsePlan } from "@/lib/assistant-presentation";
+import type {
+  ApplyResponsePlan,
+  ApplyWorkflowResult,
+} from "@/lib/assistant-apply-result";
 import {
   createDeterministicScheduleAnswer,
   type AssistantScheduleAnalysisInput,
@@ -210,6 +214,8 @@ export type AssistantSuggestion = {
 
 export type AssistantPlanReviewResponse = {
   actions: AssistantSuggestion[];
+  applyResponsePlan?: ApplyResponsePlan | null;
+  applyResult?: ApplyWorkflowResult | null;
   assistantMessage: string;
   context: AssistantContextSummary;
   contextStatus?: AssistantContextStatus;
@@ -245,6 +251,8 @@ export type AssistantApplyResult = {
 };
 
 export type AssistantApplyResponse = {
+  applyResponsePlan: ApplyResponsePlan;
+  applyResult: ApplyWorkflowResult;
   completionStatus: AssistantCompletionStatus;
   context: AssistantContextSummary;
   message: string;
@@ -257,15 +265,16 @@ export type AssistantApplyResponse = {
 };
 
 export type AssistantUndoResponse = {
-  automationReceipt: CompactActionReceipt;
+  automationReceipt: CompactActionReceipt | null;
   message: string;
+  reloadWarning?: string;
   reversedRecords: Array<{
     block_id: string;
     project_name: string;
     scheduled_date: string | null;
     start_time: string | null;
   }>;
-  workflow: SchedulingWorkflowContext;
+  workflow: SchedulingWorkflowContext | null;
   workflowStatus: AssistantWorkflowStatus;
 };
 

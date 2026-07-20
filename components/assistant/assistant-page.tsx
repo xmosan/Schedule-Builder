@@ -11,10 +11,7 @@ import {
   writeLocalAssistantConversation,
   type AssistantConversationSnapshot,
 } from "@/lib/assistant-conversation";
-import type {
-  AssistantAppliedScheduleRecord,
-  AssistantSchedulingContext,
-} from "@/lib/assistant-schedule-analysis";
+import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
 import { TargetIcon } from "@/components/projects/icons";
 import { AssistantClarificationPanel } from "@/components/assistant/assistant-clarification-panel";
 import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
@@ -32,6 +29,13 @@ import {
   type AssistantSuggestionType,
   type AssistantUndoResponse,
 } from "@/lib/assistant";
+import {
+  createApplyResponsePlan,
+  normalizeApplyWorkflowResult,
+  validateApplyResponseText,
+  type ApplyResponsePlan,
+  type ApplyWorkflowResult,
+} from "@/lib/assistant-apply-result";
 import type { SchedulingWorkflowContext } from "@/lib/assistant-workflow";
 import {
   priorityLevels,
@@ -267,6 +271,40 @@ function stripTrailingPendingQuestion(
   return content.trimEnd().slice(0, -pendingQuestion.length).trimEnd();
 }
 
+const unverifiedSuccessClaimPattern =
+  /\b(?:you(?:'re| are) all set|done|(?:i|we) (?:added|applied|saved|scheduled|put)\b|(?:it|that|the (?:plan|block|session)|your plan) (?:is|was|has been) (?:added|applied|saved|scheduled|updated)|on your schedule)\b/i;
+const explicitlyUnappliedPattern =
+  /\b(?:nothing (?:has been|was) (?:added|applied|saved|scheduled)|not (?:been )?(?:added|applied|saved|scheduled)|has not been|hasn't been|is not scheduled|isn't scheduled)\b/i;
+
+function guardUnverifiedAssistantContent(
+  content: string,
+  response?: AssistantPlanReviewResponse,
+) {
+  const applyResult = getCanonicalApplyResult(response);
+  if (applyResult) {
+    return validateApplyResponseText(content, applyResult).valid
+      ? content
+      : createCanonicalApplyResponsePlan(
+          applyResult,
+          response?.applyResponsePlan,
+        ).primaryMessage;
+  }
+
+  if (
+    !content ||
+    explicitlyUnappliedPattern.test(content) ||
+    !unverifiedSuccessClaimPattern.test(content)
+  ) {
+    return content;
+  }
+
+  if ((response?.workflow?.pendingProposalIds.length ?? 0) > 0) {
+    return "I drafted the requested plan for your review. Nothing has been added yet.";
+  }
+
+  return "I couldn’t verify any saved schedule records, so no success confirmation was recorded.";
+}
+
 function getErrorMessage(error: unknown) {
   return getUserFacingError(
     error,
@@ -334,62 +372,13 @@ function addMinutesToTime(startTime: string, durationHours: number) {
   ).padStart(2, "0")}`;
 }
 
-function updateSchedulingContextAfterApply(
-  context: AssistantSchedulingContext | null,
-  results: AssistantApplyResponse["results"],
-) {
-  if (!context) return null;
-
-  const newRecords: AssistantAppliedScheduleRecord[] = results.flatMap((result) => {
-    if (
-      result.status !== "applied" ||
-      !result.createdBlock ||
-      !result.createdDate ||
-      !result.createdBlock.startTime
-    ) {
-      return [];
-    }
-
-    return [
-      {
-        date: result.createdDate,
-        endTime: addMinutesToTime(
-          result.createdBlock.startTime,
-          result.createdBlock.estimatedHours,
-        ),
-        id: result.savedRecordId ?? result.createdBlock.id,
-        proposalId: result.suggestionId,
-        startTime: result.createdBlock.startTime,
-        title: result.createdBlock.projectName,
-      },
-    ];
-  });
-  const appliedRecords = [
-    ...context.appliedRecords,
-    ...newRecords.filter(
-      (record) => !context.appliedRecords.some((existing) => existing.id === record.id),
-    ),
-  ];
-  const proposalCount = context.pendingProposals.length || (context.pendingProposal ? 1 : 0);
-
-  return {
-    ...context,
-    appliedRecords,
-    lastUpdatedAt: new Date().toISOString(),
-    state:
-      proposalCount > 0 && appliedRecords.length >= proposalCount
-        ? ("applied" as const)
-        : context.state,
-  };
-}
-
 function getPendingReviewCount(
   workflow: SchedulingWorkflowContext | null,
 ) {
   return workflow?.pendingProposalIds.length ?? 0;
 }
 
-function getActions(response?: AssistantPlanReviewResponse) {
+function getActions(response?: AssistantPlanReviewResponse | null) {
   return response?.actions ?? [];
 }
 
@@ -397,12 +386,258 @@ function normalizeResponseForChat(
   response: AssistantPlanReviewResponse,
   _messageId: string,
 ): AssistantPlanReviewResponse {
-  const actions = getActions(response);
+  const preservesConversationalReply =
+    response.responsePlan?.mode === "social_reply";
+  const actions = preservesConversationalReply
+    ? []
+    : response.canonicalProposals?.length
+    ? response.canonicalProposals.map((proposal) => proposal.suggestion)
+    : getActions(response);
+  const applyResult = getCanonicalApplyResult(response);
+
+  if (applyResult && !preservesConversationalReply) {
+    const applyResponsePlan = createCanonicalApplyResponsePlan(
+      applyResult,
+      response.applyResponsePlan,
+    );
+    const workflow = attachApplyResultToWorkflow(response.workflow, applyResult);
+    return {
+      ...response,
+      actions,
+      applyResponsePlan,
+      applyResult,
+      assistantMessage: applyResponsePlan.primaryMessage,
+      message: applyResponsePlan.primaryMessage,
+      schedulingContext:
+        workflow?.context ??
+        (response.schedulingContext
+          ? { ...response.schedulingContext, applyResult }
+          : null),
+      suggestions: actions,
+      workflow,
+    };
+  }
 
   return {
     ...response,
     actions,
   };
+}
+
+function stripUnverifiedSnapshotApplyTruth(
+  response?: AssistantPlanReviewResponse,
+) {
+  if (!response) return response;
+  const workflow = response.workflow
+    ? {
+        ...response.workflow,
+        context: response.workflow.context
+          ? { ...response.workflow.context, applyResult: null }
+          : response.workflow.context,
+      }
+    : response.workflow;
+  return {
+    ...response,
+    applyResponsePlan: null,
+    applyResult: null,
+    automationReceipt: null,
+    schedulingContext: response.schedulingContext
+      ? { ...response.schedulingContext, applyResult: null }
+      : response.schedulingContext,
+    workflow,
+    workflowStatus: undefined,
+  } satisfies AssistantPlanReviewResponse;
+}
+
+function getCanonicalApplyResult(
+  response?: AssistantPlanReviewResponse | null,
+) {
+  if (
+    response?.responsePlan?.mode === "social_reply" &&
+    !response.applyResult
+  ) {
+    return null;
+  }
+  return normalizeApplyWorkflowResult(
+    response?.applyResult ??
+      response?.workflow?.context?.applyResult ??
+      response?.schedulingContext?.applyResult,
+  );
+}
+
+function createCanonicalApplyResponsePlan(
+  result: ApplyWorkflowResult,
+  suppliedPlan?: ApplyResponsePlan | null,
+) {
+  return createApplyResponsePlan({
+    activityTitle: suppliedPlan?.activityTitle?.trim() || "schedule",
+    result,
+  });
+}
+
+function attachApplyResultToWorkflow(
+  workflow: SchedulingWorkflowContext | null | undefined,
+  result: ApplyWorkflowResult,
+) {
+  if (!workflow?.context) return workflow ?? null;
+  return {
+    ...workflow,
+    context: {
+      ...workflow.context,
+      applyResult: result,
+    },
+  } satisfies SchedulingWorkflowContext;
+}
+
+function getResponseProposalIds(response?: AssistantPlanReviewResponse | null) {
+  return new Set([
+    ...(response?.workflow?.proposalIds ?? []),
+    ...(response?.canonicalProposals?.map((proposal) => proposal.id) ?? []),
+    ...getActions(response).map((suggestion) => suggestion.id),
+  ]);
+}
+
+function mergeApplyResponseIntoChatResponse(
+  base: AssistantPlanReviewResponse,
+  applyResponse: AssistantApplyResponse,
+) {
+  const result = normalizeApplyWorkflowResult(applyResponse.applyResult);
+
+  if (!result) {
+    const content =
+      "I couldn’t verify that the approved changes were saved. Check your Weekly Plan before trying again.";
+    return {
+      content,
+      response: {
+        ...base,
+        applyResponsePlan: null,
+        applyResult: null,
+        assistantMessage: content,
+        message: content,
+      },
+    };
+  }
+
+  const responsePlan = createCanonicalApplyResponsePlan(
+    result,
+    applyResponse.applyResponsePlan,
+  );
+  const canonicalActions = applyResponse.canonicalProposals?.map(
+    (proposal) => proposal.suggestion,
+  );
+  const actions = canonicalActions?.length ? canonicalActions : getActions(base);
+  const workflow = attachApplyResultToWorkflow(
+    applyResponse.workflow ?? base.workflow,
+    result,
+  );
+  const schedulingContext =
+    workflow?.context ??
+    (base.schedulingContext
+      ? { ...base.schedulingContext, applyResult: result }
+      : null);
+
+  return {
+    content: responsePlan.primaryMessage,
+    response: {
+      ...base,
+      actions,
+      applyResponsePlan: responsePlan,
+      applyResult: result,
+      assistantMessage: responsePlan.primaryMessage,
+      automationReceipt:
+        applyResponse.automationReceipt ?? base.automationReceipt ?? null,
+      canonicalProposals:
+        applyResponse.canonicalProposals ?? base.canonicalProposals,
+      context: applyResponse.context,
+      message: responsePlan.primaryMessage,
+      proposalBatch: applyResponse.proposalBatch ?? base.proposalBatch,
+      schedulingContext,
+      suggestions: actions,
+      workflow,
+      workflowStatus: applyResponse.workflowStatus ?? base.workflowStatus,
+    },
+  };
+}
+
+function mergeCanonicalPlanStateIntoChatResponse(
+  base: AssistantPlanReviewResponse,
+  canonicalResponse: AssistantPlanReviewResponse,
+) {
+  const result = getCanonicalApplyResult(canonicalResponse);
+  const canonicalActions = canonicalResponse.canonicalProposals?.map(
+    (proposal) => proposal.suggestion,
+  );
+  const actions = canonicalActions?.length
+    ? canonicalActions
+    : canonicalResponse.actions.length > 0
+      ? canonicalResponse.actions
+      : getActions(base);
+  const workflow = result
+    ? attachApplyResultToWorkflow(canonicalResponse.workflow, result)
+    : canonicalResponse.workflow;
+  const responsePlan = result
+    ? createCanonicalApplyResponsePlan(
+        result,
+        canonicalResponse.applyResponsePlan ?? base.applyResponsePlan,
+      )
+    : null;
+  const content = responsePlan?.primaryMessage ??
+    (canonicalResponse.workflow?.completionStatus === "records_applied"
+      ? "I couldn’t verify the exact saved schedule details in this conversation. Check your Weekly Plan for the current records."
+      : base.assistantMessage || base.message);
+
+  return {
+    content,
+    response: {
+      ...base,
+      actions,
+      applyResponsePlan: responsePlan,
+      applyResult: result,
+      assistantMessage: content,
+      automationReceipt:
+        canonicalResponse.automationReceipt ?? base.automationReceipt ?? null,
+      canonicalProposals:
+        canonicalResponse.canonicalProposals ?? base.canonicalProposals,
+      context: canonicalResponse.context,
+      contextStatus: canonicalResponse.contextStatus,
+      dataWarning: canonicalResponse.dataWarning,
+      message: content,
+      proposalBatch: canonicalResponse.proposalBatch ?? base.proposalBatch,
+      schedulingContext:
+        workflow?.context ??
+        canonicalResponse.schedulingContext ??
+        base.schedulingContext,
+      suggestions: actions,
+      workflow: workflow ?? base.workflow,
+      workflowStatus: canonicalResponse.workflowStatus ?? base.workflowStatus,
+    },
+  };
+}
+
+function findLatestMatchingAssistantMessageIndex(
+  messages: ChatMessage[],
+  proposalIds: Set<string>,
+  workflowId?: string | null,
+) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant" || !message.response) continue;
+    if (message.response.responsePlan?.mode === "social_reply") continue;
+    const messageWorkflowId = message.response.workflow?.workflowId;
+    const messageProposalIds = getResponseProposalIds(message.response);
+    const hasProposalIntersection = [...proposalIds].some((proposalId) =>
+      messageProposalIds.has(proposalId),
+    );
+    if (
+      hasProposalIntersection ||
+      (proposalIds.size === 0 &&
+        workflowId &&
+        messageWorkflowId === workflowId)
+    ) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function normalizeMessagesForRequest(
@@ -1130,9 +1365,6 @@ function ChatBubble({
   onDismissNotice,
   onUndo,
   undoingDecisionId,
-  appliedProposalIds,
-  pendingProposalIds,
-  workflowProposalIds,
 }: {
   acknowledgedNoticeIds: string[];
   actionStates: Record<string, ActionState>;
@@ -1144,11 +1376,14 @@ function ChatBubble({
   onDismissNotice: (noticeId: string) => void;
   onUndo: (decisionRecordId: string) => void;
   undoingDecisionId: string | null;
-  appliedProposalIds: string[];
-  pendingProposalIds: string[];
-  workflowProposalIds: string[];
 }) {
   const isUser = message.role === "user";
+  const applyResult = getCanonicalApplyResult(message.response);
+  const workflowProposalIds = message.response?.workflow?.proposalIds ?? [];
+  const pendingProposalIds =
+    applyResult?.pendingProposalIds ??
+    message.response?.workflow?.pendingProposalIds ??
+    [];
   const workflowProposalIdSet = new Set(workflowProposalIds);
   const hasCanonicalProposalIds = workflowProposalIdSet.size > 0;
   const actions = getActions(message.response).filter(
@@ -1175,13 +1410,21 @@ function ChatBubble({
     message.response?.proposalBatch?.id ??
     actionableActions.find((suggestion) => suggestion.batchId)?.batchId ??
     null;
+  const hasVerifiedAppliedRecords = Boolean(
+    applyResult && !applyResult.nothingChanged && applyResult.applied.length > 0,
+  );
+  const showsPlanSummary =
+    (actionableActions.length > 0 || hasVerifiedAppliedRecords) &&
+    (pendingActionableActions.length > 0 || hasVerifiedAppliedRecords);
   const rawDisplayedContent = stripTrailingPendingQuestion(
     message.content,
     hiddenTrailingPrompt,
   );
   const displayedContent = isUser
     ? rawDisplayedContent
-    : sanitizeAssistantUserFacingText(rawDisplayedContent);
+    : sanitizeAssistantUserFacingText(
+        guardUnverifiedAssistantContent(rawDisplayedContent, message.response),
+      );
   const handledNoticeIds = new Set([
     ...acknowledgedNoticeIds,
     ...dismissedNoticeIds,
@@ -1191,7 +1434,7 @@ function ChatBubble({
   ).filter((notice) => !handledNoticeIds.has(notice.id));
   const showsMessageBubble = message.isStreaming || Boolean(displayedContent);
 
-  if (!showsMessageBubble && actions.length === 0 && relevantNotices.length === 0) {
+  if (!showsMessageBubble && !showsPlanSummary && relevantNotices.length === 0) {
     return null;
   }
 
@@ -1207,7 +1450,7 @@ function ChatBubble({
           "flex flex-col gap-2",
           isUser
             ? "max-w-[90%] items-end sm:max-w-[82%]"
-            : actions.length > 0
+            : showsPlanSummary
               ? "min-w-0 flex-1 items-start"
               : "max-w-[92%] items-start sm:max-w-[82%]",
         )}
@@ -1280,14 +1523,15 @@ function ChatBubble({
           </section>
         ) : null}
 
-        {!isUser && !message.isStreaming && actionableActions.length > 0 ? (
+        {!isUser && !message.isStreaming && showsPlanSummary ? (
           <div
             id={`assistant-review-${message.id}`}
             className="mt-2 w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal/30"
             tabIndex={-1}
           >
             <AssistantPlanSummary
-              appliedProposalIds={appliedProposalIds}
+              applyResponsePlan={message.response?.applyResponsePlan}
+              applyResult={applyResult}
               automationReceipt={message.response?.automationReceipt}
               batchId={batchId}
               isApplying={pendingActionableActions.some(
@@ -1295,7 +1539,7 @@ function ChatBubble({
               )}
               isUndoing={
                 undoingDecisionId ===
-                message.response?.automationReceipt?.decisionRecordId
+                applyResult?.planningDecisionId
               }
               pendingProposalIds={pendingProposalIds}
               series={seriesProposal}
@@ -1701,6 +1945,7 @@ export function AssistantPage() {
       },
       body: JSON.stringify({
         proposalIds: suggestions.map((suggestion) => suggestion.id),
+        timezone: getBrowserTimeZone(),
         workflowId,
       }),
     });
@@ -1805,14 +2050,7 @@ export function AssistantPage() {
     setIsRefreshingContext(true);
 
     try {
-      const response = await requestPlanReview("GET");
-      setContext(response.context);
-      setContextStatus(response.contextStatus);
-      setContextWarning(response.dataWarning ?? null);
-      setActiveWorkflow(response.workflow ?? null);
-      if (response.workflow) {
-        setActiveSchedulingContext(response.workflow.context);
-      }
+      await reconcileCanonicalPlanAfterMutation();
       setError(null);
       setStatus("ready");
     } catch (refreshError) {
@@ -1820,6 +2058,18 @@ export function AssistantPage() {
     } finally {
       setIsRefreshingContext(false);
     }
+  }
+
+  async function reconcileCanonicalPlanAfterMutation() {
+    const response = await requestPlanReview("GET");
+    setContext(response.context);
+    setContextStatus(response.contextStatus);
+    setContextWarning(response.dataWarning ?? null);
+    setActiveWorkflow(response.workflow ?? null);
+    setActiveSchedulingContext(response.workflow?.context ?? null);
+    reconcileMessagesWithCanonicalPlan(response);
+    reconcileActionStatesWithApplyResult(getCanonicalApplyResult(response));
+    return response;
   }
 
   useEffect(() => {
@@ -1889,6 +2139,7 @@ export function AssistantPage() {
             restoredSnapshot.messages.map((message) => ({
               ...message,
               content: stripLegacyWorkspaceWarning(message.content),
+              response: stripUnverifiedSnapshotApplyTruth(message.response),
             })),
           );
           setActionStates(
@@ -1927,6 +2178,7 @@ export function AssistantPage() {
         if (response.workflow) {
           setActiveSchedulingContext(response.workflow.context);
         }
+        reconcileMessagesWithCanonicalPlan(response);
         setHasRestoredConversation(true);
         setError(null);
         setStatus("ready");
@@ -2067,6 +2319,195 @@ export function AssistantPage() {
     }, 3500);
   }
 
+  function reconcileActionStatesWithApplyResult(
+    result: ApplyWorkflowResult | null,
+  ) {
+    if (!result) return;
+    const appliedIds = new Set(
+      result.applied.map((record) => record.proposalId),
+    );
+    const failedById = new Map(
+      result.failed.map((failure) => [failure.proposalId, failure.safeMessage]),
+    );
+    const pendingIds = new Set(result.pendingProposalIds);
+
+    setActionStates((current) => {
+      const next = { ...current };
+      result.requestedProposalIds.forEach((proposalId) => {
+        if (appliedIds.has(proposalId)) {
+          next[proposalId] = {
+            ...next[proposalId],
+            editing: false,
+            status: "applied",
+          };
+        } else if (failedById.has(proposalId)) {
+          next[proposalId] = {
+            ...next[proposalId],
+            editing: false,
+            message: failedById.get(proposalId),
+            status: "error",
+          };
+        } else if (pendingIds.has(proposalId)) {
+          next[proposalId] = {
+            ...next[proposalId],
+            editing: false,
+            status: "pending",
+          };
+        }
+      });
+      return next;
+    });
+  }
+
+  function reconcileMessagesAfterApply({
+    applyResponse,
+    requestedProposalIds,
+    resultMessageId,
+    sourceMessageId,
+  }: {
+    applyResponse: AssistantApplyResponse;
+    requestedProposalIds: string[];
+    resultMessageId?: string;
+    sourceMessageId?: string;
+  }) {
+    const canonicalResult = normalizeApplyWorkflowResult(
+      applyResponse.applyResult,
+    );
+    const proposalIds = new Set(
+      canonicalResult?.requestedProposalIds ?? requestedProposalIds,
+    );
+
+    setMessages((current) => {
+      const sourceIndex = sourceMessageId
+        ? current.findIndex((message) => message.id === sourceMessageId)
+        : findLatestMatchingAssistantMessageIndex(
+            current,
+            proposalIds,
+            canonicalResult?.workflowId ?? applyResponse.workflow?.workflowId,
+          );
+      const sourceMessage = sourceIndex >= 0 ? current[sourceIndex] : null;
+      const baseResponse = sourceMessage?.response;
+
+      if (!baseResponse) {
+        if (!resultMessageId) return current;
+        return current.map((message) =>
+          message.id === resultMessageId
+            ? {
+                ...message,
+                content:
+                  "I couldn’t verify that the approved changes were saved. Check your Weekly Plan before trying again.",
+                isStreaming: false,
+              }
+            : message,
+        );
+      }
+
+      const merged = mergeApplyResponseIntoChatResponse(
+        baseResponse,
+        applyResponse,
+      );
+
+      return current.map((message, index) => {
+        if (resultMessageId && message.id === resultMessageId) {
+          return {
+            ...message,
+            content: merged.content,
+            isStreaming: false,
+            response: merged.response,
+          };
+        }
+        if (resultMessageId && index === sourceIndex) {
+          return {
+            ...message,
+            content: "",
+            response: undefined,
+          };
+        }
+        if (!resultMessageId && index === sourceIndex) {
+          return {
+            ...message,
+            content: merged.content,
+            isStreaming: false,
+            response: merged.response,
+          };
+        }
+        return message;
+      });
+    });
+  }
+
+  function reconcileMessagesWithCanonicalPlan(
+    canonicalResponse: AssistantPlanReviewResponse,
+  ) {
+    const canonicalResult = getCanonicalApplyResult(canonicalResponse);
+    const proposalIds = new Set(
+      canonicalResult?.requestedProposalIds ??
+        canonicalResponse.workflow?.proposalIds ??
+        canonicalResponse.canonicalProposals?.map((proposal) => proposal.id) ??
+        [],
+    );
+    const workflowId =
+      canonicalResult?.workflowId ?? canonicalResponse.workflow?.workflowId;
+
+    if (!workflowId && proposalIds.size === 0) return;
+
+    setMessages((current) => {
+      const targetIndex = findLatestMatchingAssistantMessageIndex(
+        current,
+        proposalIds,
+        workflowId,
+      );
+      if (targetIndex < 0) return current;
+      const target = current[targetIndex];
+      if (!target.response) return current;
+      const merged = mergeCanonicalPlanStateIntoChatResponse(
+        target.response,
+        canonicalResponse,
+      );
+      return current.map((message, index) =>
+        index === targetIndex
+          ? {
+              ...message,
+              content: merged.content,
+              isStreaming: false,
+              response: merged.response,
+            }
+          : message,
+      );
+    });
+    reconcileActionStatesWithApplyResult(canonicalResult);
+  }
+
+  function replaceLatestPlanMessageWithUnverifiedFailure(
+    proposalIds: string[],
+    detail: string,
+  ) {
+    const content = `${detail} I couldn’t verify any saved changes, so no success confirmation was recorded.`;
+    setMessages((current) => {
+      const targetIndex = findLatestMatchingAssistantMessageIndex(
+        current,
+        new Set(proposalIds),
+        activeWorkflow?.workflowId,
+      );
+      if (targetIndex < 0) return current;
+      return current.map((message, index) =>
+        index === targetIndex && message.response
+          ? {
+              ...message,
+              content,
+              response: {
+                ...message.response,
+                applyResponsePlan: null,
+                applyResult: null,
+                assistantMessage: content,
+                message: content,
+              },
+            }
+          : message,
+      );
+    });
+  }
+
   function removeSuggestionAfterAnimation(suggestionId: string) {
     updateActionState(suggestionId, {
       editing: false,
@@ -2158,6 +2599,7 @@ export function AssistantPage() {
   async function applyConfirmedSuggestion(
     userMessage: ChatMessage,
     assistantMessageId: string,
+    sourceMessageId: string,
     suggestion: AssistantSuggestion,
   ) {
     setMessages((current) => [
@@ -2181,6 +2623,7 @@ export function AssistantPage() {
     try {
       const response = await requestApplyAction(suggestion);
       const result = response.results[0];
+      const canonicalResult = normalizeApplyWorkflowResult(response.applyResult);
 
       setContext(response.context);
       setActiveWorkflow(response.workflow ?? activeWorkflow);
@@ -2190,36 +2633,55 @@ export function AssistantPage() {
         result,
         status: result?.status === "applied" ? "applied" : "error",
       });
+      reconcileActionStatesWithApplyResult(canonicalResult);
+      reconcileMessagesAfterApply({
+        applyResponse: response,
+        requestedProposalIds: [suggestion.id],
+        resultMessageId: assistantMessageId,
+        sourceMessageId,
+      });
+      if (response.workflow) {
+        setActiveSchedulingContext(response.workflow.context);
+      }
 
-      const content =
-        result?.status === "applied"
-          ? result.message
-          : result?.message ??
-            "I could not apply that change. Open the review card and check the fields.";
-
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === assistantMessageId
-            ? {
-                ...message,
-                content,
-                isStreaming: false,
-              }
-            : message,
-        ),
-      );
-
-      if (result?.status === "applied") {
-        addAssistantNotice(result.message || "Suggestion applied.");
-        setActiveSchedulingContext(
-          response.workflow?.context ??
-            updateSchedulingContextAfterApply(activeSchedulingContext, response.results),
-        );
+      if (canonicalResult && canonicalResult.applied.length > 0) {
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
       }
     } catch (applyError) {
       const message = getErrorMessage(applyError);
+
+      try {
+        const canonicalResponse = await reconcileCanonicalPlanAfterMutation();
+        const canonicalResult = getCanonicalApplyResult(canonicalResponse);
+        if (canonicalResult) {
+          setMessages((current) =>
+            current.filter((chatMessage) => chatMessage.id !== assistantMessageId),
+          );
+          if (canonicalResult.applied.length > 0) {
+            window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+            router.refresh();
+          }
+          return;
+        }
+        if (canonicalResponse.workflow?.state === "applying") {
+          setMessages((current) =>
+            current.map((chatMessage) =>
+              chatMessage.id === assistantMessageId
+                ? {
+                    ...chatMessage,
+                    content:
+                      "The server is still applying this plan. I did not start another attempt.",
+                    isStreaming: false,
+                  }
+                : chatMessage,
+            ),
+          );
+          return;
+        }
+      } catch {
+        // The outcome stays explicitly unverified below.
+      }
 
       updateActionState(suggestion.id, {
         message,
@@ -2230,7 +2692,7 @@ export function AssistantPage() {
           chatMessage.id === assistantMessageId
             ? {
                 ...chatMessage,
-                content: message,
+                content: `${message} I couldn’t verify any saved changes, so no success confirmation was recorded.`,
                 isStreaming: false,
               }
             : chatMessage,
@@ -2279,6 +2741,7 @@ export function AssistantPage() {
         await applyConfirmedSuggestion(
           userMessage,
           assistantMessageId,
+          pendingReview.messageId,
           pendingReview.pendingActions[0],
         );
         return;
@@ -2380,6 +2843,9 @@ export function AssistantPage() {
 
         return nextStates;
       });
+      reconcileActionStatesWithApplyResult(
+        getCanonicalApplyResult(chatResponse),
+      );
       setMessages((current) =>
         current.map((message) => {
           if (message.id === assistantMessageId) {
@@ -2394,14 +2860,21 @@ export function AssistantPage() {
           if (
             chatResponse.automationReceipt?.actionType === "action_undone" &&
             messageResponse &&
-            messageResponse.automationReceipt?.decisionRecordId ===
-              chatResponse.automationReceipt.decisionRecordId
+            (messageResponse.automationReceipt?.decisionRecordId ===
+              chatResponse.automationReceipt.decisionRecordId ||
+              getCanonicalApplyResult(messageResponse)?.planningDecisionId ===
+                chatResponse.automationReceipt.decisionRecordId)
           ) {
             return {
               ...message,
+              content: "This applied plan was later undone.",
               response: {
                 ...messageResponse,
+                applyResponsePlan: null,
+                applyResult: null,
+                assistantMessage: "This applied plan was later undone.",
                 automationReceipt: chatResponse.automationReceipt,
+                message: "This applied plan was later undone.",
                 schedulingContext: chatResponse.workflow?.context ?? null,
                 workflow: chatResponse.workflow,
                 workflowStatus: chatResponse.workflowStatus,
@@ -2477,6 +2950,7 @@ export function AssistantPage() {
     try {
       const response = await requestApplyAction(suggestion);
       const result = response.results[0];
+      const canonicalResult = normalizeApplyWorkflowResult(response.applyResult);
 
       setContext(response.context);
       setActiveWorkflow(response.workflow ?? activeWorkflow);
@@ -2486,30 +2960,59 @@ export function AssistantPage() {
         result,
         status: result?.status === "applied" ? "applied" : "error",
       });
+      reconcileActionStatesWithApplyResult(canonicalResult);
+      reconcileMessagesAfterApply({
+        applyResponse: response,
+        requestedProposalIds: [suggestion.id],
+      });
+      if (response.workflow) {
+        setActiveSchedulingContext(response.workflow.context);
+      }
 
-      if (result?.status === "applied") {
-        addAssistantNotice(result.message || "Suggestion applied.");
-        setActiveSchedulingContext(
-          response.workflow?.context ??
-            updateSchedulingContextAfterApply(activeSchedulingContext, response.results),
-        );
+      if (canonicalResult && canonicalResult.applied.length > 0) {
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
         return;
       }
-
-      if (result?.status === "skipped") {
-        addAssistantNotice(
-          result.message || "This suggestion cannot be applied automatically.",
-          "error",
-        );
-        return;
-      }
     } catch (applyError) {
+      const message = getErrorMessage(applyError);
+      try {
+        const canonicalResponse = await reconcileCanonicalPlanAfterMutation();
+        const canonicalResult = getCanonicalApplyResult(canonicalResponse);
+        if (canonicalResult) {
+          if (canonicalResult.applied.length > 0) {
+            window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+            router.refresh();
+          }
+          addAssistantNotice(
+            canonicalResult.applied.length > 0
+              ? "I rechecked the server and restored the saved result."
+              : canonicalResult.pendingProposalIds.length > 0
+                ? "I rechecked the server. The plan is still waiting for review."
+                : "I rechecked the server. No schedule records were saved.",
+            canonicalResult.applied.length > 0 ? "success" : "error",
+          );
+          return;
+        }
+        if (canonicalResponse.workflow?.state === "applying") {
+          addAssistantNotice(
+            "The server is still applying this plan. I did not start another attempt.",
+            "error",
+          );
+          return;
+        }
+      } catch {
+        // Fall through to an explicit unverified result.
+      }
       updateActionState(suggestion.id, {
-        message: getErrorMessage(applyError),
+        message,
         status: "error",
       });
+      replaceLatestPlanMessageWithUnverifiedFailure(
+        [suggestion.id],
+        message,
+      );
+      addAssistantNotice(message, "error");
     }
   }
 
@@ -2530,6 +3033,7 @@ export function AssistantPage() {
 
     try {
       const response = await requestApplyActions(actionable);
+      const canonicalResult = normalizeApplyWorkflowResult(response.applyResult);
       setContext(response.context);
       setActiveWorkflow(response.workflow ?? activeWorkflow);
 
@@ -2541,28 +3045,61 @@ export function AssistantPage() {
           status: result.status === "applied" ? "applied" : "error",
         });
       });
+      reconcileActionStatesWithApplyResult(canonicalResult);
+      reconcileMessagesAfterApply({
+        applyResponse: response,
+        requestedProposalIds: actionable.map((suggestion) => suggestion.id),
+      });
+      if (response.workflow) {
+        setActiveSchedulingContext(response.workflow.context);
+      }
 
-      const appliedCount = response.results.filter(
-        (result) => result.status === "applied",
-      ).length;
-
-      if (appliedCount > 0) {
-        addAssistantNotice(response.message);
-        setActiveSchedulingContext(
-          response.workflow?.context ??
-            updateSchedulingContextAfterApply(activeSchedulingContext, response.results),
-        );
+      if (canonicalResult && canonicalResult.applied.length > 0) {
         window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
         router.refresh();
       }
     } catch (applyError) {
       const message = getErrorMessage(applyError);
+      try {
+        const canonicalResponse = await reconcileCanonicalPlanAfterMutation();
+        const canonicalResult = getCanonicalApplyResult(canonicalResponse);
+        if (canonicalResult) {
+          if (canonicalResult.applied.length > 0) {
+            window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+            router.refresh();
+          }
+          addAssistantNotice(
+            canonicalResult.applied.length > 0
+              ? "I rechecked the server and restored the saved result."
+              : canonicalResult.pendingProposalIds.length > 0
+                ? "I rechecked the server. The plan is still waiting for review."
+                : "I rechecked the server. No schedule records were saved.",
+            canonicalResult.applied.length > 0 ? "success" : "error",
+          );
+          return;
+        }
+        if (canonicalResponse.workflow?.state === "applying") {
+          addAssistantNotice(
+            "The server is still applying this plan. I did not start another attempt.",
+            "error",
+          );
+          return;
+        }
+      } catch {
+        // Fall through to an explicit unverified outcome; stale local success
+        // state is never used as proof that the mutation committed.
+      }
       actionable.forEach((suggestion) => {
         updateActionState(suggestion.id, {
           message,
           status: "error",
         });
       });
+      replaceLatestPlanMessageWithUnverifiedFailure(
+        actionable.map((suggestion) => suggestion.id),
+        message,
+      );
+      addAssistantNotice(message, "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -2573,17 +3110,25 @@ export function AssistantPage() {
     try {
       const response = await requestUndoDecision(decisionRecordId);
       setActiveWorkflow(response.workflow);
-      setActiveSchedulingContext(response.workflow.context);
+      setActiveSchedulingContext(response.workflow?.context ?? null);
       setMessages((current) =>
         current.map((message) =>
-          message.response?.automationReceipt?.decisionRecordId ===
-          decisionRecordId
+          message.response &&
+          (message.response.automationReceipt?.decisionRecordId ===
+            decisionRecordId ||
+            getCanonicalApplyResult(message.response)?.planningDecisionId ===
+              decisionRecordId)
             ? {
                 ...message,
+                content: response.message,
                 response: {
                   ...message.response,
+                  applyResponsePlan: null,
+                  applyResult: null,
+                  assistantMessage: response.message,
                   automationReceipt: response.automationReceipt,
-                  schedulingContext: response.workflow.context,
+                  message: response.message,
+                  schedulingContext: response.workflow?.context ?? null,
                   workflow: response.workflow,
                   workflowStatus: response.workflowStatus,
                 },
@@ -2591,11 +3136,45 @@ export function AssistantPage() {
             : message,
         ),
       );
-      addAssistantNotice(response.message);
       window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
       router.refresh();
+      if (response.reloadWarning) {
+        addAssistantNotice(response.reloadWarning, "error");
+      }
+      try {
+        await reconcileCanonicalPlanAfterMutation();
+      } catch {
+        if (!response.reloadWarning) {
+          addAssistantNotice(
+            "The blocks were removed, but the latest Assistant details could not be reloaded. Refresh to confirm the plan state.",
+            "error",
+          );
+        }
+      }
     } catch (undoError) {
-      addAssistantNotice(getErrorMessage(undoError), "error");
+      const message = getErrorMessage(undoError);
+      try {
+        const canonicalResponse = await reconcileCanonicalPlanAfterMutation();
+        if (
+          canonicalResponse.workflow?.state === "undone" ||
+          canonicalResponse.workflow?.state === "canceled"
+        ) {
+          addAssistantNotice(
+            "I rechecked the server. The automated blocks were removed.",
+            "success",
+          );
+          window.dispatchEvent(new CustomEvent("schedule-builder:data-changed"));
+          router.refresh();
+          return;
+        }
+      } catch {
+        // Keep the outcome explicitly unconfirmed instead of retaining a false
+        // success or failure state from the client.
+      }
+      addAssistantNotice(
+        `${message} I couldn’t confirm the final Undo state; refresh Weekly Plan before trying again.`,
+        "error",
+      );
     } finally {
       setUndoingDecisionId(null);
     }
@@ -2802,9 +3381,6 @@ export function AssistantPage() {
                   onUndo={(decisionRecordId) =>
                     void undoAutomatedPlan(decisionRecordId)
                   }
-                  appliedProposalIds={activeWorkflow?.appliedProposalIds ?? []}
-                  pendingProposalIds={activeWorkflow?.pendingProposalIds ?? []}
-                  workflowProposalIds={activeWorkflow?.proposalIds ?? []}
                   undoingDecisionId={undoingDecisionId}
                 />
               ))}

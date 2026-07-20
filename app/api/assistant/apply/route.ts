@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import {
@@ -26,8 +27,8 @@ import {
   createScheduledItemForUser,
   createScheduleExceptionForUser,
   createWeeklyPlanBlockForUser,
-  deleteWeeklyPlanBlockForUser,
 } from "@/lib/supabase/scheduler";
+import { createSupabaseServiceRoleClient } from "@/lib/supabase/server-admin";
 import type { ImportedCalendarEvent } from "@/lib/imported-calendar";
 import {
   getWeeklyPlanImportedEventConflictForBlock,
@@ -59,9 +60,11 @@ import { getUserFacingError } from "@/lib/user-facing-error";
 import {
   loadAssistantWorkflowById,
   persistAssistantWorkflow,
-  updateAssistantProposalResults,
 } from "@/lib/assistant-workflow-store";
-import { getCanonicalPendingProposals } from "@/lib/assistant-workflow";
+import {
+  reconcileAssistantWorkflowWithApplyResult,
+  type CanonicalAssistantProposal,
+} from "@/lib/assistant-workflow";
 import {
   decideAssistantAutomation,
   resolveAssistantWorkflowStatus,
@@ -71,10 +74,28 @@ import {
 } from "@/lib/assistant-automation";
 import {
   loadAutomationGrantById,
+  loadReceiptForDecision,
   persistActionReceipt,
   persistPlanningDecision,
-  updateAutomationGrantStatus,
 } from "@/lib/assistant-automation-store";
+import {
+  createApplyResponsePlan,
+  createApplyWorkflowResult,
+  getApplyIdempotencyKey,
+  getAssistantProposalRecordId,
+  type AppliedWorkflowRecord,
+  type ApplyAutomationMode,
+  type ApplyWorkflowResult,
+} from "@/lib/assistant-apply-result";
+import {
+  claimAuthoritativeApplyAttempt,
+  getAuthoritativeApplyAttemptId,
+  isMissingAssistantApplyIntegritySchema,
+  loadAuthoritativeApplyResultByIdempotencyKey,
+  persistAuthoritativeApplyResult,
+  releaseAuthoritativeApplyClaim,
+  type ReconciledApplyWorkflowResult,
+} from "@/lib/assistant-apply-store";
 
 export const dynamic = "force-dynamic";
 
@@ -109,6 +130,20 @@ function getBearerToken(request: NextRequest) {
 
   const token = authorization.slice("Bearer ".length).trim();
   return token.length > 0 ? token : null;
+}
+
+function normalizeApplyTimezone(value: unknown) {
+  if (typeof value !== "string") return null;
+  const timezone = value.trim();
+  if (!timezone || timezone.length > 80 || /[^A-Za-z0-9_+\-/.]/.test(timezone)) {
+    return null;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    return null;
+  }
 }
 
 function createAuthenticatedSupabaseClient(accessToken: string) {
@@ -235,6 +270,80 @@ function formatAppliedBlockMessage(block: WeeklyPlanBlock, dateValue: string) {
     : `Added “${block.projectName}” to ${dateLabel} as an anytime time block. Add a start time before treating it as a timed Calendar commitment.`;
 }
 
+function addMinutesToClock(startTime: string, durationMinutes: number) {
+  const start = parseStartTimeToMinutes(startTime);
+  if (start === null) return "";
+  const total = start + durationMinutes;
+  return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(
+    total % 60,
+  ).padStart(2, "0")}`;
+}
+
+function getAppliedRecordType(
+  suggestion: AssistantSuggestion,
+): AppliedWorkflowRecord["recordType"] {
+  if (suggestion.type === "suggested_weekly_block") return "weekly_plan_block";
+  if (suggestion.type === "suggested_scheduled_item") return "scheduled_item";
+  if (suggestion.type === "schedule_exception") return "schedule_exception";
+  return "project";
+}
+
+function createAppliedWorkflowRecord({
+  proposal,
+  result,
+  version,
+}: {
+  proposal: CanonicalAssistantProposal;
+  result: AssistantApplyResult;
+  version?: string;
+}): AppliedWorkflowRecord {
+  const suggestion = proposal.suggestion;
+  const durationMinutes = Math.round(
+    (result.createdBlock?.estimatedHours ?? suggestion.estimatedHours ?? 0) * 60,
+  );
+  const date =
+    result.createdDate ??
+    proposal.timeBlock?.date ??
+    suggestion.itemDate ??
+    suggestion.exceptionDate ??
+    "";
+  const startTime =
+    result.createdBlock?.startTime ??
+    proposal.timeBlock?.startTime ??
+    suggestion.startTime ??
+    "";
+  const endTime =
+    proposal.timeBlock?.endTime ??
+    (startTime ? addMinutesToClock(startTime, durationMinutes) : "");
+  return {
+    date,
+    durationMinutes,
+    endsAt: date && endTime ? `${date}T${endTime}:00` : "",
+    endTime,
+    proposalId: proposal.id,
+    recordId:
+      result.savedRecordId ??
+      (suggestion.type === "suggested_weekly_block"
+        ? getAssistantProposalRecordId(proposal.id)
+        : proposal.id),
+    recordType: getAppliedRecordType(suggestion),
+    startsAt: date && startTime ? `${date}T${startTime}:00` : "",
+    startTime,
+    title:
+      result.createdBlock?.projectName ??
+      proposal.timeBlock?.title ??
+      suggestion.projectName ??
+      suggestion.title,
+    ...(version ? { version } : {}),
+  };
+}
+
+function getSafeApplyFailureCode(result: AssistantApplyResult) {
+  if (/conflict|overlap|unavailable/i.test(result.message)) return "time_unavailable";
+  if (result.status === "skipped") return "unsupported_or_skipped";
+  return "write_failed";
+}
+
 function normalizeProjectKey(projectName: string) {
   return projectName.trim().toLowerCase();
 }
@@ -245,11 +354,7 @@ function findProjectByName(projects: Project[], projectName: string) {
 }
 
 function createBlockId(suggestionId: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-
-  return `${Date.now()}-${suggestionId}-${Math.random().toString(36).slice(2, 8)}`;
+  return getAssistantProposalRecordId(suggestionId);
 }
 
 function createProjectId(currentProjects: Project[]) {
@@ -555,6 +660,37 @@ async function applyWeeklyBlockSuggestion({
     ...(suggestion.batchId ? { seriesId: suggestion.batchId } : {}),
     ...(startTime ? { startTime } : {}),
   };
+  const existingProposalBlock = currentBlocks.find(
+    (block) => block.id === candidateBlock.id,
+  );
+  if (existingProposalBlock) {
+    const matchesPersistedProposal =
+      existingProposalBlock.day === candidateBlock.day &&
+      existingProposalBlock.projectName === candidateBlock.projectName &&
+      existingProposalBlock.plannedTask === candidateBlock.plannedTask &&
+      existingProposalBlock.estimatedHours === candidateBlock.estimatedHours &&
+      existingProposalBlock.startTime === candidateBlock.startTime &&
+      existingProposalBlock.scheduledDate === candidateBlock.scheduledDate;
+    if (!matchesPersistedProposal) {
+      return createResult(
+        suggestion,
+        "error",
+        "This proposal already has a saved record with different details. Review it before retrying.",
+      );
+    }
+    return {
+      ...createResult(
+        suggestion,
+        "applied",
+        formatAppliedBlockMessage(existingProposalBlock, createdDate),
+      ),
+      calendarHref: `/calendar?view=week&date=${encodeURIComponent(createdDate)}&highlight=${encodeURIComponent(existingProposalBlock.id)}`,
+      createdBlock: existingProposalBlock,
+      createdDate,
+      planHref: `/plan?week=${encodeURIComponent(weekStartDate)}&date=${encodeURIComponent(createdDate)}&highlight=${encodeURIComponent(existingProposalBlock.id)}`,
+      savedRecordId: existingProposalBlock.id,
+    };
+  }
   const candidateStart = parseStartTimeToMinutes(startTime);
   const candidateEnd =
     candidateStart === null
@@ -938,6 +1074,115 @@ async function loadContextSummary(supabase: SupabaseClient, userId: string) {
   );
 }
 
+function createApplyResultsFromAuthoritativeResult(
+  result: ApplyWorkflowResult,
+  proposals: CanonicalAssistantProposal[],
+) {
+  const proposalById = new Map(proposals.map((proposal) => [proposal.id, proposal]));
+  const appliedById = new Map(
+    result.applied.map((record) => [record.proposalId, record]),
+  );
+  const failedById = new Map(
+    result.failed.map((failure) => [failure.proposalId, failure]),
+  );
+  return result.requestedProposalIds.map((proposalId): AssistantApplyResult => {
+    const proposal = proposalById.get(proposalId);
+    const suggestion = proposal?.suggestion;
+    const applied = appliedById.get(proposalId);
+    const failed = failedById.get(proposalId);
+    if (applied && suggestion) {
+      const createdBlock: WeeklyPlanBlock | undefined =
+        applied.recordType === "weekly_plan_block" && suggestion.day
+          ? {
+              day: suggestion.day,
+              estimatedHours: applied.durationMinutes / 60,
+              id: applied.recordId,
+              plannedTask: suggestion.plannedTask ?? applied.title,
+              projectName: applied.title,
+              scheduledDate: applied.date,
+              startTime: applied.startTime,
+              ...(suggestion.batchId ? { seriesId: suggestion.batchId } : {}),
+            }
+          : undefined;
+      return {
+        ...(createdBlock ? { createdBlock, createdDate: applied.date } : {}),
+        message: "This proposal is already confirmed in the authoritative apply result.",
+        savedRecordId: applied.recordId,
+        status: "applied",
+        suggestionId: proposalId,
+        suggestionTitle: applied.title,
+        type: suggestion.type,
+        workflowId: result.workflowId,
+      };
+    }
+    return {
+      message:
+        failed?.safeMessage ??
+        "This proposal remains available for review.",
+      status: failed ? "error" : "skipped",
+      suggestionId: proposalId,
+      suggestionTitle: suggestion?.title ?? "Schedule proposal",
+      type: suggestion?.type ?? "workload_warning",
+      workflowId: result.workflowId,
+    };
+  });
+}
+
+async function createResponseFromPersistedApplyResult({
+  authResult,
+  loaded,
+  reconciled,
+}: {
+  authResult: { supabase: SupabaseClient; userId: string };
+  loaded: NonNullable<Awaited<ReturnType<typeof loadAssistantWorkflowById>>["data"]>;
+  reconciled: ReconciledApplyWorkflowResult;
+}) {
+  const applyResult = reconciled.result;
+  const canonical = reconcileAssistantWorkflowWithApplyResult(
+    loaded,
+    applyResult,
+  );
+  const persisted = await persistAssistantWorkflow(
+    authResult.supabase,
+    canonical.workflow,
+    canonical.proposals,
+    canonical.batch,
+  );
+  const workflow = persisted.data?.workflow ?? canonical.workflow;
+  const proposals = persisted.data?.proposals ?? canonical.proposals;
+  const batch = persisted.data?.batch ?? canonical.batch;
+  const activityTitle =
+    workflow.context?.semanticRequest?.activity.title ??
+    workflow.extractedItems[0]?.title ??
+    "requested";
+  const applyResponsePlan = createApplyResponsePlan({
+    activityTitle,
+    result: applyResult,
+  });
+  const receipt = applyResult.planningDecisionId
+    ? (
+        await loadReceiptForDecision(
+          authResult.supabase,
+          authResult.userId,
+          applyResult.planningDecisionId,
+        )
+      ).data
+    : null;
+  return {
+    applyResponsePlan,
+    applyResult,
+    automationReceipt: receipt,
+    canonicalProposals: proposals,
+    completionStatus: workflow.completionStatus,
+    context: await loadContextSummary(authResult.supabase, authResult.userId),
+    message: applyResponsePlan.primaryMessage,
+    proposalBatch: batch,
+    results: createApplyResultsFromAuthoritativeResult(applyResult, proposals),
+    workflow,
+    workflowStatus: resolveAssistantWorkflowStatus({ workflow }),
+  } satisfies AssistantApplyResponse;
+}
+
 export async function POST(request: NextRequest) {
   const authResult = await getAuthenticatedUser(request);
 
@@ -948,6 +1193,7 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as {
     automationGrantId?: unknown;
     proposalIds?: unknown;
+    timezone?: unknown;
     workflowId?: unknown;
   };
   const automationGrantId =
@@ -957,10 +1203,14 @@ export async function POST(request: NextRequest) {
   const workflowId =
     typeof body.workflowId === "string" ? body.workflowId.trim() : "";
   const proposalIds = Array.isArray(body.proposalIds)
-    ? body.proposalIds.filter(
-        (proposalId): proposalId is string =>
-          typeof proposalId === "string" && proposalId.length > 0,
-      )
+    ? [
+        ...new Set(
+          body.proposalIds.filter(
+            (proposalId): proposalId is string =>
+              typeof proposalId === "string" && proposalId.length > 0,
+          ),
+        ),
+      ]
     : [];
 
   if (!workflowId || !Array.isArray(body.proposalIds)) {
@@ -1000,6 +1250,79 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const requestTimezone = normalizeApplyTimezone(body.timezone);
+  const workflowTimezone = normalizeApplyTimezone(
+    workflowResult.data.workflow.context?.timezone ??
+      workflowResult.data.workflow.context?.multiSessionRequest?.planningHorizon
+        .timezone,
+  );
+  if (requestTimezone && workflowTimezone && requestTimezone !== workflowTimezone) {
+    return NextResponse.json(
+      {
+        code: "apply_timezone_mismatch",
+        error:
+          "The plan timezone no longer matches this apply request. Nothing was changed.",
+      },
+      { status: 409 },
+    );
+  }
+  const applyTimezone = workflowTimezone ?? requestTimezone;
+  if (!applyTimezone) {
+    return NextResponse.json(
+      {
+        code: "apply_timezone_missing",
+        error:
+          "I couldn’t verify the timezone for these exact times. Nothing was changed.",
+      },
+      { status: 400 },
+    );
+  }
+
+  const idempotencyKey = getApplyIdempotencyKey(workflowId, proposalIds);
+  const applyAttemptId = getAuthoritativeApplyAttemptId({ idempotencyKey });
+  const priorApply = await loadAuthoritativeApplyResultByIdempotencyKey(
+    authResult.supabase,
+    authResult.userId,
+    idempotencyKey,
+  );
+  if (priorApply.data) {
+    console.info("assistant_workflow", {
+      authoritativeOutcome: priorApply.data.result.outcome,
+      event: "apply_idempotent_replay",
+      idempotencyResult: "reused",
+      proposalBatchId: priorApply.data.result.proposalBatchId,
+      proposalCount: proposalIds.length,
+      successfulRecordCount: priorApply.data.result.applied.length,
+      undoAvailable: priorApply.data.result.undoAvailable,
+      workflowId,
+    });
+    return NextResponse.json(
+      await createResponseFromPersistedApplyResult({
+        authResult,
+        loaded: workflowResult.data,
+        reconciled: priorApply.data,
+      }),
+    );
+  }
+  if (
+    priorApply.error &&
+    !isMissingAssistantApplyIntegritySchema(priorApply.error)
+  ) {
+    console.error("assistant_workflow", {
+      event: "apply_idempotency_check_failed",
+      persistenceResult: "failed",
+      proposalCount: proposalIds.length,
+      workflowId,
+    });
+    return NextResponse.json(
+      {
+        error:
+          "I couldn’t safely verify whether this apply request had already run. No new attempt was made. Check Weekly Plan before retrying.",
+      },
+      { status: 503 },
+    );
+  }
+
   let automationGrant: AutomationGrant | null = null;
   if (automationGrantId) {
     const grantResult = await loadAutomationGrantById(
@@ -1025,20 +1348,40 @@ export async function POST(request: NextRequest) {
     }
     automationGrant = grantResult.data;
   }
+  let automationMetadataClient: SupabaseClient | null = null;
+  if (automationGrant) {
+    try {
+      automationMetadataClient = createSupabaseServiceRoleClient();
+    } catch {
+      return NextResponse.json(
+        {
+          error:
+            "I couldn’t safely access the server-owned automation records. Nothing was applied; the plan remains ready for review.",
+        },
+        { status: 503 },
+      );
+    }
+  }
 
   const proposalById = new Map(
-    getCanonicalPendingProposals(
-      workflowResult.data.workflow,
-      workflowResult.data.proposals,
-    ).map((proposal) => [proposal.id, proposal]),
+    workflowResult.data.proposals.map((proposal) => [proposal.id, proposal]),
   );
-  const suggestions = proposalIds.map((proposalId) => ({
-    normalized:
-      proposalById.get(proposalId)?.approvalStatus === "pending"
-        ? proposalById.get(proposalId)?.suggestion ?? null
-        : null,
-    fallbackId: proposalId,
-  }));
+  const suggestions = proposalIds.map((proposalId) => {
+    const proposal = proposalById.get(proposalId);
+    const isPending = proposal?.approvalStatus === "pending";
+    const isRecoverableAppliedProposal = Boolean(
+      proposal?.approvalStatus === "applied" &&
+        proposal.suggestion.type === "suggested_weekly_block" &&
+        proposal.savedRecordId === getAssistantProposalRecordId(proposal.id),
+    );
+    return {
+      normalized:
+        proposal && (isPending || isRecoverableAppliedProposal)
+          ? proposal.suggestion
+          : null,
+      fallbackId: proposalId,
+    };
+  });
 
   if (suggestions.some((item) => !item.normalized)) {
     return NextResponse.json(
@@ -1053,6 +1396,47 @@ export async function POST(request: NextRequest) {
   const normalizedSuggestions = suggestions.flatMap((item) =>
     item.normalized ? [item.normalized] : [],
   );
+
+  // The authoritative ledger currently verifies and reconciles exact timed
+  // Weekly Plan rows. Refuse other mutation types before any write instead of
+  // recording a fabricated or unverifiable saved-record mapping.
+  if (
+    normalizedSuggestions.some(
+      (suggestion) => suggestion.type !== "suggested_weekly_block",
+    )
+  ) {
+    return NextResponse.json(
+      {
+        code: "unsupported_authoritative_record_type",
+        error:
+          "This change type cannot yet be applied through the verified Assistant apply path. Nothing was changed.",
+      },
+      { status: 409 },
+    );
+  }
+
+  if (
+    normalizedSuggestions.some((suggestion) => {
+      const startMinutes = suggestion.startTime
+        ? parseStartTimeToMinutes(suggestion.startTime)
+        : null;
+      const durationMinutes = Math.round((suggestion.estimatedHours ?? 0) * 60);
+      return (
+        startMinutes !== null &&
+        durationMinutes > 0 &&
+        startMinutes + durationMinutes >= 24 * 60
+      );
+    })
+  ) {
+    return NextResponse.json(
+      {
+        code: "cross_midnight_apply_unsupported",
+        error:
+          "A proposed block crosses midnight, which this verified apply path does not support yet. Nothing was changed.",
+      },
+      { status: 409 },
+    );
+  }
 
   const [
     projectsResult,
@@ -1124,7 +1508,7 @@ export async function POST(request: NextRequest) {
   }
 
   const decisionId = automationGrant
-    ? `decision-${workflowId}-${Date.now()}`
+    ? `decision:${applyAttemptId}`
     : null;
   const decisionCreatedAt = new Date().toISOString();
   const pendingDecision: PlanningDecisionRecord | null =
@@ -1150,6 +1534,9 @@ export async function POST(request: NextRequest) {
           preferencesUsed: [
             ...(automationGrant.guardrails.earliestTime ? ["preferred_evening_start"] : []),
             ...(automationGrant.guardrails.latestTime ? ["latest_finish_time"] : []),
+            ...(automationGrant.guardrails.allowedTimeExceptions?.length
+              ? ["scoped_session_time_exception"]
+              : []),
             ...(automationGrant.guardrails.minimumBufferAfterWorkMinutes
               ? ["buffer_after_work"]
               : []),
@@ -1222,12 +1609,99 @@ export async function POST(request: NextRequest) {
       );
     }
   }
+  const proposalBatchId = workflowResult.data.batch?.id;
+  if (!proposalBatchId) {
+    return NextResponse.json(
+      {
+        code: "apply_batch_missing",
+        error:
+          "I couldn’t verify the proposal batch, so no schedule changes were applied.",
+      },
+      { status: 409 },
+    );
+  }
+  const automationMode: ApplyAutomationMode = automationGrant
+    ? "auto_apply"
+    : normalizedSuggestions.length > 1
+      ? "manual_batch_apply"
+      : "manual_review";
+  const applyClaimToken = randomBytes(24).toString("hex");
+  const claimResult = await claimAuthoritativeApplyAttempt(
+    authResult.supabase,
+    {
+      attemptId: applyAttemptId,
+      automationGrantId: automationGrant?.id,
+      automationMode,
+      claimToken: applyClaimToken,
+      idempotencyKey,
+      proposalBatchId,
+      requestedProposalIds: proposalIds,
+      timezone: applyTimezone,
+      userId: authResult.userId,
+      workflowId,
+    },
+  );
+  if (claimResult.error || !claimResult.data) {
+    console.error("assistant_workflow", {
+      event: "apply_claim_failed",
+      persistenceResult: isMissingAssistantApplyIntegritySchema(claimResult.error)
+        ? "schema_unavailable"
+        : "failed",
+      proposalBatchId,
+      proposalCount: proposalIds.length,
+      workflowId,
+    });
+    return NextResponse.json(
+      {
+        code: isMissingAssistantApplyIntegritySchema(claimResult.error)
+          ? "apply_integrity_schema_unavailable"
+          : "apply_claim_failed",
+        error:
+          "I couldn’t safely reserve this apply attempt. Nothing was changed. The plan remains ready for review.",
+      },
+      { status: 503 },
+    );
+  }
+  if (claimResult.data.status === "finalized") {
+    return NextResponse.json(
+      await createResponseFromPersistedApplyResult({
+        authResult,
+        loaded: workflowResult.data,
+        reconciled: claimResult.data.authoritativeResult,
+      }),
+    );
+  }
+  if (claimResult.data.status === "in_progress") {
+    return NextResponse.json(
+      {
+        code: "apply_in_progress",
+        error:
+          "This plan is already being applied. I did not start a second apply attempt.",
+      },
+      { status: 409 },
+    );
+  }
+  const releasePrewriteClaim = async () => {
+    const released = await releaseAuthoritativeApplyClaim(
+      authResult.supabase,
+      applyAttemptId,
+      applyClaimToken,
+    );
+    if (released.error || !released.data) {
+      console.error("assistant_workflow", {
+        event: "apply_claim_release_failed",
+        proposalBatchId,
+        workflowId,
+      });
+    }
+  };
   if (pendingDecision) {
     const decisionResult = await persistPlanningDecision(
-      authResult.supabase,
+      automationMetadataClient ?? authResult.supabase,
       pendingDecision,
     );
     if (decisionResult.error) {
+      await releasePrewriteClaim();
       return NextResponse.json(
         {
           error:
@@ -1236,32 +1710,6 @@ export async function POST(request: NextRequest) {
         { status: 500 },
       );
     }
-  }
-  const applyingWorkflow = {
-    ...workflowResult.data.workflow,
-    lastUpdatedAt: new Date().toISOString(),
-    state: "applying" as const,
-  };
-  const applyingPersistence = await persistAssistantWorkflow(
-    authResult.supabase,
-    applyingWorkflow,
-    workflowResult.data.proposals,
-    workflowResult.data.batch,
-  );
-  if (applyingPersistence.error || !applyingPersistence.data) {
-    if (pendingDecision) {
-      await persistPlanningDecision(authResult.supabase, {
-        ...pendingDecision,
-        status: "failed",
-      });
-    }
-    return NextResponse.json(
-      {
-        error:
-          "I couldn’t record the applying state safely. Nothing was applied.",
-      },
-      { status: 500 },
-    );
   }
   const importedCalendarEvents =
     importedEventsResult.error == null
@@ -1372,87 +1820,63 @@ export async function POST(request: NextRequest) {
 
   const appliedCount = results.filter((result) => result.status === "applied").length;
   const failedCount = results.filter((result) => result.status !== "applied").length;
-  const appliedMessages = results
-    .filter((result) => result.status === "applied")
-    .map((result) => result.message);
-  const workflowUpdate = await updateAssistantProposalResults(
-    authResult.supabase,
-    workflowResult.data.workflow,
-    results
-      .filter(
-        (result): result is AssistantApplyResult & { savedRecordId: string } =>
-          result.status === "applied" && Boolean(result.savedRecordId),
-      )
-      .map((result) => ({
-        approvalStatus: "applied" as const,
-        proposalId: result.suggestionId,
-        savedRecordId: result.savedRecordId,
-      })),
-  );
-
   console.info("assistant_workflow", {
     appliedCount,
     event: "apply_completed",
     failedCount,
-    persistenceResult: workflowUpdate.error ? "failed" : "persisted",
+    persistenceResult: "awaiting_authoritative_finalizer",
     proposalCount: proposalIds.length,
     workflowId,
   });
 
-  if (workflowUpdate.error || !workflowUpdate.data) {
-    const createdWeeklyBlockIds = results.flatMap((result) =>
+  let automationReceipt: CompactActionReceipt | null = null;
+  let actionReceiptPersisted = false;
+  let decisionFinalized = false;
+  let metadataWarningCode: string | undefined;
+  const preliminaryWorkflow = workflowResult.data;
+  const appliedWeeklyResults = results.filter(
+    (result) =>
       result.status === "applied" &&
       result.type === "suggested_weekly_block" &&
-      result.savedRecordId
-        ? [result.savedRecordId]
-        : [],
-    );
-    const rollbackResults = await Promise.all(
-      createdWeeklyBlockIds.map((blockId) =>
-        deleteWeeklyPlanBlockForUser(
-          authResult.supabase,
-          authResult.userId,
-          blockId,
-        ),
-      ),
-    );
-    console.error("assistant_workflow", {
-      event: "apply_persistence_failed",
-      rollbackFailed: rollbackResults.some((result) => Boolean(result.error)),
-      rolledBackTimeBlockCount: rollbackResults.filter(
-        (result) => !result.error,
-      ).length,
-      workflowId,
-    });
-    return NextResponse.json(
-      {
-        error:
-          "I couldn’t record the result of applying the approved sessions. No success confirmation was recorded.",
-      },
-      { status: 500 },
-    );
-  }
+      Boolean(result.savedRecordId),
+  );
+  const targetRecordIds = appliedWeeklyResults.flatMap((result) =>
+    result.savedRecordId ? [result.savedRecordId] : [],
+  );
+  const snapshotResult = targetRecordIds.length
+    ? await authResult.supabase
+        .from("weekly_plan_blocks")
+        .select(
+          "block_id, project_name, planned_task, estimated_hours, start_time, scheduled_date, series_id, inserted_at, updated_at",
+        )
+        .eq("user_id", authResult.userId)
+        .in("block_id", targetRecordIds)
+    : { data: [], error: null };
+  const versionByRecordId = new Map(
+    (snapshotResult.data ?? []).map((record) => [
+      String(record.block_id),
+      typeof record.updated_at === "string" ? record.updated_at : undefined,
+    ]),
+  );
+  const proposalMap = new Map(
+    preliminaryWorkflow.proposals.map((proposal) => [proposal.id, proposal]),
+  );
+  const appliedRecords = results.flatMap((result) => {
+    const proposal = proposalMap.get(result.suggestionId);
+    return result.status === "applied" && proposal
+      ? [
+          createAppliedWorkflowRecord({
+            proposal,
+            result,
+            version: result.savedRecordId
+              ? versionByRecordId.get(result.savedRecordId)
+              : undefined,
+          }),
+        ]
+      : [];
+  });
 
-  let automationReceipt: CompactActionReceipt | null = null;
   if (pendingDecision && automationGrant && decisionId) {
-    const appliedWeeklyResults = results.filter(
-      (result) =>
-        result.status === "applied" &&
-        result.type === "suggested_weekly_block" &&
-        Boolean(result.savedRecordId),
-    );
-    const targetRecordIds = appliedWeeklyResults.flatMap((result) =>
-      result.savedRecordId ? [result.savedRecordId] : [],
-    );
-    const snapshotResult = targetRecordIds.length
-      ? await authResult.supabase
-          .from("weekly_plan_blocks")
-          .select(
-            "block_id, project_name, planned_task, estimated_hours, start_time, scheduled_date, series_id, inserted_at, updated_at",
-          )
-          .eq("user_id", authResult.userId)
-          .in("block_id", targetRecordIds)
-      : { data: [], error: null };
     const finalDecision: PlanningDecisionRecord = {
       ...pendingDecision,
       afterState: { records: snapshotResult.data ?? [] },
@@ -1472,7 +1896,7 @@ export async function POST(request: NextRequest) {
     );
     const firstApplied = sortedApplied[0];
     const activityTitle =
-      workflowUpdate.data.workflow.context?.semanticRequest?.activity.title ??
+      preliminaryWorkflow.workflow.context?.semanticRequest?.activity.title ??
       firstApplied?.suggestionTitle ??
       "Automated plan";
     automationReceipt = {
@@ -1499,97 +1923,236 @@ export async function POST(request: NextRequest) {
       title: `${activityTitle} plan`,
       userId: authResult.userId,
     };
-    const [decisionResult, receiptResult, grantResult] = await Promise.all([
-      persistPlanningDecision(authResult.supabase, finalDecision),
-      persistActionReceipt(authResult.supabase, automationReceipt),
-      updateAutomationGrantStatus(
-        authResult.supabase,
-        authResult.userId,
-        automationGrant.id,
-        "consumed",
-      ),
-    ]);
-    if (
-      snapshotResult.error ||
-      snapshotResult.data?.length !== targetRecordIds.length ||
-      decisionResult.error ||
-      receiptResult.error ||
-      grantResult.error
-    ) {
-      await Promise.all(
-        targetRecordIds.map((blockId) =>
-          deleteWeeklyPlanBlockForUser(
-            authResult.supabase,
-            authResult.userId,
-            blockId,
-          ),
-        ),
+    const snapshotComplete =
+      !snapshotResult.error &&
+      snapshotResult.data?.length === targetRecordIds.length;
+    const decisionResult = await persistPlanningDecision(
+      automationMetadataClient ?? authResult.supabase,
+      finalDecision,
+    );
+    decisionFinalized = !decisionResult.error;
+    if (!decisionFinalized || !snapshotComplete) {
+      metadataWarningCode = !snapshotComplete
+        ? "record_snapshot_incomplete"
+        : "decision_finalization_failed";
+      automationReceipt = null;
+    } else {
+      const receiptResult = await persistActionReceipt(
+        automationMetadataClient ?? authResult.supabase,
+        automationReceipt,
       );
-      await updateAssistantProposalResults(
-        authResult.supabase,
-        workflowUpdate.data.workflow,
-        appliedWeeklyResults.map((result) => ({
-          approvalStatus: "pending" as const,
-          proposalId: result.suggestionId,
-        })),
-      );
-      await persistPlanningDecision(authResult.supabase, {
-        ...finalDecision,
-        afterState: null,
-        status: "failed",
-        targetRecordIds: [],
-      });
-      await persistActionReceipt(authResult.supabase, {
-        ...automationReceipt,
-        actionType: "action_failed",
-        availableActions: ["view"],
-        itemCount: 0,
-        summary:
-          "The automatic changes were rolled back because a reversible receipt could not be recorded.",
-      });
-      await updateAutomationGrantStatus(
-        authResult.supabase,
-        authResult.userId,
-        automationGrant.id,
-        "revoked",
-      );
-      return NextResponse.json(
-        {
-          error:
-            "I couldn’t record a reversible automation receipt, so the automatic changes were rolled back. Nothing was confirmed as scheduled.",
-        },
-        { status: 500 },
-      );
+      actionReceiptPersisted = !receiptResult.error;
+      if (!actionReceiptPersisted) metadataWarningCode = "receipt_persistence_failed";
     }
+    if (!actionReceiptPersisted) automationReceipt = null;
   }
 
-  const context = await loadContextSummary(authResult.supabase, authResult.userId);
-  const series = workflowUpdate.data.workflow.context?.seriesProposal;
+  const failedRecords = results.flatMap((result) =>
+    result.status === "applied"
+      ? []
+      : [
+          {
+            code: getSafeApplyFailureCode(result),
+            proposalId: result.suggestionId,
+            safeMessage: result.message,
+          },
+        ],
+  );
+  const undoAvailable = Boolean(
+    automationGrant &&
+      decisionId &&
+      decisionFinalized &&
+      !snapshotResult.error &&
+      snapshotResult.data?.length === targetRecordIds.length &&
+      targetRecordIds.length > 0,
+  );
+  let applyResult = createApplyWorkflowResult({
+    ...(actionReceiptPersisted && automationReceipt
+      ? { actionReceiptId: automationReceipt.id }
+      : {}),
+    applied: appliedRecords,
+    authoritativeStatus:
+      appliedRecords.length > 0 && failedRecords.length > 0
+        ? "partially_applied"
+        : appliedRecords.length > 0 && metadataWarningCode
+          ? "applied_with_warning"
+          : appliedRecords.length > 0
+            ? "applied"
+            : "failed",
+    automationGrantId: automationGrant?.id,
+    automationMode,
+    failed: failedRecords,
+    outcome:
+      appliedRecords.length > 0 && failedRecords.length > 0
+        ? "partially_applied"
+        : appliedRecords.length > 0
+          ? "applied"
+          : "failed_before_write",
+    pendingProposalIds: proposalIds.filter(
+      (proposalId) =>
+        !appliedRecords.some((record) => record.proposalId === proposalId) &&
+        !failedRecords.some((failure) => failure.proposalId === proposalId),
+    ),
+    planningDecisionId:
+      automationGrant && decisionId && decisionFinalized ? decisionId : undefined,
+    proposalBatchId,
+    requestedProposalIds: proposalIds,
+    undoAvailable,
+    undoUnavailableReason: undoAvailable
+      ? undefined
+      : automationGrant
+        ? "Undo is unavailable because a complete decision mapping was not confirmed."
+        : "Undo is available only for a mapped automatic planning decision.",
+    warningCode: metadataWarningCode,
+    workflowId,
+  });
+  let applyLedgerPersistence = "not_attempted";
+  if (applyResult.proposalBatchId) {
+    const ledgerResult = await persistAuthoritativeApplyResult(
+      authResult.supabase,
+      {
+        attemptId: applyAttemptId,
+        claimToken: applyClaimToken,
+        result: applyResult as ApplyWorkflowResult & { proposalBatchId: string },
+        timezone: applyTimezone,
+        userId: authResult.userId,
+      },
+    );
+    if (ledgerResult.data) {
+      applyResult = ledgerResult.data.result;
+      applyLedgerPersistence = "persisted";
+    } else {
+      applyLedgerPersistence = isMissingAssistantApplyIntegritySchema(
+        ledgerResult.error,
+      )
+        ? "schema_unavailable"
+        : "failed";
+      const warningCode =
+        applyLedgerPersistence === "schema_unavailable"
+          ? "apply_integrity_schema_unavailable"
+          : "apply_integrity_persistence_failed";
+      applyResult = createApplyWorkflowResult({
+        ...(applyResult.actionReceiptId
+          ? { actionReceiptId: applyResult.actionReceiptId }
+          : {}),
+        applied: applyResult.applied,
+        authoritativeStatus:
+          applyResult.applied.length > 0 &&
+          (applyResult.failed.length > 0 ||
+            applyResult.pendingProposalIds.length > 0)
+            ? "partially_applied"
+            : applyResult.applied.length > 0
+              ? "applied_with_warning"
+              : applyResult.pendingProposalIds.length > 0
+                ? "ready_for_review"
+                : "failed",
+        automationGrantId: applyResult.automationGrantId,
+        automationMode: applyResult.automationMode,
+        failed: applyResult.failed,
+        idempotencyKey: applyResult.idempotencyKey,
+        outcome:
+          applyResult.applied.length > 0 &&
+          (applyResult.failed.length > 0 ||
+            applyResult.pendingProposalIds.length > 0)
+            ? "partially_applied"
+            : applyResult.applied.length > 0
+              ? "failed_after_write"
+              : applyResult.pendingProposalIds.length > 0
+                ? "review_required"
+                : "failed_before_write",
+        pendingProposalIds: applyResult.pendingProposalIds,
+        planningDecisionId: applyResult.planningDecisionId,
+        proposalBatchId: applyResult.proposalBatchId,
+        requestedProposalIds: applyResult.requestedProposalIds,
+        undoAvailable: false,
+        undoUnavailableReason:
+          "Undo is unavailable because the authoritative apply mapping could not be verified.",
+        warningCode,
+        workflowId,
+      });
+    }
+  } else {
+    applyLedgerPersistence = "missing_batch";
+    applyResult = createApplyWorkflowResult({
+      applied: applyResult.applied,
+      authoritativeStatus:
+        applyResult.applied.length > 0 ? "applied_with_warning" : "failed",
+      automationGrantId: applyResult.automationGrantId,
+      automationMode: applyResult.automationMode,
+      failed: applyResult.failed,
+      idempotencyKey: applyResult.idempotencyKey,
+      outcome:
+        applyResult.applied.length > 0
+          ? "failed_after_write"
+          : "failed_before_write",
+      pendingProposalIds: applyResult.pendingProposalIds,
+      planningDecisionId: applyResult.planningDecisionId,
+      requestedProposalIds: applyResult.requestedProposalIds,
+      undoAvailable: false,
+      undoUnavailableReason:
+        "Undo is unavailable because the proposal batch could not be verified.",
+      warningCode: "apply_batch_missing",
+      workflowId,
+    });
+  }
   const activityTitle =
-    workflowUpdate.data.workflow.context?.semanticRequest?.activity.title ??
+    preliminaryWorkflow.workflow.context?.semanticRequest?.activity.title ??
+    preliminaryWorkflow.workflow.extractedItems[0]?.title ??
     "requested";
-  const activityReference = /read the sealed nectar/i.test(activityTitle)
-    ? "Sealed Nectar reading"
-    : activityTitle;
-  const applyMessage =
-    appliedCount > 0 && series && proposalIds.length > 5
-      ? failedCount > 0
-        ? `Partly. ${appliedCount} ${activityReference} sessions were added, and ${failedCount} still need attention.`
-        : `Yes. Added ${appliedCount} ${activityReference} sessions across the next ${series.planningHorizon.weeks} weeks.`
-      : appliedCount > 0
-        ? `${failedCount > 0 ? "Partly." : "Yes."} ${appliedMessages.join(" ")}`
-        : "No. I couldn’t apply the approved sessions. No success confirmation was recorded.";
+  const applyResponsePlan = createApplyResponsePlan({
+    activityTitle,
+    result: applyResult,
+  });
+  const reconciledState = reconcileAssistantWorkflowWithApplyResult(
+    preliminaryWorkflow,
+    applyResult,
+  );
+  const finalWorkflow = reconciledState.workflow;
+  const finalPersistence = await persistAssistantWorkflow(
+    authResult.supabase,
+    finalWorkflow,
+    reconciledState.proposals,
+    reconciledState.batch,
+  );
+  if (finalPersistence.error) {
+    console.error("assistant_workflow", {
+      event: "authoritative_result_persistence_failed",
+      authoritativeOutcome: applyResult.outcome,
+      successfulRecordCount: applyResult.applied.length,
+      workflowId,
+    });
+  }
+  console.info("assistant_workflow", {
+    actionReceiptResult: actionReceiptPersisted ? "persisted" : "unavailable",
+    authoritativeOutcome: applyResult.outcome,
+    event: "authoritative_apply_finalized",
+    failedCount: applyResult.failed.length,
+    persistenceResult: applyLedgerPersistence,
+    planningDecisionResult: decisionFinalized ? "persisted" : "unavailable",
+    proposalBatchId: applyResult.proposalBatchId,
+    proposalStatusUpdateResult: applyLedgerPersistence,
+    responseMode: applyResponsePlan.mode,
+    successfulRecordCount: applyResult.applied.length,
+    undoAvailable: applyResult.undoAvailable,
+    workflowFinalizationResult: finalPersistence.error ? "failed" : "persisted",
+    workflowId,
+  });
+  const authoritativeWorkflow = finalPersistence.data?.workflow ?? finalWorkflow;
+  const context = await loadContextSummary(authResult.supabase, authResult.userId);
   const response: AssistantApplyResponse = {
+    applyResponsePlan,
+    applyResult,
     automationReceipt,
-    canonicalProposals: workflowUpdate.data.proposals,
-    completionStatus: workflowUpdate.data.workflow.completionStatus,
+    canonicalProposals:
+      finalPersistence.data?.proposals ?? reconciledState.proposals,
+    completionStatus: authoritativeWorkflow.completionStatus,
     context,
-    message: applyMessage,
-    proposalBatch: workflowUpdate.data.batch,
+    message: applyResponsePlan.primaryMessage,
+    proposalBatch: finalPersistence.data?.batch ?? reconciledState.batch,
     results,
-    workflow: workflowUpdate.data.workflow,
+    workflow: authoritativeWorkflow,
     workflowStatus: resolveAssistantWorkflowStatus({
-      workflow: workflowUpdate.data.workflow,
+      workflow: authoritativeWorkflow,
     }),
   };
 
