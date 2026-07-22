@@ -929,8 +929,27 @@ async function reconcileAndPersistCanonicalApplyState({
 function getStatusMessageFromApplyResult(
   result: ApplyWorkflowResult,
   activityTitle: string,
+  options?: { detailsOnly?: boolean },
 ) {
   const plan = createApplyResponsePlan({ activityTitle, result });
+  if (
+    options?.detailsOnly &&
+    (result.authoritativeStatus === "applied" ||
+      result.authoritativeStatus === "applied_with_warning" ||
+      result.authoritativeStatus === "partially_applied") &&
+    result.applied.length > 0
+  ) {
+    const lines = result.applied.map((record) => {
+      const date = new Date(`${record.date}T12:00:00`);
+      const day = Number.isNaN(date.getTime())
+        ? record.date
+        : new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+      return `- ${day} · ${record.title} · ${formatTimeInputLabel(
+        record.startTime,
+      )}–${formatTimeInputLabel(record.endTime)}`;
+    });
+    return `Here’s what I scheduled:\n\n${lines.join("\n")}`;
+  }
   if (result.authoritativeStatus === "ready_for_review") {
     return `Not yet. ${result.pendingProposalIds.length} ${
       result.pendingProposalIds.length === 1 ? "session is" : "sessions are"
@@ -955,11 +974,13 @@ function getStatusMessageFromApplyResult(
 function createAuthoritativeStatusResponse({
   applyResult,
   baseResponse,
+  detailsOnly = false,
   loaded,
   planningContext,
 }: {
   applyResult: ApplyWorkflowResult | null;
   baseResponse: AssistantPlanReviewResponse;
+  detailsOnly?: boolean;
   loaded: LoadedAssistantWorkflow;
   planningContext: AssistantPlanningContext;
 }): AssistantPlanReviewResponse {
@@ -968,33 +989,45 @@ function createAuthoritativeStatusResponse({
       loaded.workflow.context?.semanticRequest?.activity.title ??
       loaded.workflow.extractedItems[0]?.title ??
       "the requested";
-    const applyResponsePlan = createApplyResponsePlan({
-      activityTitle: title,
-      result: applyResult,
+    const message = getStatusMessageFromApplyResult(applyResult, title, {
+      detailsOnly,
     });
-    const message = getStatusMessageFromApplyResult(applyResult, title);
     const completionStatus =
       applyResult.applied.length > 0
         ? ("records_applied" as const)
         : applyResult.pendingProposalIds.length > 0
           ? ("proposal_created" as const)
           : ("nothing_created" as const);
-    const workflow = {
-      ...loaded.workflow,
-      context: loaded.workflow.context
-        ? { ...loaded.workflow.context, applyResult }
-        : loaded.workflow.context,
-    };
+    const workflow = loaded.workflow;
+    const workflowStatus = resolveAssistantWorkflowStatus({ workflow });
+    const responsePlan = createAssistantResponsePlan({
+      actions: [],
+      context: workflow.context,
+      insights: [],
+      message,
+      prompt: "status",
+    });
     return {
       ...baseResponse,
       actions: [],
-      applyResponsePlan,
+      applyResponsePlan: null,
       applyResult,
       assistantMessage: message,
       canonicalProposals: loaded.proposals,
       insights: [],
       message,
       proposalBatch: loaded.batch,
+      responsePlan: {
+        ...responsePlan,
+        allowAppliedLanguage: applyResult.applied.length > 0,
+        allowDraftLanguage: false,
+        appliedRecordCount: applyResult.applied.length,
+        failedCount: applyResult.failed.length,
+        mode: "status_answer",
+        pendingProposalCount: applyResult.pendingProposalIds.length,
+        primaryMessage: message,
+        workflowStatus,
+      },
       schedulingContext: workflow.context,
       suggestions: [],
       turnResult: createAssistantTurnResult({
@@ -1019,7 +1052,7 @@ function createAuthoritativeStatusResponse({
         workflowState: loaded.workflow.state,
       }),
       workflow,
-      workflowStatus: resolveAssistantWorkflowStatus({ workflow }),
+      workflowStatus,
     };
   }
   const savedBlockIds = new Set(
@@ -1089,6 +1122,14 @@ function createAuthoritativeStatusResponse({
     message,
     authoritativeCompletionStatus,
   );
+  const workflowStatus = resolveAssistantWorkflowStatus({ workflow: loaded.workflow });
+  const responsePlan = createAssistantResponsePlan({
+    actions: [],
+    context: loaded.workflow.context,
+    insights: [],
+    message: guarded.responseText,
+    prompt: "status",
+  });
   const turnResult = createAssistantTurnResult({
     completionStatus: authoritativeCompletionStatus,
     contextStatus: baseResponse.contextStatus,
@@ -1120,16 +1161,28 @@ function createAuthoritativeStatusResponse({
   return {
     ...baseResponse,
     actions: [],
+    applyResponsePlan: null,
+    applyResult: null,
     assistantMessage: guarded.responseText,
     canonicalProposals: loaded.proposals,
     insights: [],
     message: guarded.responseText,
     proposalBatch: loaded.batch,
+    responsePlan: {
+      ...responsePlan,
+      allowAppliedLanguage: applied.length > 0,
+      allowDraftLanguage: pending.length > 0,
+      appliedRecordCount: applied.length,
+      mode: "status_answer",
+      pendingProposalCount: pending.length,
+      primaryMessage: guarded.responseText,
+      workflowStatus,
+    },
     schedulingContext: loaded.workflow.context,
     suggestions: [],
     turnResult,
     workflow: loaded.workflow,
-    workflowStatus: resolveAssistantWorkflowStatus({ workflow: loaded.workflow }),
+    workflowStatus,
   };
 }
 
@@ -2969,6 +3022,7 @@ export async function POST(request: NextRequest) {
         : createAuthoritativeStatusResponse({
             applyResult,
             baseResponse: baseWithWarning,
+            detailsOnly: isAssistantAppliedDetailsQuestion(prompt),
             loaded: statusWorkflow,
             planningContext: context,
           })
@@ -3035,7 +3089,34 @@ export async function POST(request: NextRequest) {
           userId: authResult.userId,
         })
       : null;
-    if (!applyResult?.undoAvailable || !applyResult.planningDecisionId) {
+    let undoDecisionRecordId =
+      applyResult?.undoAvailable && applyResult.planningDecisionId
+        ? applyResult.planningDecisionId
+        : null;
+    if (!undoDecisionRecordId && loadedWorkflow) {
+      const latestDecision = await loadLatestReversibleDecision(
+        authResult.supabase,
+        authResult.userId,
+        loadedWorkflow.workflow.workflowId,
+      );
+      if (latestDecision.data?.targetRecordIds.length) {
+        undoDecisionRecordId = latestDecision.data.id;
+        console.info("assistant_workflow", {
+          event: "undo_decision_recovered_from_workflow",
+          planningDecisionId: latestDecision.data.id,
+          targetRecordCount: latestDecision.data.targetRecordIds.length,
+          threadId: loadedWorkflow.workflow.threadId,
+          workflowId: loadedWorkflow.workflow.workflowId,
+        });
+      } else if (latestDecision.error) {
+        console.error("assistant_workflow", {
+          event: "undo_decision_recovery_failed",
+          threadId: loadedWorkflow.workflow.threadId,
+          workflowId: loadedWorkflow.workflow.workflowId,
+        });
+      }
+    }
+    if (!undoDecisionRecordId) {
       const message =
         applyResult?.undoUnavailableReason ??
         "I couldn’t find a reversible automated action in this conversation.";
@@ -3047,7 +3128,7 @@ export async function POST(request: NextRequest) {
     }
     const authorization = request.headers.get("authorization");
     const undoRequest = await fetch(new URL("/api/assistant/undo", request.url), {
-      body: JSON.stringify({ decisionRecordId: applyResult.planningDecisionId }),
+      body: JSON.stringify({ decisionRecordId: undoDecisionRecordId }),
       headers: {
         ...(authorization ? { Authorization: authorization } : {}),
         "Content-Type": "application/json",

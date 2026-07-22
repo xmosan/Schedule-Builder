@@ -24,6 +24,7 @@ import {
   sanitizeAssistantUserFacingText,
   shouldRenderAssistantClarification,
 } from "../lib/assistant-ui-guards";
+import { isConversationOnlyAssistantResponseMode } from "../lib/assistant-presentation";
 import type { SchedulingWorkflowContext } from "../lib/assistant-workflow";
 
 const occurrenceSeeds = [
@@ -566,6 +567,10 @@ function runWorkspaceSourceCases() {
     new URL("../components/assistant/assistant-page.tsx", import.meta.url),
     "utf8",
   );
+  const planRoute = readFileSync(
+    new URL("../app/api/assistant/plan/route.ts", import.meta.url),
+    "utf8",
+  );
   const contextPanel = readFileSync(
     new URL("../components/assistant/assistant-context-panel.tsx", import.meta.url),
     "utf8",
@@ -603,10 +608,18 @@ function runWorkspaceSourceCases() {
   assert.match(assistantPage, /getCanonicalApplyResult\(message\.response\)/);
   assert.match(assistantPage, /reconcileMessagesAfterApply/);
   assert.match(assistantPage, /reconcileCanonicalPlanAfterMutation/);
+  assert.match(assistantPage, /isConversationOnlyAssistantResponseMode/);
   assert.match(
     assistantPage,
     /I couldn’t verify any saved changes, so no success confirmation was recorded/,
   );
+  assert.match(planRoute, /mode: "status_answer"/);
+  assert.match(planRoute, /Here’s what I scheduled/);
+  assert.match(planRoute, /detailsOnly: isAssistantAppliedDetailsQuestion\(prompt\)/);
+  assert.match(planRoute, /undo_decision_recovered_from_workflow/);
+  assert.equal(isConversationOnlyAssistantResponseMode("status_answer"), true);
+  assert.equal(isConversationOnlyAssistantResponseMode("social_reply"), true);
+  assert.equal(isConversationOnlyAssistantResponseMode("auto_applied"), false);
   assert.doesNotMatch(assistantPage, /appliedProposalIds=\{activeWorkflow/);
   assert.doesNotMatch(assistantPage, /updateSchedulingContextAfterApply/);
   assert.match(assistantPage, /open=\{isScheduleContextOpen\}/);

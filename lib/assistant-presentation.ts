@@ -11,6 +11,7 @@ export type AssistantResponseMode =
   | "applied_confirmation"
   | "auto_applied"
   | "partially_applied"
+  | "status_answer"
   | "undo_result"
   | "social_reply"
   | "warning"
@@ -57,6 +58,12 @@ export type AssistantResponsePlan = {
   showNeedsAttention: boolean;
   workflowStatus?: AssistantWorkflowStatus;
 };
+
+export function isConversationOnlyAssistantResponseMode(
+  mode?: AssistantResponseMode | null,
+) {
+  return mode === "social_reply" || mode === "status_answer";
+}
 
 const cannedPhrasePattern =
   /\b(?:absolutely|keep this focused|highest-impact next steps|you(?:'re| are) all set|ask for another plan|why this helps|your week stays realistic instead of crowded)\b/i;

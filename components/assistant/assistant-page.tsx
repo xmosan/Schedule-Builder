@@ -37,6 +37,7 @@ import {
   type ApplyWorkflowResult,
 } from "@/lib/assistant-apply-result";
 import type { SchedulingWorkflowContext } from "@/lib/assistant-workflow";
+import { isConversationOnlyAssistantResponseMode } from "@/lib/assistant-presentation";
 import {
   priorityLevels,
   projectCategories,
@@ -286,6 +287,10 @@ function guardUnverifiedAssistantContent(
   content: string,
   response?: AssistantPlanReviewResponse,
 ) {
+  if (isConversationOnlyAssistantResponseMode(response?.responsePlan?.mode)) {
+    return content;
+  }
+
   const applyResult = getCanonicalApplyResult(response);
   if (applyResult) {
     return validateApplyResponseText(content, applyResult).valid
@@ -392,8 +397,9 @@ function normalizeResponseForChat(
   response: AssistantPlanReviewResponse,
   _messageId: string,
 ): AssistantPlanReviewResponse {
-  const preservesConversationalReply =
-    response.responsePlan?.mode === "social_reply";
+  const preservesConversationalReply = isConversationOnlyAssistantResponseMode(
+    response.responsePlan?.mode,
+  );
   const actions = preservesConversationalReply
     ? []
     : response.canonicalProposals?.length
@@ -459,9 +465,12 @@ function getCanonicalApplyResult(
   response?: AssistantPlanReviewResponse | null,
 ) {
   if (
-    response?.responsePlan?.mode === "social_reply" &&
+    isConversationOnlyAssistantResponseMode(response?.responsePlan?.mode) &&
     !response.applyResult
   ) {
+    return null;
+  }
+  if (isConversationOnlyAssistantResponseMode(response?.responsePlan?.mode)) {
     return null;
   }
   return normalizeApplyWorkflowResult(
@@ -628,7 +637,9 @@ function findLatestMatchingAssistantMessageIndex(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "assistant" || !message.response) continue;
-    if (message.response.responsePlan?.mode === "social_reply") continue;
+    if (isConversationOnlyAssistantResponseMode(message.response.responsePlan?.mode)) {
+      continue;
+    }
     const messageWorkflowId = message.response.workflow?.workflowId;
     const messageProposalIds = getResponseProposalIds(message.response);
     const hasProposalIntersection = [...proposalIds].some((proposalId) =>
