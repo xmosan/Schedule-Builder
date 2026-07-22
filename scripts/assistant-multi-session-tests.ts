@@ -25,6 +25,8 @@ const prompt =
   "Starting this week, schedule two 90-minute FE Civil study sessions and one 60-minute review session on three different days. Prefer evenings between 6:00 and 9:00 PM, do not place anything immediately after work, and keep Friday evening free. Tomorrow I am leaving work at 2:30 PM instead of 5:00 PM. You may automatically add the sessions if they fit these rules without conflicts; otherwise ask me one clear question. Keep your response brief.";
 const conditionalFallbackPrompt =
   "Starting this week, schedule two 90-minute FE Civil study sessions and one 60-minute review session on three different days. Prefer evenings between 6:00 and 9:00 PM, keep Friday evening free, and do not place anything immediately after work. If you cannot fit all three sessions in the evening, you may use Saturday afternoon for the 60-minute review session. You may automatically add the sessions if they fit these rules without conflicts. Keep your response brief.";
+const personalBlocksPrompt =
+  "This week, schedule three personal blocks for me: one 60-minute workout, one 45-minute grocery trip, and one 90-minute project work session. Put them on three different days, prefer evenings between 6:00 and 9:00 PM, and do not use Friday evening. You may automatically add them if they fit without conflicts. Keep your response brief.";
 const workflowId = "workflow-fe-civil";
 const currentDate = "2026-07-07";
 const weekStartDate = "2026-07-06";
@@ -73,6 +75,45 @@ assert.equal(request.planningHorizon.startDate, "2026-07-07");
 assert.equal(request.planningHorizon.endDate, "2026-07-12");
 assert.equal(validateSessionDurations(request.sessions).valid, true);
 assert.equal(request.missingFields.length, 0);
+
+assert.equal(
+  classifySchedulingRequestKind(personalBlocksPrompt),
+  "bounded_multi_session_plan",
+  "A bounded list of heterogeneous one-off items uses the deterministic planner",
+);
+const personalBlocksRequest = extractMultiSessionPlanningRequest({
+  currentDate,
+  prompt: personalBlocksPrompt,
+  resolvedAt,
+  timezone,
+  weekStartDate,
+  workflowId: "workflow-personal-blocks",
+});
+assert.ok(personalBlocksRequest, "The exact live personal-block request is extracted");
+assert.deepEqual(
+  personalBlocksRequest.sessions.map((session) => session.activityTitle),
+  ["Workout", "Grocery trip", "Project work session"],
+);
+assert.deepEqual(
+  personalBlocksRequest.sessions.map((session) => session.durationMinutes),
+  [60, 45, 90],
+);
+assert.deepEqual(
+  personalBlocksRequest.sessions.map((session) => session.count),
+  [1, 1, 1],
+  "Each requested personal block is a one-off item, not a recurring series",
+);
+assert.deepEqual(personalBlocksRequest.missingFields, []);
+assert.equal(personalBlocksRequest.globalConstraints.requireDifferentDays, true);
+assert.deepEqual(personalBlocksRequest.preferences.preferredTimeRanges, [
+  { end: "21:00", start: "18:00" },
+]);
+assert.deepEqual(personalBlocksRequest.globalConstraints.excludedDateRanges, [
+  {
+    endsAt: "2026-07-10T22:00:00",
+    startsAt: "2026-07-10T17:00:00",
+  },
+]);
 
 const conditionalFallbackRequest = extractMultiSessionPlanningRequest({
   currentDate: "2026-07-20",
@@ -163,9 +204,36 @@ assert.equal(grant.guardrails.maximumWeeklyMinutes, 240);
 assert.equal(grant.guardrails.earliestTime, "18:00");
 assert.equal(grant.guardrails.latestTime, "21:00");
 assert.equal(grant.guardrails.minimumBufferAfterWorkMinutes, 30);
-assert.deepEqual(grant.guardrails.excludedDays, [5]);
+assert.deepEqual(grant.guardrails.excludedDateRanges, [
+  {
+    endsAt: "2026-07-10T22:00:00",
+    startsAt: "2026-07-10T17:00:00",
+  },
+]);
+assert.equal(grant.guardrails.excludedDays, undefined);
 assert.equal(grant.guardrails.requireDifferentDays, true);
 assert.equal(grant.allowedActions.some((action) => /google/i.test(action)), false);
+
+const personalBlocksGrant = extractAutomationGrant({
+  multiSessionRequest: personalBlocksRequest,
+  prompt: personalBlocksPrompt,
+  semanticRequest: extractSemanticPlanningRequest({
+    prompt: personalBlocksPrompt,
+    workflowId: personalBlocksRequest.workflowId,
+  }),
+  sourceMessageId: "message-personal-blocks",
+  userId: "user-personal-blocks",
+  weekStartDate,
+});
+assert.ok(personalBlocksGrant);
+assert.equal(personalBlocksGrant.scope, "current_request");
+assert.deepEqual(personalBlocksGrant.guardrails.allowedActivityTitles, [
+  "Workout",
+  "Grocery trip",
+  "Project work session",
+]);
+assert.equal(personalBlocksGrant.guardrails.maximumOccurrences, 3);
+assert.equal(personalBlocksGrant.guardrails.maximumWeeklyMinutes, 195);
 
 const conditionalFallbackGrant = extractAutomationGrant({
   multiSessionRequest: conditionalFallbackRequest,
@@ -242,6 +310,191 @@ assert.equal(turn.context.temporaryScheduleContext?.relatedWorkShiftId, "shift-2
 assert.equal(input.scheduleExceptions?.length, 0);
 assert.ok(input.workShifts.every((shift) => shift.endTime === "17:00"));
 assert.doesNotMatch(turn.message, /strongest opening|choose an opening|how much time/i);
+
+const personalBlocksTurn = advanceAssistantSchedulingConversation({
+  input: { ...input, automationGrant: personalBlocksGrant },
+  prompt: personalBlocksPrompt,
+});
+assert.ok(
+  personalBlocksTurn,
+  "The exact personal-block request enters the deterministic scheduler",
+);
+assert.equal(
+  personalBlocksTurn.context.requestKind,
+  "bounded_multi_session_plan",
+);
+assert.equal(personalBlocksTurn.context.state, "awaiting_apply");
+assert.equal(personalBlocksTurn.context.pendingQuestion, null);
+assert.equal(personalBlocksTurn.context.pendingProposals.length, 3);
+assert.equal(
+  personalBlocksTurn.context.semanticRequest?.scheduleInstructions.preferredDays,
+  undefined,
+  "The generic semantic parser cannot invert the Friday-evening exclusion into a Friday preference",
+);
+assert.deepEqual(
+  personalBlocksTurn.context.pendingProposals
+    .map((proposal) => proposal.title)
+    .sort(),
+  ["Grocery trip", "Project work session", "Workout"],
+);
+assert.deepEqual(
+  Object.fromEntries(
+    personalBlocksTurn.context.pendingProposals.map((proposal) => [
+      proposal.title,
+      proposal.durationMinutes,
+    ]),
+  ),
+  {
+    "Grocery trip": 45,
+    "Project work session": 90,
+    Workout: 60,
+  },
+);
+assert.deepEqual(
+  personalBlocksTurn.context.multiSessionRequest?.sessions.map(
+    (session) => session.activityTitle,
+  ),
+  ["Workout", "Grocery trip", "Project work session"],
+);
+assert.equal(
+  new Set(
+    personalBlocksTurn.context.pendingProposals.map(
+      (proposal) => proposal.date,
+    ),
+  ).size,
+  3,
+  "The three personal blocks use three different dates",
+);
+personalBlocksTurn.context.pendingProposals.forEach((proposal) => {
+  const startsAt = `${proposal.date}T${proposal.startTime}:00`;
+  const endsAt = `${proposal.date}T${proposal.selectedWindowEnd}:00`;
+  assert.equal(
+    startsAt < "2026-07-10T22:00:00" &&
+      endsAt > "2026-07-10T17:00:00",
+    false,
+    "No selected block overlaps Friday evening",
+  );
+});
+assert.doesNotMatch(
+  personalBlocksTurn.message,
+  /I need \d+ details|How many .*sessions|How long should|strongest opening|Which opening should I use|Waiting for a duration|How much time should I reserve|2\s*[×x]\s*30/i,
+);
+
+const personalBlockSuggestions = personalBlocksTurn.context.pendingProposals.map(
+  (proposal) => ({
+    batchId: proposal.batchId,
+    confidence: 1,
+    day:
+      personalBlocksTurn.context.candidateWindows.find(
+        (window) => window.date === proposal.date,
+      )?.day ?? "Monday",
+    description: proposal.details,
+    estimatedHours: (proposal.durationMinutes ?? 0) / 60,
+    id: proposal.id ?? proposal.title,
+    itemDate: proposal.date,
+    plannedTask: proposal.details,
+    projectName: proposal.title,
+    rationale: "Validated",
+    severity: "important" as const,
+    startTime: proposal.startTime,
+    summary: proposal.details,
+    title: proposal.title,
+    type: "suggested_weekly_block" as const,
+    workflowId: personalBlocksTurn.context.workflowId,
+  }),
+);
+assert.equal(
+  decideAssistantAutomation({
+    grant: personalBlocksTurn.context.automationGrant ?? null,
+    sourceDataComplete: true,
+    suggestions: personalBlockSuggestions,
+    workflowId: personalBlocksTurn.context.workflowId,
+  }).outcome,
+  "auto_apply",
+  "The exact heterogeneous plan can auto-apply only after all three validated blocks fit",
+);
+assert.equal(
+  decideAssistantAutomation({
+    grant: personalBlocksTurn.context.automationGrant ?? null,
+    sourceDataComplete: false,
+    suggestions: personalBlockSuggestions,
+    workflowId: personalBlocksTurn.context.workflowId,
+  }).outcome,
+  "create_review_batch",
+  "Incomplete source data prevents auto-application of the personal blocks",
+);
+assert.equal(
+  decideAssistantAutomation({
+    grant: personalBlocksTurn.context.automationGrant ?? null,
+    sourceDataComplete: true,
+    suggestions: personalBlockSuggestions.map((suggestion, index) =>
+      index === 0
+        ? {
+            ...suggestion,
+            itemDate: "2026-07-10",
+            startTime: "18:00",
+          }
+        : suggestion,
+    ),
+    workflowId: personalBlocksTurn.context.workflowId,
+  }).outcome,
+  "create_review_batch",
+  "The automation grant rejects a Friday-evening personal block",
+);
+
+const blockedPersonalBlocksTurn = advanceAssistantSchedulingConversation({
+  input: {
+    ...input,
+    automationGrant: personalBlocksGrant,
+    weeklyPlanBlocks: [
+      ["Tuesday", "2026-07-07"],
+      ["Wednesday", "2026-07-08"],
+      ["Thursday", "2026-07-09"],
+      ["Friday", "2026-07-10"],
+      ["Saturday", "2026-07-11"],
+      ["Sunday", "2026-07-12"],
+    ].map(([day, scheduledDate], index) => ({
+      day: day as
+        | "Tuesday"
+        | "Wednesday"
+        | "Thursday"
+        | "Friday"
+        | "Saturday"
+        | "Sunday",
+      estimatedHours: 24,
+      id: `blocked-day-${index}`,
+      plannedTask: "Unavailable",
+      projectName: "Existing commitment",
+      scheduledDate,
+      startTime: "00:00",
+    })),
+  },
+  prompt: personalBlocksPrompt,
+});
+assert.ok(blockedPersonalBlocksTurn);
+assert.equal(blockedPersonalBlocksTurn.context.state, "needs_clarification");
+assert.equal(blockedPersonalBlocksTurn.context.pendingProposals.length, 0);
+assert.deepEqual(
+  blockedPersonalBlocksTurn.context.extractedItems.flatMap(
+    (item) => item.missingFields,
+  ),
+  [],
+  "A capacity failure does not invent missing counts or durations",
+);
+assert.equal(
+  (blockedPersonalBlocksTurn.context.pendingQuestion?.match(/\?/g) ?? [])
+    .length,
+  1,
+  "An infeasible bounded plan asks one focused relaxation question",
+);
+assert.match(
+  blockedPersonalBlocksTurn.message,
+  /May I widen the preferred time range\? Nothing has been scheduled\.$/,
+);
+assert.doesNotMatch(
+  blockedPersonalBlocksTurn.message,
+  /How many|How long|2\s*[×x]\s*30|strongest opening/i,
+);
 
 const conditionalFallbackTurn = advanceAssistantSchedulingConversation({
   input: {

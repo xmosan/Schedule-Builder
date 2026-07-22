@@ -3257,8 +3257,11 @@ function createBoundedMultiSessionSchedulingTurn({
     prompt,
     workflowId,
   });
-  const { sessionDurationMinutes: _discardedUniformDuration, ...instructions } =
-    semanticBase.scheduleInstructions;
+  const {
+    preferredDays: _discardedModelPreferredDays,
+    sessionDurationMinutes: _discardedUniformDuration,
+    ...instructions
+  } = semanticBase.scheduleInstructions;
   const semanticRequest: SemanticPlanningRequest = {
     ...semanticBase,
     activity: {
@@ -3271,7 +3274,7 @@ function createBoundedMultiSessionSchedulingTurn({
     missingFields: [],
     scheduleInstructions: {
       ...instructions,
-      avoidDays: request.globalConstraints.excludedDateRanges?.length
+      avoidDays: request.globalConstraints.excludedWeekdays?.includes(5)
         ? ["Friday"]
         : instructions.avoidDays,
       desiredFrequency: { count: request.sessions.length, period: "week" },
@@ -3349,9 +3352,12 @@ function createBoundedMultiSessionSchedulingTurn({
     workflowId,
   };
   const relaxedSameDay = request.relaxations?.allowSameDayWithAfternoon;
+  const planLabel = /\bpersonal blocks\b/i.test(request.title)
+    ? "personal blocks"
+    : `${request.title.replace(/\s+(?:Study\s+)?Plan$/i, "")} sessions`;
   return {
     context,
-    message: `I built ${proposals.length} ${request.title.replace(/\s+(?:Study\s+)?Plan$/i, "")} sessions${
+    message: `I built ${proposals.length} ${planLabel}${
       relaxedSameDay ? ", including one afternoon session" : " on different days"
     }. Nothing has been added yet.`,
     proposal: proposals[0] ?? null,

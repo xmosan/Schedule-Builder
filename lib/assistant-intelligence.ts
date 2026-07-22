@@ -1,4 +1,5 @@
 import type { AssistantContextStatus } from "@/lib/assistant";
+import { classifySchedulingRequestKind } from "@/lib/assistant-multi-session";
 import type { Project } from "@/lib/projects";
 import {
   extractSemanticPlanningRequest,
@@ -207,14 +208,16 @@ export function parseExplicitDurationMinutes(prompt: string) {
     return 30;
   }
 
-  const minuteMatch = sessionText.match(/\b(\d+)\s*(?:minutes?|mins?)\b/i);
+  const minuteMatch = sessionText.match(
+    /\b(\d+)\s*[- ]?\s*(?:minutes?|mins?)\b/i,
+  );
   if (minuteMatch) {
     const minutes = Number(minuteMatch[1]);
     return Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : null;
   }
 
   const hourMatch = sessionText.match(
-    /\b(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*(?:hours?|hrs?)\b/i,
+    /\b(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*[- ]?\s*(?:hours?|hrs?)\b/i,
   );
   if (!hourMatch) {
     return null;
@@ -246,8 +249,12 @@ function inferTitle(text: string, type: ExtractedPlanningItemType) {
   const sealedNectar = text.match(/\b(?:read(?:ing)?\s+)?(?:the\s+)?sealed nectar\b/i);
   if (sealedNectar) return "Read The Sealed Nectar";
   if (/\bmsa\b/i.test(text)) return "MSA preparation";
+  if (/\bgrocery\s+trip\b/i.test(text)) return "Grocery trip";
   if (/\bgrocer/i.test(text)) return "Groceries";
   if (/\bworkout/i.test(text)) return "Workout";
+  if (/\bproject\s+work\s+session\b/i.test(text)) {
+    return "Project work session";
+  }
   if (/\bassignment\b/i.test(text)) {
     const subject = text.match(/\b([A-Za-z0-9][A-Za-z0-9 &'-]{1,40}) assignment\b/i)?.[1];
     return subject && !/^(?:a|an|the|my)$/i.test(subject.trim())
@@ -293,7 +300,10 @@ function splitPlanningSegments(prompt: string) {
 
   const listLead = prompt.match(/\b(?:i have|plan|schedule)\s+(.+)$/i)?.[1] ?? prompt;
   const normalized = listLead.replace(/,?\s+and\s+(?=(?:an?|two|three|four|my)\b)/gi, ", ");
-  const segments = normalized.split(/\s*,\s*/).map((item) => item.trim()).filter(Boolean);
+  const segments = normalized
+    .split(/\s*,\s*/)
+    .map((item) => item.split(/[.!?]/, 1)[0]?.trim() ?? "")
+    .filter(Boolean);
   return segments.length > 1 ? segments : [prompt.trim()];
 }
 
@@ -331,9 +341,12 @@ export function matchProjectsForText(projects: Project[], text: string) {
 
 export function extractPlanningItems(prompt: string, projects: Project[] = []) {
   const semantic = extractSemanticPlanningRequest({ projects, prompt });
+  const boundedTimedPlan =
+    classifySchedulingRequestKind(prompt) === "bounded_multi_session_plan";
   const recurring =
-    isRecurringPlanningRequest(prompt) ||
-    semantic.itemType === "time_block_series";
+    !boundedTimedPlan &&
+    (isRecurringPlanningRequest(prompt) ||
+      semantic.itemType === "time_block_series");
   const sharedCount =
     parseRequestedSessionCount(prompt) ??
     semantic.scheduleInstructions.desiredFrequency?.count ??

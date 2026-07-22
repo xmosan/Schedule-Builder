@@ -358,6 +358,30 @@ check("Scan-and-choose wording is an explicit scheduling request", () =>
   ));
 check("Duration parser does not invent a duration", () => assert.equal(parseExplicitDurationMinutes("schedule reading"), null));
 check("Duration parser preserves 45 minutes", () => assert.equal(parseExplicitDurationMinutes("45 minutes each"), 45));
+check("Duration parser preserves hyphenated 60-minute input", () =>
+  assert.equal(parseExplicitDurationMinutes("one 60-minute workout"), 60));
+
+const personalBlocksPrompt =
+  "This week, schedule three personal blocks for me: one 60-minute workout, one 45-minute grocery trip, and one 90-minute project work session. Put them on three different days, prefer evenings between 6:00 and 9:00 PM, and do not use Friday evening. You may automatically add them if they fit without conflicts. Keep your response brief.";
+const personalBlockItems = extractPlanningItems(personalBlocksPrompt);
+check("Bounded personal-block fallback extraction keeps all three items", () =>
+  assert.equal(personalBlockItems.length, 3));
+check("Bounded personal-block fallback extraction keeps exact titles", () =>
+  assert.deepEqual(
+    personalBlockItems.map((item) => item.title),
+    ["Workout", "Grocery trip", "Project work session"],
+  ));
+check("Bounded personal-block fallback extraction keeps mixed durations", () =>
+  assert.deepEqual(
+    personalBlockItems.map((item) => item.durationMinutes),
+    [60, 45, 90],
+  ));
+check("Bounded one-off items do not invent recurring fields", () => {
+  assert.ok(personalBlockItems.every((item) => !item.frequency));
+  assert.deepEqual(personalBlockItems.flatMap((item) => item.missingFields), []);
+});
+check("Complete bounded items produce no generic clarification", () =>
+  assert.equal(createConsolidatedClarification(personalBlockItems), null));
 
 check("Truth guard blocks all-set with nothing created", () => {
   const result = validateAssistantCompletionLanguage("You're all set.", "nothing_created");

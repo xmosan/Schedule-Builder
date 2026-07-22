@@ -327,11 +327,15 @@ function inferSharedActivityContext(activity: string) {
 
 function createSessionTitle(activity: string, sharedContext: string) {
   const type = inferActivityType(activity);
+  const cleanedActivity = cleanActivityPhrase(activity);
+  if (!sharedContext && ["errand", "project_work", "other"].includes(type)) {
+    return `${cleanedActivity.charAt(0).toUpperCase()}${cleanedActivity.slice(1)}`;
+  }
   const typeLabel =
     type === "project_work"
       ? "Project Work"
       : type === "other"
-        ? cleanActivityPhrase(activity)
+        ? cleanedActivity
         : titleCase(type.replace(/_/g, " "));
   const context = sharedContext || inferSharedActivityContext(activity);
   return titleCase(`${context} ${typeLabel}`.trim());
@@ -339,9 +343,9 @@ function createSessionTitle(activity: string, sharedContext: string) {
 
 function parseSessionGroups(prompt: string) {
   const normalized = prompt.replace(/[–—]/g, "-");
-  const pattern =
-    /\b(\d+|one|two|three|four|five|six|seven|eight|a|an)\s+(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*[- ]?\s*(minutes?|mins?|hours?|hrs?)\s+(.{1,80}?)\s+(?:sessions?|blocks?)\b/gi;
-  return [...normalized.matchAll(pattern)].flatMap((match) => {
+  const timedItemPattern =
+    /\b(\d+|one|two|three|four|five|six|seven|eight|a|an)\s+(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight)\s*[- ]?\s*(minutes?|mins?|hours?|hrs?)\s+([^,.;!?]{1,100}?)(?=\s*(?:,\s*(?:and\s+)?|\band\s+(?=(?:\d+|one|two|three|four|five|six|seven|eight|a|an)\s+(?:\d+|one|two|three|four|five|six|seven|eight)\s*[- ]?\s*(?:minutes?|mins?|hours?|hrs?))|[.;!?]|$))/gi;
+  return [...normalized.matchAll(timedItemPattern)].flatMap((match) => {
     const count = parseCount(match[1]);
     const durationMinutes = parseDuration(match[2], match[3]);
     const activity = cleanActivityPhrase(match[4]);
@@ -475,7 +479,10 @@ export function extractMultiSessionPlanningRequest({
   const planningEndDate = addDays(weekStartDate, 6);
   const horizonStartDate = currentDate > weekStartDate ? currentDate : weekStartDate;
   const fridayDate = getFridayDate(weekStartDate);
-  const keepFridayEveningFree = /\b(?:keep|leave)\s+friday\s+evening\s+free\b/i.test(prompt);
+  const keepFridayEveningFree =
+    /\b(?:(?:keep|leave)\s+friday\s+evening\s+free|(?:do not|don['’]t)\s+(?:use|schedule|book|place)\s+(?:anything\s+)?(?:on\s+)?friday\s+evening)\b/i.test(
+      prompt,
+    );
   const temporaryOverride = parseTemporaryOverride({
     currentDate,
     prompt,
@@ -483,9 +490,17 @@ export function extractMultiSessionPlanningRequest({
     timezone,
     workflowId,
   });
-  const contextTitle = titleCase(sharedContext || groups[0].activity);
   const isStudyPlan = groups.every((group) =>
     ["study", "review"].includes(inferActivityType(group.activity)),
+  );
+  const activityTypes = new Set(
+    groups.map((group) => inferActivityType(group.activity)),
+  );
+  const isHeterogeneousPlan = activityTypes.size > 1 && !isStudyPlan;
+  const contextTitle = titleCase(
+    isHeterogeneousPlan && /\bpersonal\s+blocks?\b/i.test(prompt)
+      ? "Personal Blocks"
+      : sharedContext || groups[0].activity,
   );
   const missingFields = validateSessionDurations(sessions).problems;
 

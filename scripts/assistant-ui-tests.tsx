@@ -594,6 +594,11 @@ function runWorkspaceSourceCases() {
   assert.equal(countMatches(assistantPage, /overflow-y-auto/g), 2);
   assert.match(assistantPage, /View schedule context/);
   assert.match(assistantPage, /resolveAssistantWorkflowStatus/);
+  assert.match(
+    assistantPage,
+    /context\.requestKind === "bounded_multi_session_plan"[\s\S]{0,120}context\.state === "needs_clarification"[\s\S]{0,80}return \[\]/,
+    "Bounded plan relaxation questions do not render generic opening or session-pattern choices",
+  );
   assert.doesNotMatch(assistantPage, /function getWorkflowStatus/);
   assert.match(assistantPage, /getCanonicalApplyResult\(message\.response\)/);
   assert.match(assistantPage, /reconcileMessagesAfterApply/);

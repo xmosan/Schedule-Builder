@@ -141,6 +141,63 @@ assert.equal(
   true,
 );
 
+const personalBlockRecords = [
+  createRecord({
+    date: "2026-07-07",
+    durationMinutes: 90,
+    proposalId: "personal-project-work",
+    startTime: "18:00",
+    title: "Project work session",
+  }),
+  createRecord({
+    date: "2026-07-09",
+    durationMinutes: 60,
+    proposalId: "personal-workout",
+    startTime: "18:00",
+    title: "Workout",
+  }),
+  createRecord({
+    date: "2026-07-12",
+    durationMinutes: 45,
+    proposalId: "personal-grocery-trip",
+    startTime: "18:00",
+    title: "Grocery trip",
+  }),
+];
+const personalBlocksSuccess = createApplyWorkflowResult({
+  actionReceiptId: "receipt-personal-blocks",
+  applied: personalBlockRecords,
+  attemptedAt: "2026-07-07T16:00:00.000Z",
+  automationGrantId: "grant-personal-blocks",
+  automationMode: "auto_apply",
+  planningDecisionId: "decision-personal-blocks",
+  requestedProposalIds: personalBlockRecords.map(
+    (record) => record.proposalId,
+  ),
+  undoAvailable: true,
+  workflowId: "workflow-personal-blocks",
+});
+const personalBlocksPlan = createApplyResponsePlan({
+  activityTitle: "Personal Blocks",
+  result: personalBlocksSuccess,
+});
+assert.match(
+  personalBlocksPlan.primaryMessage,
+  /^Yes\. 3 personal blocks were added:/,
+);
+assert.match(
+  personalBlocksPlan.primaryMessage,
+  /Tue · Project work session · 6:00 PM–7:30 PM/,
+);
+assert.match(
+  personalBlocksPlan.primaryMessage,
+  /Thu · Workout · 6:00 PM–7:00 PM/,
+);
+assert.match(
+  personalBlocksPlan.primaryMessage,
+  /Sun · Grocery trip · 6:00 PM–6:45 PM/,
+);
+
 const grantFailure = createApplyWorkflowResult({
   attemptedAt: "2026-07-20T15:00:00.000Z",
   authoritativeStatus: "ready_for_review",

@@ -484,6 +484,10 @@ export function createApplyResponsePlan({
   const appliedCount = result.applied.length;
   const pendingCount = result.pendingProposalIds.length;
   const failedCount = result.failed.length;
+  const isPersonalBlocksPlan = /^personal blocks?$/i.test(activityTitle.trim());
+  const appliedSubject = isPersonalBlocksPlan
+    ? `${appliedCount} personal block${appliedCount === 1 ? "" : "s"}`
+    : `${appliedCount} ${activityTitle} session${appliedCount === 1 ? "" : "s"}`;
   let mode: ApplyResponseMode;
   let primaryMessage: string;
 
@@ -496,10 +500,10 @@ export function createApplyResponsePlan({
       result.warningCode === "receipt_persistence_failed"
         ? "create the usual automation receipt"
         : "finish the usual automation record";
-    primaryMessage = `I added the ${appliedCount} ${activityTitle} session${
-      appliedCount === 1 ? "" : "s"
-    }, but I couldn’t ${warningDetail}. The session${
-      appliedCount === 1 ? " is" : "s are"
+    primaryMessage = `I added the ${appliedSubject}, but I couldn’t ${warningDetail}. ${
+      isPersonalBlocksPlan
+        ? `The block${appliedCount === 1 ? " is" : "s are"}`
+        : `The session${appliedCount === 1 ? " is" : "s are"}`
     } on your Weekly Plan.${
       result.undoAvailable
         ? ""
@@ -515,14 +519,16 @@ export function createApplyResponsePlan({
     }${exactLines.length ? `\n\n${exactLines.join("\n")}` : ""}`;
   } else if (result.authoritativeStatus === "applied") {
     mode = "applied";
-    primaryMessage = `Yes. ${appliedCount} ${activityTitle} session${
-      appliedCount === 1 ? " was" : "s were"
+    primaryMessage = `Yes. ${appliedSubject} ${
+      appliedCount === 1 ? "was" : "were"
     } added:${
       exactLines.length ? `\n\n${exactLines.join("\n")}` : ""
     }`;
   } else {
     mode = "failed";
-    primaryMessage = `I couldn’t add the ${activityTitle} sessions. Nothing changed.`;
+    primaryMessage = isPersonalBlocksPlan
+      ? "I couldn’t add the personal blocks. Nothing changed."
+      : `I couldn’t add the ${activityTitle} sessions. Nothing changed.`;
   }
 
   return {

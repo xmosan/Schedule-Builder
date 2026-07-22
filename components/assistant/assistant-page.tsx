@@ -145,6 +145,12 @@ function getSchedulingQuickReplies(
     context.state === "needs_clarification"
   ) {
     if (
+      context.requestKind === "bounded_multi_session_plan" &&
+      context.state === "needs_clarification"
+    ) {
+      return [];
+    }
+    if (
       context.semanticRequest?.weeklyGoal?.recommendedPattern.status ===
       "pending"
     ) {

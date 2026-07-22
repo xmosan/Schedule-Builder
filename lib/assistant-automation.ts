@@ -20,6 +20,7 @@ export type AutomationGrant = {
   allowedActions: AutomatableAction[];
   expiresAt?: string;
   guardrails: {
+    allowedActivityTitles?: string[];
     allowedDays?: number[];
     allowedTimeExceptions?: Array<{
       activityTitle: string;
@@ -29,6 +30,7 @@ export type AutomationGrant = {
       weekday: number;
     }>;
     earliestTime?: string;
+    excludedDateRanges?: Array<{ endsAt: string; startsAt: string }>;
     excludedDays?: number[];
     latestTime?: string;
     maximumOccurrences?: number;
@@ -236,13 +238,27 @@ export function extractAutomationGrant({
     ],
     expiresAt: `${addDays(weekRange.endDate, 1)}T00:00:00.000Z`,
     guardrails: {
+      ...(multiSessionRequest?.sessions.length
+        ? {
+            allowedActivityTitles: [
+              ...new Set(
+                multiSessionRequest.sessions.map(
+                  (session) => session.activityTitle,
+                ),
+              ),
+            ],
+          }
+        : {}),
       ...(structuredPreferredRange?.start
         ? { earliestTime: structuredPreferredRange.start }
         : prefersEvenings
           ? { earliestTime: "17:00" }
           : {}),
       ...(multiSessionRequest?.globalConstraints.excludedDateRanges?.length
-        ? { excludedDays: [5] }
+        ? {
+            excludedDateRanges:
+              multiSessionRequest.globalConstraints.excludedDateRanges,
+          }
         : {}),
       ...(multiSessionRequest?.globalConstraints.requireDifferentDays
         ? { requireDifferentDays: true }
@@ -398,11 +414,28 @@ export function decideAssistantAutomation({
       grant.allowedActions.includes(requiredAction) &&
       suggestions.every((suggestion) => {
         const title = suggestion.projectName || suggestion.title;
+        const normalizedTitle = normalizeTitle(title);
         const duration = Math.round((suggestion.estimatedHours ?? 0) * 60);
         const start = timeToMinutes(suggestion.startTime);
         const latest = timeToMinutes(grant.guardrails.latestTime);
         const earliest = timeToMinutes(grant.guardrails.earliestTime);
         const date = suggestion.itemDate;
+        const allowedActivityTitles =
+          grant.guardrails.allowedActivityTitles?.map(normalizeTitle) ?? [];
+        const activityTitleMatched =
+          allowedActivityTitles.length > 0
+            ? allowedActivityTitles.includes(normalizedTitle)
+            : normalizedTitle.includes(
+                normalizeTitle(grant.activityTitle ?? title),
+              );
+        const excludedDateRangeMatched = Boolean(
+          grant.guardrails.excludedDateRanges?.some((range) => {
+            if (!date || start === null) return true;
+            const startsAt = `${date}T${suggestion.startTime}:00`;
+            const endsAt = `${date}T${String(Math.floor((start + duration) / 60)).padStart(2, "0")}:${String((start + duration) % 60).padStart(2, "0")}:00`;
+            return startsAt < range.endsAt && endsAt > range.startsAt;
+          }),
+        );
         const primaryTimeRangeSatisfied =
           start === null ||
           ((earliest === null || start >= earliest) &&
@@ -427,7 +460,8 @@ export function decideAssistantAutomation({
               }) ?? false
             : false;
         return (
-          normalizeTitle(title).includes(normalizeTitle(grant.activityTitle ?? title)) &&
+          activityTitleMatched &&
+          !excludedDateRangeMatched &&
           (!date || !grant.guardrails.planningStartDate || date >= grant.guardrails.planningStartDate) &&
           (!date || !grant.guardrails.planningEndDate || date <= grant.guardrails.planningEndDate) &&
           (!date ||
