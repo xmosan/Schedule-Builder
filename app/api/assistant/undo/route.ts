@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { AssistantUndoResponse } from "@/lib/assistant";
 import { resolveAssistantWorkflowStatus } from "@/lib/assistant-automation";
 import { loadReceiptForDecision } from "@/lib/assistant-automation-store";
+import { formatAssistantActionRecord } from "@/lib/assistant-command";
 import { loadAssistantWorkflowById } from "@/lib/assistant-workflow-store";
 import { getUserFacingError } from "@/lib/user-facing-error";
 
@@ -60,6 +61,7 @@ type UndoRpcResult = {
   decision_id: string;
   reversed_records: Array<{
     block_id: string;
+    estimated_hours?: number | string;
     project_name: string;
     scheduled_date: string | null;
     start_time: string | null;
@@ -69,9 +71,24 @@ type UndoRpcResult = {
 };
 
 function formatRecord(record: UndoRpcResult["reversed_records"][number]) {
+  const durationMinutes = Math.round(Number(record.estimated_hours) * 60);
+  const startTime = record.start_time?.slice(0, 5);
+  if (
+    record.scheduled_date &&
+    startTime &&
+    Number.isFinite(durationMinutes) &&
+    durationMinutes > 0
+  ) {
+    return formatAssistantActionRecord({
+      blockId: record.block_id,
+      date: record.scheduled_date,
+      durationMinutes,
+      startTime,
+      title: record.project_name,
+    });
+  }
   const date = record.scheduled_date ?? "saved date";
-  const time = record.start_time?.slice(0, 5);
-  return `- ${record.project_name} · ${date}${time ? ` at ${time}` : ""}`;
+  return `- ${record.project_name} · ${date}${startTime ? ` at ${startTime}` : ""}`;
 }
 
 export async function POST(request: NextRequest) {

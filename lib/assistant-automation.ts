@@ -595,9 +595,3 @@ export function isAssistantAppliedDetailsQuestion(prompt: string) {
     prompt,
   );
 }
-
-export function isAssistantUndoRequest(prompt: string) {
-  return /^(?:please\s+)?(?:undo|reverse|remove)\s+(?:that|it|the automated plan)[.!\s]*$/i.test(
-    prompt.trim(),
-  );
-}

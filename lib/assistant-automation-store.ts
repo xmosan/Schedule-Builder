@@ -6,6 +6,30 @@ import type {
 } from "@/lib/assistant-automation";
 
 type StoreResult<T> = { data: T | null; error: unknown | null };
+const assistantActionHistoryLookbackMs = 7 * 24 * 60 * 60 * 1000;
+
+function mapPlanningDecisionRow(row: Record<string, unknown>) {
+  return {
+    actionType: row.action_type,
+    afterState: row.after_state,
+    automationMode: row.automation_mode,
+    beforeState: row.before_state,
+    constraintsUsed: row.constraints_used ?? [],
+    createdAt: row.created_at,
+    grantId: row.grant_id ?? undefined,
+    id: row.decision_id,
+    preferencesUsed: row.preferences_used ?? [],
+    proposalIds: row.proposal_ids ?? [],
+    reasonCodes: row.reason_codes ?? [],
+    reversibleUntil: row.reversible_until ?? undefined,
+    reversedAt: row.reversed_at ?? undefined,
+    scheduleExceptionIds: row.schedule_exception_ids ?? [],
+    status: row.status,
+    targetRecordIds: row.target_record_ids ?? [],
+    userId: row.user_id,
+    workflowId: row.workflow_id,
+  } as PlanningDecisionRecord;
+}
 
 export async function persistAutomationGrant(
   supabase: SupabaseClient,
@@ -164,34 +188,90 @@ export async function loadLatestReversibleDecision(
     )
     .eq("user_id", userId)
     .in("status", ["applied", "partially_applied"])
+    .is("reversed_at", null)
+    .gt("reversible_until", new Date().toISOString())
     .order("created_at", { ascending: false })
     .limit(1);
   if (workflowId) query = query.eq("workflow_id", workflowId);
   const result = await query.maybeSingle();
   if (result.error || !result.data) return { data: null, error: result.error };
-  const row = result.data;
   return {
-    data: {
-      actionType: row.action_type,
-      afterState: row.after_state,
-      automationMode: row.automation_mode,
-      beforeState: row.before_state,
-      constraintsUsed: row.constraints_used ?? [],
-      createdAt: row.created_at,
-      grantId: row.grant_id ?? undefined,
-      id: row.decision_id,
-      preferencesUsed: row.preferences_used ?? [],
-      proposalIds: row.proposal_ids ?? [],
-      reasonCodes: row.reason_codes ?? [],
-      reversibleUntil: row.reversible_until ?? undefined,
-      reversedAt: row.reversed_at ?? undefined,
-      scheduleExceptionIds: row.schedule_exception_ids ?? [],
-      status: row.status,
-      targetRecordIds: row.target_record_ids ?? [],
-      userId: row.user_id,
-      workflowId: row.workflow_id,
-    } as PlanningDecisionRecord,
+    data: mapPlanningDecisionRow(result.data),
     error: null,
+  };
+}
+
+export async function loadLatestAssistantDecision(
+  supabase: SupabaseClient,
+  userId: string,
+  workflowId?: string,
+  options?: { recentOnly?: boolean },
+) {
+  let query = supabase
+    .from("assistant_planning_decisions")
+    .select(
+      "decision_id, workflow_id, user_id, action_type, automation_mode, grant_id, proposal_ids, target_record_ids, reason_codes, preferences_used, constraints_used, schedule_exception_ids, before_state, after_state, status, reversible_until, reversed_at, created_at",
+    )
+    .eq("user_id", userId)
+    .in("status", ["applied", "partially_applied", "undone"])
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (workflowId) query = query.eq("workflow_id", workflowId);
+  if (options?.recentOnly) {
+    query = query.gte(
+      "created_at",
+      new Date(Date.now() - assistantActionHistoryLookbackMs).toISOString(),
+    );
+  }
+  const result = await query.maybeSingle();
+  if (result.error || !result.data) return { data: null, error: result.error };
+  return {
+    data: mapPlanningDecisionRow(result.data),
+    error: null,
+  };
+}
+
+export async function loadAssistantActionHistoryForCommand(
+  supabase: SupabaseClient,
+  userId: string,
+  workflowId?: string,
+) {
+  const [workflowLatest, workflowReversible] = workflowId
+    ? await Promise.all([
+        loadLatestAssistantDecision(supabase, userId, workflowId),
+        loadLatestReversibleDecision(supabase, userId, workflowId),
+      ])
+    : [
+        { data: null, error: null },
+        { data: null, error: null },
+      ];
+
+  if (workflowLatest.data || workflowLatest.error || workflowReversible.error) {
+    return {
+      latestAssistantAction: workflowLatest.data,
+      latestReversibleAction: workflowReversible.data,
+      error: workflowLatest.error ?? workflowReversible.error,
+      scope: "workflow" as const,
+    };
+  }
+
+  const [recentLatest, recentReversible] = await Promise.all([
+    loadLatestAssistantDecision(supabase, userId, undefined, {
+      recentOnly: true,
+    }),
+    loadLatestReversibleDecision(supabase, userId),
+  ]);
+  const latestReversibleAction =
+    recentReversible.data &&
+    new Date(recentReversible.data.createdAt).getTime() >=
+      Date.now() - assistantActionHistoryLookbackMs
+      ? recentReversible.data
+      : null;
+  return {
+    latestAssistantAction: recentLatest.data,
+    latestReversibleAction,
+    error: recentLatest.error ?? recentReversible.error,
+    scope: "recent_user" as const,
   };
 }
 

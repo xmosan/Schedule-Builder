@@ -6,7 +6,6 @@ import {
   extractAutomationGrant,
   isAssistantAppliedDetailsQuestion,
   isAssistantSocialReply,
-  isAssistantUndoRequest,
   resolveAssistantWorkflowStatus,
   shouldAskClarification,
 } from "../lib/assistant-automation";
@@ -57,7 +56,6 @@ assert.equal(
 );
 assert.equal(isAssistantSocialReply("Thank you."), true);
 assert.equal(isAssistantAppliedDetailsQuestion("What did you schedule?"), true);
-assert.equal(isAssistantUndoRequest("Undo that."), true);
 assert.equal(
   validateAssistantCompletionLanguage(
     "The reading plan is drafted and ready for review.",

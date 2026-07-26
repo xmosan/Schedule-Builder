@@ -15,6 +15,7 @@
     "test:assistant-semantics": "tsx scripts/assistant-semantic-tests.ts",
     "test:assistant-ui": "tsx scripts/assistant-ui-tests.tsx",
     "test:assistant-automation": "tsx scripts/assistant-automation-tests.ts",
+    "test:assistant-command": "tsx scripts/assistant-command-tests.ts",
     "test:assistant-apply-result": "tsx scripts/assistant-apply-result-tests.ts",
     "test:assistant-apply-sql": "tsx scripts/assistant-apply-sql-tests.ts",
     "test:assistant-apply-store": "tsx scripts/assistant-apply-store-tests.ts",

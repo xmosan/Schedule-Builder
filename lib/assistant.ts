@@ -270,6 +270,7 @@ export type AssistantUndoResponse = {
   reloadWarning?: string;
   reversedRecords: Array<{
     block_id: string;
+    estimated_hours?: number | string;
     project_name: string;
     scheduled_date: string | null;
     start_time: string | null;

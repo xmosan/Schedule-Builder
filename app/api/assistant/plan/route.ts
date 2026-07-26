@@ -28,15 +28,22 @@ import {
   extractAutomationGrant,
   isAssistantAppliedDetailsQuestion,
   isAssistantSocialReply,
-  isAssistantUndoRequest,
   resolveAssistantWorkflowStatus,
   type AutomationGrant,
+  type PlanningDecisionRecord,
 } from "@/lib/assistant-automation";
 import {
+  loadAssistantActionHistoryForCommand,
   loadLatestReversibleDecision,
   loadReceiptForDecision,
   persistAutomationGrant,
 } from "@/lib/assistant-automation-store";
+import {
+  createAssistantActionHistoryMessage,
+  looksLikeAssistantCommandOrHistoryQuestion,
+  normalizeAssistantCommand,
+  type AssistantCommandIntent,
+} from "@/lib/assistant-command";
 import type { PlannerProfile, PlannerType } from "@/lib/onboarding";
 import { getScheduleExceptionLoadStatus } from "@/lib/schedule-exceptions";
 import {
@@ -1610,6 +1617,66 @@ function createSocialAppliedResponse({
   } satisfies AssistantPlanReviewResponse;
 }
 
+function createActionHistoryStatusResponse({
+  baseResponse,
+  intent,
+  latestAction,
+  loaded,
+}: {
+  baseResponse: AssistantPlanReviewResponse;
+  intent:
+    | "status_latest_action"
+    | "status_last_scheduled"
+    | "status_last_undone";
+  latestAction: PlanningDecisionRecord | null;
+  loaded: LoadedAssistantWorkflow | null;
+}) {
+  const message = latestAction
+    ? createAssistantActionHistoryMessage({ intent, latestAction })
+    : intent === "status_last_undone"
+      ? "I couldn’t find a recent Assistant action that was undone."
+      : "I couldn’t find a recent Assistant scheduling action.";
+  const workflow = loaded?.workflow ?? null;
+  const schedulingContext = workflow?.context ?? null;
+  const workflowStatus = resolveAssistantWorkflowStatus({ workflow });
+  return {
+    ...baseResponse,
+    actions: [],
+    applyResponsePlan: null,
+    applyResult: null,
+    assistantMessage: message,
+    automationReceipt: null,
+    canonicalProposals: loaded?.proposals ?? [],
+    insights: [],
+    message,
+    proposalBatch: loaded?.batch ?? null,
+    responsePlan: {
+      ...createAssistantResponsePlan({
+        actions: [],
+        context: schedulingContext,
+        insights: [],
+        message,
+        prompt: "action history",
+      }),
+      allowAppliedLanguage: Boolean(
+        latestAction && latestAction.status !== "undone",
+      ),
+      allowDraftLanguage: false,
+      appliedRecordCount:
+        latestAction && latestAction.status !== "undone"
+          ? latestAction.targetRecordIds.length
+          : 0,
+      mode: "status_answer",
+      pendingProposalCount: 0,
+      workflowStatus,
+    },
+    schedulingContext,
+    suggestions: [],
+    workflow,
+    workflowStatus,
+  } satisfies AssistantPlanReviewResponse;
+}
+
 function createUndoPlanResponse({
   baseResponse,
   undo,
@@ -2981,6 +3048,55 @@ export async function POST(request: NextRequest) {
     dataWarning: warning,
     message: baseResponse.message,
   };
+  let latestAssistantAction: PlanningDecisionRecord | null = null;
+  let latestReversibleAction: PlanningDecisionRecord | null = null;
+  let commandIntent: AssistantCommandIntent = "new_planning_request";
+  if (looksLikeAssistantCommandOrHistoryQuestion(prompt)) {
+    const history = await loadAssistantActionHistoryForCommand(
+      authResult.supabase,
+      authResult.userId,
+      loadedWorkflow?.workflow.workflowId,
+    );
+    latestAssistantAction = history.latestAssistantAction;
+    latestReversibleAction = history.latestReversibleAction;
+    commandIntent = normalizeAssistantCommand({
+      activeWorkflow: loadedWorkflow?.workflow,
+      latestAssistantAction,
+      latestReversibleAction,
+      message: prompt,
+    });
+    console.info("assistant_workflow", {
+      commandIntent,
+      event: "assistant_command_normalized",
+      historyLookupResult: history.error
+        ? "failed"
+        : latestAssistantAction || latestReversibleAction
+          ? "found"
+          : "empty",
+      historyScope: history.scope,
+      latestActionStatus: latestAssistantAction?.status ?? null,
+      reversibleActionFound: Boolean(latestReversibleAction),
+      threadId: loadedWorkflow?.workflow.threadId ?? threadId,
+      workflowId: loadedWorkflow?.workflow.workflowId ?? null,
+    });
+  }
+
+  if (
+    commandIntent === "status_latest_action" ||
+    commandIntent === "status_last_scheduled" ||
+    commandIntent === "status_last_undone"
+  ) {
+    const response = createActionHistoryStatusResponse({
+      baseResponse: baseWithWarning,
+      intent: commandIntent,
+      latestAction: latestAssistantAction,
+      loaded: loadedWorkflow,
+    });
+    return createNdjsonStream(async (send) => {
+      await streamFallbackMessage(response.message, send);
+      send({ type: "final", response });
+    });
+  }
 
   if (isAssistantStatusQuestion(prompt) || isAssistantAppliedDetailsQuestion(prompt)) {
     const applyResult = loadedWorkflow
@@ -3049,22 +3165,14 @@ export async function POST(request: NextRequest) {
 
   if (
     loadedWorkflow &&
-    ["applied", "applied_with_warning", "partially_applied"].includes(
-      loadedWorkflow.workflow.state,
-    ) &&
-    isAssistantSocialReply(prompt)
+    (commandIntent === "social_reply" || isAssistantSocialReply(prompt))
   ) {
-    const latestDecision = await loadLatestReversibleDecision(
-      authResult.supabase,
-      authResult.userId,
-      loadedWorkflow.workflow.workflowId,
-    );
-    const receipt = latestDecision.data
+    const receipt = latestAssistantAction
       ? (
           await loadReceiptForDecision(
             authResult.supabase,
             authResult.userId,
-            latestDecision.data.id,
+            latestAssistantAction.id,
           )
         ).data
       : null;
@@ -3079,7 +3187,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  if (isAssistantUndoRequest(prompt)) {
+  if (commandIntent === "undo_latest_reversible_action") {
     const applyResult = loadedWorkflow
       ? await loadCanonicalApplyResult({
           contextStatus,
@@ -3089,10 +3197,14 @@ export async function POST(request: NextRequest) {
           userId: authResult.userId,
         })
       : null;
-    let undoDecisionRecordId =
-      applyResult?.undoAvailable && applyResult.planningDecisionId
-        ? applyResult.planningDecisionId
-        : null;
+    let undoDecisionRecordId = latestReversibleAction?.id ?? null;
+    if (
+      !undoDecisionRecordId &&
+      applyResult?.undoAvailable &&
+      applyResult.planningDecisionId
+    ) {
+      undoDecisionRecordId = applyResult.planningDecisionId;
+    }
     if (!undoDecisionRecordId && loadedWorkflow) {
       const latestDecision = await loadLatestReversibleDecision(
         authResult.supabase,
