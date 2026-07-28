@@ -7,8 +7,10 @@ import { useEffect, useMemo, useState } from "react";
 import { AuthPanel } from "@/components/auth/auth-panel";
 import { OnboardingPanel } from "@/components/onboarding/onboarding-panel";
 import {
+  AssistantIcon,
   CalendarIcon,
   FolderStackIcon,
+  SettingsIcon,
   TargetIcon,
 } from "@/components/projects/icons";
 import { AddProjectForm } from "@/components/projects/add-project-form";
@@ -2939,7 +2941,7 @@ export function ProjectDashboard() {
                   >
                     <div className="flex items-center gap-3">
                       <div className="rounded-2xl bg-brand-ocean/10 p-2 text-brand-ocean">
-                        <TargetIcon className="h-5 w-5" />
+                        <AssistantIcon className="h-5 w-5" />
                       </div>
                       <div>
                         <p className="text-sm font-semibold">Ask Assistant</p>
@@ -3086,7 +3088,7 @@ export function ProjectDashboard() {
             <section className="page-header !block overflow-hidden bg-dashboard-radial">
               <div className="max-w-3xl">
                 <div className="eyebrow-chip">
-                  <TargetIcon className="h-4 w-4" />
+                  <SettingsIcon className="h-4 w-4" />
                   Settings
                 </div>
                 <h1 className="page-title mt-3">

@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Google Fonts ──────────────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap");
+
 :root {
   --background: #f6f2e9;
   --background-strong: #ede5d7;
@@ -13,12 +16,16 @@
   --ocean: #155e75;
   --coral: #c75b39;
   --moss: #2f6f59;
+  --amber: #b45309;
   --border: rgba(18, 32, 47, 0.09);
   --radius-panel: 28px;
-  --radius-control: 18px;
-  --shadow-panel: 0 18px 48px rgba(18, 32, 47, 0.075);
-  --motion-fast: 180ms;
-  --motion-medium: 260ms;
+  --radius-card: 22px;
+  --radius-control: 16px;
+  --shadow-card: 0 4px 16px rgba(18, 32, 47, 0.06), 0 1px 3px rgba(18, 32, 47, 0.04);
+  --shadow-panel: 0 22px 58px rgba(18, 32, 47, 0.1), 0 4px 16px rgba(18, 32, 47, 0.06);
+  --motion-fast: 150ms;
+  --motion-medium: 240ms;
+  --motion-slow: 360ms;
 }
 
 html {
@@ -29,9 +36,9 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 24%),
-    radial-gradient(circle at top right, rgba(199, 91, 57, 0.12), transparent 22%),
-    linear-gradient(180deg, #f7f4ec 0%, #f2ebe0 100%);
+    radial-gradient(circle at top left, rgba(15, 118, 110, 0.14), transparent 24%),
+    radial-gradient(circle at top right, rgba(199, 91, 57, 0.10), transparent 22%),
+    linear-gradient(180deg, #f8f5ed 0%, #f1ebe0 100%);
   color: var(--foreground);
 }
 
@@ -46,16 +53,18 @@ input,
 select,
 textarea {
   transition:
-    color 180ms ease,
-    background-color 180ms ease,
-    border-color 180ms ease,
-    transform 180ms ease,
-    box-shadow 180ms ease;
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    transform var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease,
+    opacity var(--motion-fast) ease;
 }
 
 :focus-visible {
-  outline: 3px solid rgba(15, 118, 110, 0.22);
-  outline-offset: 3px;
+  outline: 2.5px solid rgba(15, 118, 110, 0.30);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
 @layer base {
@@ -85,53 +94,152 @@ textarea {
 }
 
 @layer components {
+
+  /* ── App shell ──────────────────────────────────────────────────────── */
+
   .app-shell {
     @apply mx-auto w-full max-w-[1540px];
   }
 
+  /* ── Surface panels ─────────────────────────────────────────────────── */
+
   .panel {
-    @apply rounded-[26px] border bg-[color:var(--surface)] shadow-[0_18px_45px_rgba(18,32,47,0.08)] backdrop-blur-sm sm:rounded-[28px];
+    @apply rounded-[var(--radius-panel)] border bg-[color:var(--surface)] shadow-[var(--shadow-card)] backdrop-blur-sm;
   }
 
   .panel-strong {
-    @apply rounded-[28px] border bg-[color:var(--surface-strong)] shadow-[0_22px_55px_rgba(18,32,47,0.09)] backdrop-blur-sm;
+    @apply rounded-[30px] border bg-[color:var(--surface-strong)] shadow-[var(--shadow-panel)] backdrop-blur-sm;
   }
 
+  /* ── Page header ────────────────────────────────────────────────────── */
+
   .page-header {
-    @apply flex flex-col gap-4 rounded-[28px] border border-white/75 bg-white/75 px-5 py-5 shadow-[0_18px_48px_rgba(18,32,47,0.07)] backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:py-6;
+    @apply flex flex-col gap-4 rounded-[24px] border border-white/80 bg-white/80 px-5 py-5 shadow-card backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:py-6;
+  }
+
+  .page-header-compact {
+    @apply flex items-center gap-4 rounded-[20px] border border-white/75 bg-white/75 px-4 py-3 shadow-card backdrop-blur-sm sm:px-6;
   }
 
   .page-eyebrow {
-    @apply mb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-brand-teal sm:text-[11px];
+    @apply mb-1.5 text-[10px] font-bold uppercase tracking-[0.20em] text-brand-teal sm:text-[11px];
   }
 
   .page-title {
-    @apply text-2xl font-semibold tracking-[-0.035em] text-brand-ink sm:text-3xl;
+    @apply text-2xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-3xl;
   }
 
   .page-contract {
-    @apply mt-1 text-sm leading-6 text-brand-ink/60 sm:text-base;
+    @apply mt-1 text-sm leading-6 text-brand-ink/60 sm:text-[15px];
   }
 
   .page-trust-note {
     @apply mt-2 text-xs font-semibold text-brand-teal;
   }
 
+  /* ── Route animation ────────────────────────────────────────────────── */
+
   .route-content-enter {
     animation: route-content-in var(--motion-medium) ease both;
   }
 
+  /* ── Eyebrow chip ───────────────────────────────────────────────────── */
+
   .eyebrow-chip {
-    @apply inline-flex items-center gap-2 rounded-full border border-brand-teal/20 bg-brand-teal/10 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-teal sm:px-4 sm:text-xs sm:tracking-[0.2em];
+    @apply inline-flex items-center gap-2 rounded-full border border-brand-teal/20 bg-brand-teal/10 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-teal sm:px-4 sm:text-xs sm:tracking-[0.20em];
   }
+
+  /* ── Form fields ────────────────────────────────────────────────────── */
 
   .field-label {
-    @apply mb-2 block text-sm font-semibold text-brand-ink;
+    @apply mb-1.5 block text-sm font-semibold text-brand-ink;
   }
 
-  .metric-card {
-    @apply rounded-[22px] border border-white/70 bg-white/80 p-4 shadow-[0_16px_36px_rgba(18,32,47,0.07)] sm:rounded-[26px] sm:p-5 sm:shadow-[0_20px_50px_rgba(18,32,47,0.08)];
+  .field-helper {
+    @apply mt-1.5 text-xs text-brand-ink/50;
   }
+
+  .field-error {
+    @apply mt-1.5 text-xs font-semibold text-brand-coral;
+  }
+
+  /* ── Cards ──────────────────────────────────────────────────────────── */
+
+  .metric-card {
+    @apply rounded-[20px] border border-white/70 bg-white/80 p-4 shadow-card sm:rounded-[22px] sm:p-5;
+  }
+
+  /* ── Empty state ────────────────────────────────────────────────────── */
+
+  .empty-state {
+    @apply flex flex-col items-center gap-4 rounded-[24px] border border-brand-ink/5 bg-white/60 px-6 py-10 text-center;
+  }
+
+  .empty-state-icon {
+    @apply flex h-14 w-14 items-center justify-center rounded-[18px] bg-brand-ink/[0.05] text-brand-ink/40;
+  }
+
+  .empty-state-title {
+    @apply text-base font-semibold tracking-[-0.02em] text-brand-ink;
+  }
+
+  .empty-state-description {
+    @apply max-w-xs text-sm leading-6 text-brand-ink/50;
+  }
+
+  /* ── Status badges ──────────────────────────────────────────────────── */
+
+  .status-synced {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-teal/20 bg-brand-teal/10 px-2.5 py-1 text-[11px] font-semibold text-brand-teal;
+  }
+
+  .status-imported {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-ocean/20 bg-brand-ocean/10 px-2.5 py-1 text-[11px] font-semibold text-brand-ocean;
+  }
+
+  .status-applied {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-teal/25 bg-brand-teal/10 px-2.5 py-1 text-[11px] font-semibold text-brand-teal;
+  }
+
+  .status-undone {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-ink/10 bg-brand-ink/[0.04] px-2.5 py-1 text-[11px] font-semibold text-brand-ink/50 decoration-brand-ink/25 line-through;
+  }
+
+  .status-draft {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-amber/25 bg-brand-amber/10 px-2.5 py-1 text-[11px] font-semibold text-brand-amber;
+  }
+
+  .status-needs-attention {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-coral/25 bg-brand-coral/10 px-2.5 py-1 text-[11px] font-semibold text-brand-coral;
+  }
+
+  .status-readonly {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-ink/10 bg-brand-ink/[0.04] px-2.5 py-1 text-[11px] font-semibold text-brand-ink/50;
+  }
+
+  /* ── Calendar source badges ─────────────────────────────────────────── */
+
+  .source-google {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-teal/20 bg-brand-teal/[0.08] px-2.5 py-1 text-[11px] font-semibold text-brand-teal;
+  }
+
+  .source-ics {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-ocean/20 bg-brand-ocean/[0.08] px-2.5 py-1 text-[11px] font-semibold text-brand-ocean;
+  }
+
+  .source-d2l {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-amber/20 bg-brand-amber/[0.08] px-2.5 py-1 text-[11px] font-semibold text-brand-amber;
+  }
+
+  .source-work {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-coral/20 bg-brand-coral/[0.08] px-2.5 py-1 text-[11px] font-semibold text-brand-coral;
+  }
+
+  .source-manual {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-moss/20 bg-brand-moss/[0.08] px-2.5 py-1 text-[11px] font-semibold text-brand-moss;
+  }
+
+  /* ── Animation classes ──────────────────────────────────────────────── */
 
   .animate-assistant-message {
     animation: assistant-message-in 260ms ease both;
@@ -153,6 +261,8 @@ textarea {
     animation: weekly-block-in 260ms ease both;
   }
 
+  /* ── Exit shells ────────────────────────────────────────────────────── */
+
   .project-card-shell {
     max-height: 1600px;
     opacity: 1;
@@ -173,17 +283,17 @@ textarea {
 
   .project-card-inner {
     transition:
-      border-color 180ms ease,
-      background-color 180ms ease,
-      box-shadow 220ms ease,
+      border-color 150ms ease,
+      background-color 150ms ease,
+      box-shadow 200ms ease,
       opacity 240ms ease,
-      transform 320ms ease;
+      transform 300ms ease;
     will-change: opacity, transform;
   }
 
   .project-card-shell[data-exiting="true"] .project-card-inner {
     opacity: 0;
-    transform: translateX(14px) scale(0.985);
+    transform: translateX(12px) scale(0.985);
   }
 
   .assistant-card-shell {
@@ -206,9 +316,9 @@ textarea {
 
   .assistant-card-inner {
     transition:
-      border-color 180ms ease,
-      background-color 180ms ease,
-      box-shadow 220ms ease,
+      border-color 150ms ease,
+      background-color 150ms ease,
+      box-shadow 200ms ease,
       opacity 240ms ease,
       transform 300ms ease;
     will-change: opacity, transform;
@@ -239,9 +349,9 @@ textarea {
 
   .weekly-block-inner {
     transition:
-      border-color 180ms ease,
-      background-color 180ms ease,
-      box-shadow 220ms ease,
+      border-color 150ms ease,
+      background-color 150ms ease,
+      box-shadow 200ms ease,
       opacity 220ms ease,
       transform 300ms ease;
     will-change: opacity, transform;
@@ -252,6 +362,8 @@ textarea {
     transform: translateX(10px) scale(0.985);
   }
 }
+
+/* ── Keyframes ─────────────────────────────────────────────────────────── */
 
 @keyframes project-card-in {
   from {
@@ -318,7 +430,7 @@ textarea {
 @keyframes route-content-in {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(6px);
   }
 
   to {
@@ -327,12 +439,15 @@ textarea {
   }
 }
 
+/* ── Reduced motion ────────────────────────────────────────────────────── */
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
   }
 
-  * {
+  *,
+  .route-content-enter {
     animation: none !important;
     transition-duration: 0ms !important;
   }

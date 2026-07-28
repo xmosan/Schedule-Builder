@@ -3,7 +3,7 @@
 import { IcsImportPanel } from "@/components/calendar/ics-import-panel";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { CalendarIcon } from "@/components/projects/icons";
+import { IntegrationsIcon } from "@/components/projects/icons";
 import { IntegrationCard } from "@/components/integrations/integration-card";
 import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
@@ -1109,7 +1109,7 @@ export function IntegrationsPage() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-2xl">
               <div className="eyebrow-chip">
-                <CalendarIcon className="h-4 w-4" />
+                <IntegrationsIcon className="h-4 w-4" />
                 Imported calendars
               </div>
               <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-brand-ink sm:text-3xl">
@@ -1236,7 +1236,7 @@ export function IntegrationsPage() {
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_320px] lg:items-end lg:gap-6">
             <div className="max-w-3xl">
               <div className="eyebrow-chip">
-                <CalendarIcon className="h-4 w-4" />
+                <IntegrationsIcon className="h-4 w-4" />
                 Outside schedule sources
               </div>
 

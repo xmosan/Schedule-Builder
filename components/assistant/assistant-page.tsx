@@ -12,7 +12,7 @@ import {
   type AssistantConversationSnapshot,
 } from "@/lib/assistant-conversation";
 import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
-import { TargetIcon } from "@/components/projects/icons";
+import { AssistantIcon } from "@/components/projects/icons";
 import { AssistantClarificationPanel } from "@/components/assistant/assistant-clarification-panel";
 import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
 import { AssistantPlanSummary } from "@/components/assistant/assistant-plan-summary";
@@ -1459,7 +1459,7 @@ function ChatBubble({
     <div className={cn("animate-assistant-message flex w-full gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
       {!isUser && showsMessageBubble ? (
         <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-teal/10">
-          <TargetIcon className="h-4 w-4 text-brand-teal" />
+          <AssistantIcon className="h-4 w-4 text-brand-teal" />
         </div>
       ) : null}
       <div
@@ -3339,7 +3339,7 @@ export function AssistantPage() {
               {isTrueEmptyState ? (
                 <div className="flex min-h-[42vh] flex-col items-center justify-center py-6 text-center">
                   <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-teal text-white shadow-[0_14px_32px_rgba(15,118,110,0.18)]">
-                    <TargetIcon
+                    <AssistantIcon
                       className={cn("h-6 w-6", status === "loading" && "animate-pulse")}
                     />
                   </div>

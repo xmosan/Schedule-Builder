@@ -326,7 +326,7 @@ export function ProjectCard({
               <ClockIcon className="h-4 w-4 text-brand-ink/45" />
               {project.weeklyHours} hrs
               {project.completed ? (
-                <Badge className="ml-1" variant="subtle">
+                <Badge className="ml-1" variant="success">
                   Done
                 </Badge>
               ) : null}
@@ -368,7 +368,7 @@ export function ProjectCard({
                 <Button
                   className="text-brand-coral transition hover:text-brand-coral active:scale-[0.98]"
                   disabled={isExiting}
-                  variant="outline"
+                  variant="destructive"
                   onClick={() => onDeleteProject(project.id)}
                 >
                   {isExiting ? "Removing..." : "Delete project"}

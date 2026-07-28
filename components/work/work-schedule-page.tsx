@@ -15,6 +15,7 @@ import {
   ClockIcon,
   PlusIcon,
   TrashIcon,
+  WorkScheduleIcon,
 } from "@/components/projects/icons";
 import { SchedulerAppShell } from "@/components/scheduler/app-shell";
 import { Badge } from "@/components/ui/badge";
@@ -990,6 +991,10 @@ export function WorkSchedulePage() {
         <section className="page-header !block overflow-hidden bg-dashboard-radial">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_360px] lg:items-end">
             <div className="max-w-3xl">
+              <div className="eyebrow-chip mb-3">
+                <WorkScheduleIcon className="h-4 w-4" />
+                Work Schedule
+              </div>
               <h1 className="page-title">
                 Work Schedule
               </h1>
