@@ -59,7 +59,7 @@ export function AssistantClarificationPanel({
   return (
     <section
       aria-labelledby="assistant-clarification-title"
-      className="animate-assistant-details rounded-[20px] border border-brand-teal/14 bg-brand-teal/[0.045] p-3.5 sm:p-4"
+      className="animate-assistant-details relative overflow-hidden rounded-[20px] bg-brand-teal/[0.04] py-4 pl-5 pr-4 before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:rounded-l-[20px] before:bg-brand-teal/40"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2
@@ -83,7 +83,7 @@ export function AssistantClarificationPanel({
         {visibleChoices.map((choice) => (
           <button
             key={choice.id}
-            className="min-h-10 rounded-full border border-brand-ink/10 bg-white px-3.5 py-2 text-xs font-semibold text-brand-ink/66 shadow-sm hover:-translate-y-0.5 hover:border-brand-teal/30 hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-10 rounded-2xl border border-brand-ink/10 bg-white px-4 py-2 text-sm font-medium text-brand-ink/65 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-teal/25 hover:text-brand-ink hover:shadow-chat disabled:cursor-not-allowed disabled:opacity-40"
             disabled={disabled}
             type="button"
             onClick={() => onSelect(choice.prompt)}

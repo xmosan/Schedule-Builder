@@ -29,6 +29,8 @@ const config: Config = {
         "card-raised": "0 18px 48px rgba(18, 32, 47, 0.09), 0 4px 12px rgba(18, 32, 47, 0.05)",
         panel: "0 22px 58px rgba(18, 32, 47, 0.1), 0 4px 16px rgba(18, 32, 47, 0.06)",
         nav: "0 18px 48px rgba(18, 32, 47, 0.18), 0 2px 8px rgba(18, 32, 47, 0.08)",
+        chat: "0 6px 24px rgba(18, 32, 47, 0.08), 0 1px 4px rgba(18, 32, 47, 0.04)",
+        assistant: "0 32px 80px rgba(18, 32, 47, 0.1), 0 2px 8px rgba(18, 32, 47, 0.05)",
       },
       backgroundImage: {
         "dashboard-radial":

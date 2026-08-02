@@ -12,7 +12,7 @@ import {
   type AssistantConversationSnapshot,
 } from "@/lib/assistant-conversation";
 import type { AssistantSchedulingContext } from "@/lib/assistant-schedule-analysis";
-import { AssistantIcon } from "@/components/projects/icons";
+import { AssistantIcon, SendIcon } from "@/components/projects/icons";
 import { AssistantClarificationPanel } from "@/components/assistant/assistant-clarification-panel";
 import { AssistantContextPanel } from "@/components/assistant/assistant-context-panel";
 import { AssistantPlanSummary } from "@/components/assistant/assistant-plan-summary";
@@ -1457,10 +1457,13 @@ function ChatBubble({
 
   return (
     <div className={cn("animate-assistant-message flex w-full gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
+      {/* Assistant avatar — shown for bot messages with text */}
       {!isUser && showsMessageBubble ? (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-teal/10">
-          <AssistantIcon className="h-4 w-4 text-brand-teal" />
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-teal text-white shadow-[0_4px_12px_rgba(15,118,110,0.22)]">
+          <AssistantIcon className="h-4.5 w-4.5" />
         </div>
+      ) : !isUser && !showsMessageBubble ? (
+        <div className="h-9 w-9 shrink-0" />
       ) : null}
       <div
         className={cn(
@@ -1475,28 +1478,32 @@ function ChatBubble({
         {showsMessageBubble ? (
           <div
             className={cn(
-              "px-1 py-1.5",
               isUser
-                ? "rounded-[22px] bg-brand-ink px-4 py-3 text-white shadow-sm sm:px-5 sm:py-3.5"
-                : "text-brand-ink",
+                ? "rounded-[20px] rounded-tr-[5px] bg-brand-ink px-5 py-3 text-white shadow-sm"
+                : "py-1",
             )}
           >
             {message.isStreaming && !message.content ? (
               <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold text-brand-ink/60">
-                  Thinking through your schedule
+                <span className="text-[13px] font-medium text-brand-ink/50">
+                  Planning your week…
                 </span>
-                <span className="flex gap-1.5">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.2s]" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-ink/40 [animation-delay:0.4s]" />
+                <span className="flex items-end gap-1.5 pb-0.5">
+                  <span className="animate-thinking-dot h-2 w-2 rounded-full bg-brand-teal" />
+                  <span className="animate-thinking-dot-2 h-2 w-2 rounded-full bg-brand-teal" />
+                  <span className="animate-thinking-dot-3 h-2 w-2 rounded-full bg-brand-teal" />
                 </span>
               </div>
             ) : (
-              <p className={cn("text-sm leading-6 whitespace-pre-wrap", isUser ? "text-white" : "text-brand-ink")}>
+              <p
+                className={cn(
+                  "whitespace-pre-wrap text-[15px] leading-[1.65]",
+                  isUser ? "text-white" : "text-brand-ink/85",
+                )}
+              >
                 {displayedContent}
                 {!isUser && message.isStreaming ? (
-                  <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded-full bg-brand-teal align-[-2px]" />
+                  <span className="ml-1 inline-block h-4 w-0.5 animate-pulse rounded-full bg-brand-teal align-[-2px]" />
                 ) : null}
               </p>
             )}
@@ -1504,14 +1511,14 @@ function ChatBubble({
         ) : null}
 
         {!isUser && relevantNotices.length > 0 ? (
-          <section className="w-full rounded-[20px] border border-brand-coral/20 bg-brand-coral/[0.06] p-4">
-            <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-coral">
+          <section className="w-full overflow-hidden rounded-[20px] bg-brand-amber/[0.08] py-4 pl-5 pr-4 relative before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:rounded-l-[20px] before:bg-brand-amber">
+            <h4 className="text-xs font-bold uppercase tracking-[0.14em] text-brand-amber">
               Needs your attention
             </h4>
             <div className="mt-3 grid gap-3">
               {relevantNotices.map((notice) => (
                 <div key={notice.id}>
-                  <p className="text-sm leading-6 text-brand-ink/75">
+                  <p className="text-[14px] leading-6 text-brand-ink/75">
                     {sanitizeAssistantUserFacingText(notice.message)}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -3246,30 +3253,35 @@ export function AssistantPage() {
       contentClassName="gap-2.5"
       className="bg-transparent"
     >
-      <header className="flex shrink-0 items-center justify-between gap-3 px-1 py-1 sm:px-2">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-[-0.038em] text-brand-ink sm:text-2xl">
-            Planning Assistant
-          </h1>
-          <p className="mt-0.5 text-xs leading-5 text-brand-ink/52 sm:text-sm">
-            Tell me what you need to accomplish.
-            <span className="ml-1.5 font-semibold text-brand-teal">
-              You set the rules. I&apos;ll handle the routine.
-            </span>
-          </p>
+      <header className="flex shrink-0 items-center justify-between gap-4 px-1 py-1 sm:px-2">
+        {/* Brand mark + title */}
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="hidden shrink-0 items-center justify-center h-9 w-9 rounded-[14px] bg-brand-teal text-white shadow-[0_6px_20px_rgba(15,118,110,0.30)] sm:flex">
+            <AssistantIcon className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold tracking-[-0.04em] text-brand-ink sm:text-xl">
+              Planning Assistant
+            </h1>
+            <p className="hidden text-[11px] leading-4 text-brand-ink/48 sm:block">
+              Tell me what you need. I&apos;ll shape it around your real week.
+            </p>
+          </div>
         </div>
 
+        {/* Status + menu */}
         <div className="flex shrink-0 items-center gap-2">
           <div
             aria-live="polite"
             aria-atomic="true"
-            className="hidden min-h-8 items-center gap-2 rounded-full bg-white/75 px-3 py-1.5 text-xs font-semibold text-brand-ink/60 shadow-sm ring-1 ring-brand-ink/5 sm:inline-flex"
+            className="hidden min-h-[30px] items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold text-brand-ink/55 ring-1 ring-brand-ink/8 sm:inline-flex"
+            style={{ background: "var(--assistant-pill-bg)" }}
             role="status"
           >
             <span
               aria-hidden="true"
               className={cn(
-                "h-1.5 w-1.5 rounded-full",
+                "h-1.5 w-1.5 rounded-full shrink-0",
                 contextWarning ? "bg-brand-coral" : "bg-brand-teal",
                 (isSubmitting || isApplying) && "animate-pulse",
               )}
@@ -3285,9 +3297,12 @@ export function AssistantPage() {
                 aria-haspopup="menu"
                 aria-label="Conversation options"
                 aria-expanded={isMenuOpen}
-                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-brand-ink/10 bg-white text-sm font-bold tracking-[0.12em] text-brand-ink/52 transition hover:border-brand-teal/25 hover:bg-brand-teal/5 hover:text-brand-ink"
+                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-brand-ink/10 bg-white text-[18px] font-bold leading-none text-brand-ink/40 transition-all hover:border-brand-teal/25 hover:bg-brand-teal/5 hover:text-brand-teal"
                 type="button"
                 onClick={() => setIsMenuOpen((v) => !v)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setIsMenuOpen(false);
+                }}
               >
                 ···
               </button>
@@ -3297,13 +3312,19 @@ export function AssistantPage() {
                     className="fixed inset-0 z-20"
                     aria-hidden="true"
                     onClick={() => setIsMenuOpen(false)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setIsMenuOpen(false);
+                    }}
                   />
                   <div
-                    className="absolute right-0 z-30 mt-2 w-56 rounded-[18px] border border-brand-ink/10 bg-white p-1.5 shadow-[0_18px_44px_rgba(18,32,47,0.16)]"
+                    className="absolute right-0 z-30 mt-2 w-56 overflow-hidden rounded-[18px] border border-brand-ink/8 bg-white p-1.5 shadow-[0_20px_48px_rgba(18,32,47,0.18)]"
                     role="menu"
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setIsMenuOpen(false);
+                    }}
                   >
                     <button
-                      className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05]"
+                      className="flex min-h-10 w-full items-center rounded-[12px] px-3 text-left text-sm font-medium text-brand-ink/75 hover:bg-brand-ink/[0.05] hover:text-brand-ink"
                       role="menuitem"
                       type="button"
                       onClick={() => {
@@ -3314,7 +3335,7 @@ export function AssistantPage() {
                       View schedule context
                     </button>
                     <button
-                      className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05] disabled:opacity-50"
+                      className="flex min-h-10 w-full items-center rounded-[12px] px-3 text-left text-sm font-medium text-brand-ink/75 hover:bg-brand-ink/[0.05] hover:text-brand-ink disabled:opacity-40"
                       disabled={isRefreshingContext}
                       role="menuitem"
                       type="button"
@@ -3325,10 +3346,10 @@ export function AssistantPage() {
                     >
                       {isRefreshingContext ? "Refreshing…" : "Refresh schedule context"}
                     </button>
-                    {hasMessages ? <div className="my-1 border-t border-brand-ink/7" /> : null}
+                    {hasMessages ? <div className="my-1 h-px bg-brand-ink/6" /> : null}
                     {hasMessages ? (
                       <button
-                        className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-coral hover:bg-brand-coral/[0.07]"
+                        className="flex min-h-10 w-full items-center rounded-[12px] px-3 text-left text-sm font-medium text-brand-coral hover:bg-brand-coral/[0.06]"
                         role="menuitem"
                         type="button"
                         onClick={() => {
@@ -3346,7 +3367,7 @@ export function AssistantPage() {
           ) : null}
         </div>
 
-        <span className="sr-only sm:hidden" aria-live="polite" role="status">
+        <span className="sr-only" aria-live="polite" role="status">
           {workflowStatus}
         </span>
       </header>
@@ -3356,38 +3377,56 @@ export function AssistantPage() {
           aria-label="Assistant conversation"
           className="assistant-surface flex min-h-0 w-full max-w-[980px] flex-col overflow-hidden"
         >
-          <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+          <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-8">
+            <div className="mx-auto flex w-full max-w-2xl flex-col gap-8">
               {isTrueEmptyState ? (
-                <div className="flex min-h-[42vh] flex-col items-center justify-center py-6 text-center">
-                  <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-[22px] bg-brand-teal text-white shadow-[0_14px_36px_rgba(15,118,110,0.22)]">
-                    <AssistantIcon
-                      className={cn("h-7 w-7", status === "loading" && "animate-pulse")}
-                    />
+                <div className="flex min-h-[52vh] flex-col items-center justify-center py-8 text-center">
+                  {/* Icon mark */}
+                  <div
+                    className={cn(
+                      "mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-brand-teal text-white shadow-[0_16px_44px_rgba(15,118,110,0.28)] transition-transform",
+                      status === "loading" && "animate-pulse",
+                    )}
+                  >
+                    <AssistantIcon className="h-8 w-8" />
                   </div>
-                  <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink sm:text-2xl">
+
+                  {/* Headline */}
+                  <h2 className="text-2xl font-semibold tracking-[-0.04em] text-brand-ink sm:text-3xl">
                     {status === "loading"
-                      ? "Loading your planning context…"
-                      : "What do you need to get done?"}
+                      ? "Preparing your workspace…"
+                      : "What do you need to plan?"}
                   </h2>
-                  <p className="mb-7 mt-2 max-w-md text-sm leading-6 text-brand-ink/55">
+
+                  {/* Body */}
+                  <p className="mb-8 mt-3 max-w-sm text-[15px] leading-[1.6] text-brand-ink/48">
                     {status === "loading"
-                      ? "Checking projects, time blocks, work constraints, and calendar sources."
-                      : "Describe a task, a deadline, or paste a full plan. Every proposed change goes through you first."}
+                      ? "Loading your projects, schedule, work shifts, and calendar sources."
+                      : "Describe a task, a deadline, or paste a full plan. Every change goes through you first."}
                   </p>
+
+                  {/* Starter chips */}
                   {status !== "loading" ? (
-                    <div aria-label="Try asking" className="flex max-w-lg flex-wrap justify-center gap-2">
-                      {examplePrompts.map((example) => (
-                      <button
-                        key={example}
-                        className="min-h-10 rounded-full border border-brand-ink/10 bg-white/90 px-4 py-2 text-sm font-semibold text-brand-ink/62 shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/25 hover:bg-white hover:text-brand-ink"
-                        type="button"
-                        onClick={() => setPrompt(example)}
+                    <>
+                      <div
+                        aria-label="Starter actions"
+                        className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:flex-wrap sm:justify-center"
                       >
-                        {example}
-                      </button>
-                      ))}
-                    </div>
+                        {examplePrompts.map((example) => (
+                          <button
+                            key={example}
+                            className="group flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-brand-ink/10 bg-white px-5 py-3 text-sm font-semibold text-brand-ink/65 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-teal/25 hover:text-brand-ink hover:shadow-chat"
+                            type="button"
+                            onClick={() => setPrompt(example)}
+                          >
+                            {example}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-5 text-xs text-brand-ink/32">
+                        Try a task, deadline, or paste a full plan.
+                      </p>
+                    </>
                   ) : null}
                 </div>
               ) : null}
@@ -3436,7 +3475,7 @@ export function AssistantPage() {
               ) : null}
 
               {assistantNotices.length > 0 ? (
-                <div aria-live="polite" className="mx-auto grid w-full max-w-md gap-2">
+                <div aria-live="polite" className="mx-auto grid w-full max-w-xl gap-2">
                   {assistantNotices
                     .filter((notice) => {
                       // Suppress notices that duplicate what the header status pill already shows
@@ -3449,10 +3488,11 @@ export function AssistantPage() {
                     <div
                       key={notice.id}
                       className={cn(
-                        "animate-assistant-card rounded-2xl border px-4 py-3 text-sm font-semibold leading-6 shadow-sm",
+                        "animate-assistant-card relative overflow-hidden rounded-2xl py-3 pl-5 pr-4 text-sm font-medium leading-6",
+                        "before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:rounded-l-2xl",
                         notice.tone === "success"
-                          ? "border-brand-teal/20 bg-brand-teal/10 text-brand-teal"
-                          : "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
+                          ? "bg-brand-teal/8 text-brand-teal/90 before:bg-brand-teal"
+                          : "bg-brand-coral/8 text-brand-coral/90 before:bg-brand-coral",
                       )}
                     >
                       {sanitizeAssistantUserFacingText(notice.message)}
@@ -3462,7 +3502,11 @@ export function AssistantPage() {
               ) : null}
 
               {error ? (
-                <div aria-live="assertive" className="mx-auto w-full max-w-md rounded-[20px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-center text-sm leading-6 text-brand-coral" role="alert">
+                <div
+                  aria-live="assertive"
+                  className="mx-auto w-full max-w-xl overflow-hidden rounded-[20px] bg-brand-coral/8 py-3.5 pl-5 pr-4 text-sm leading-6 text-brand-coral/90 [&::before]:absolute [&::before]:inset-y-0 [&::before]:left-0 [&::before]:w-[3px] [&::before]:rounded-l-[20px] [&::before]:bg-brand-coral relative"
+                  role="alert"
+                >
                   {error}
                 </div>
               ) : null}
@@ -3471,14 +3515,14 @@ export function AssistantPage() {
             </div>
           </div>
 
-          <div className="sticky bottom-0 z-10 shrink-0 border-t border-brand-ink/6 bg-white/94 px-3 pb-3 pt-3 backdrop-blur-md sm:px-5 sm:pb-4">
+          <div className="sticky bottom-0 z-10 shrink-0 assistant-composer">
             {status === "signed_out" ? (
               <div className="py-2 text-center">
                 <p className="text-sm font-semibold text-brand-ink">
                   Sign in to use Planning Assistant
                 </p>
-                <p className="mt-1 text-sm text-brand-ink/60">
-                  The assistant reviews your signed-in schedule securely.
+                <p className="mt-1 text-sm text-brand-ink/55">
+                  The Assistant works with your signed-in schedule.
                 </p>
                 <Link
                   href="/"
@@ -3488,16 +3532,16 @@ export function AssistantPage() {
                 </Link>
               </div>
             ) : (
-              <form onSubmit={handleSubmit} className="mx-auto max-w-3xl">
-                <div className="flex flex-col gap-2 rounded-[22px] border border-brand-ink/10 bg-white p-2 shadow-[0_12px_34px_rgba(18,32,47,0.08)] transition-shadow focus-within:border-brand-teal/40 focus-within:shadow-[0_14px_40px_rgba(15,118,110,0.12)] sm:flex-row sm:items-end sm:rounded-[24px] sm:p-2.5">
-                  <div className="relative flex-1">
+              <form onSubmit={handleSubmit} className="mx-auto max-w-2xl">
+                <div className="flex gap-2 rounded-[20px] border border-brand-ink/10 bg-white p-2 shadow-chat transition-all focus-within:border-brand-teal/30 focus-within:shadow-[0_8px_32px_rgba(15,118,110,0.12)] sm:rounded-[22px] sm:p-2.5">
+                  <div className="relative min-w-0 flex-1">
                     <textarea
                       ref={textareaRef}
                       aria-label="Planning request"
-                      className="max-h-[180px] min-h-[48px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/36 focus:outline-none sm:px-4 sm:text-base"
+                      className="max-h-[160px] min-h-[48px] w-full resize-none overflow-y-auto bg-transparent px-2.5 py-2.5 text-[15px] leading-[1.55] text-brand-ink placeholder:text-brand-ink/32 focus:outline-none sm:px-3"
                       disabled={isBusy}
                       maxLength={12000}
-                      placeholder="Describe what you need to do, or paste a task list, email, syllabus section, or plan…"
+                      placeholder="What do you need to plan?"
                       rows={1}
                       value={prompt}
                       onChange={(event) => setPrompt(event.target.value)}
@@ -3509,16 +3553,23 @@ export function AssistantPage() {
                       }}
                     />
                   </div>
-                  <Button
-                    className="h-11 w-full shrink-0 rounded-[16px] px-5 text-sm font-semibold sm:h-12 sm:w-auto sm:rounded-[18px]"
+                  <button
+                    aria-label="Send message"
+                    className={cn(
+                      "flex h-11 shrink-0 items-center justify-center gap-2 rounded-[14px] px-4 text-sm font-semibold transition-all sm:h-12 sm:w-auto",
+                      prompt.trim() && !isBusy
+                        ? "bg-brand-teal text-white shadow-[0_4px_16px_rgba(15,118,110,0.22)] hover:bg-brand-teal/90"
+                        : "bg-brand-ink/8 text-brand-ink/35 cursor-not-allowed",
+                    )}
                     disabled={isBusy || !prompt.trim()}
                     type="submit"
                   >
-                    Send
-                  </Button>
+                    <SendIcon className="h-4 w-4" />
+                    <span className="sm:hidden">Send</span>
+                  </button>
                 </div>
-                <p className="mt-1.5 px-2 text-[11px] text-brand-ink/38">
-                  Tasks, goals, deadlines, or full plans · Enter to send · Shift+Enter for a new line
+                <p className="mt-1.5 px-1 text-[11px] text-brand-ink/30">
+                  Enter to send · Shift+Enter for a new line
                 </p>
               </form>
             )}

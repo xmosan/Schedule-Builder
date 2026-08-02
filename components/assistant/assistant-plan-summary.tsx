@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import React from "react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { AssistantSuggestion } from "@/lib/assistant";
 import {
@@ -162,7 +163,15 @@ export function AssistantPlanSummary({
   return (
     <section
       aria-label={title}
-      className="animate-assistant-card w-full rounded-[24px] border border-brand-teal/16 bg-white px-4 py-4 shadow-[0_18px_44px_rgba(18,32,47,0.09)] sm:px-5"
+      className={cn(
+        "assistant-receipt animate-assistant-card w-full px-5 py-5 sm:px-6",
+        "before:absolute before:inset-y-0 before:left-0 before:w-[3.5px] before:rounded-l-[22px]",
+        isUndone
+          ? "before:bg-brand-moss"
+          : hasVerifiedAppliedRecords
+          ? "before:bg-brand-teal"
+          : "before:bg-brand-teal/60",
+      )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -199,7 +208,7 @@ export function AssistantPlanSummary({
         {pending.length > 0 ? (
           <span
             aria-live="polite"
-            className="rounded-full bg-brand-ink/6 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-ink/52"
+            className="inline-flex items-center gap-1.5 rounded-full bg-brand-teal/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.10em] text-brand-teal/80"
           >
             {statusSummary}
           </span>
@@ -207,21 +216,21 @@ export function AssistantPlanSummary({
       </div>
 
       {!isUndone && hasVerifiedAppliedRecords ? (
-        <div className="mt-4 border-y border-brand-ink/7 py-2">
+        <div className="mt-4 divide-y divide-brand-ink/5">
           {appliedRecords.map((record) => (
             <div
               key={`${record.proposalId}:${record.recordId}`}
-              className="flex flex-col gap-0.5 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+              className="flex flex-col gap-0.5 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-brand-ink/76">
+                <p className="truncate text-[14px] font-semibold text-brand-ink/80">
                   {getSafeAssistantLabel(record.title, activityTitle)}
                 </p>
-                <p className="text-xs text-brand-ink/48">
+                <p className="text-xs text-brand-ink/42">
                   {formatAppliedRecordDate(record)}
                 </p>
               </div>
-              <p className="shrink-0 text-sm text-brand-ink/54">
+              <p className="shrink-0 text-sm text-brand-ink/50">
                 {formatAppliedRecordTime(record)}
               </p>
             </div>

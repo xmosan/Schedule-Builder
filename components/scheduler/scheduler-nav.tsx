@@ -113,7 +113,7 @@ export function SchedulerNav({
                 className={cn(
                   "flex min-h-[52px] min-w-0 flex-col items-center justify-center gap-1 rounded-[16px] px-0.5 text-center text-[7.5px] font-bold leading-tight transition-all duration-150 sm:text-[9px] lg:inline-flex lg:min-h-9 lg:flex-row lg:rounded-[12px] lg:px-2.5 lg:text-[12px] lg:font-semibold lg:leading-normal lg:whitespace-nowrap xl:px-3 xl:text-[13px]",
                   active
-                    ? "bg-brand-ink text-white shadow-sm"
+                    ? "bg-brand-ink text-white shadow-sm lg:bg-transparent lg:text-brand-teal lg:shadow-none"
                     : "text-brand-ink/55 hover:bg-brand-ink/5 hover:text-brand-ink",
                 )}
               >
@@ -176,8 +176,8 @@ export function SchedulerNav({
                   className={cn(
                     "group relative flex min-h-11 items-center gap-3 rounded-[18px] px-3 text-[13.5px] font-semibold transition-all duration-150",
                     active
-                      ? "bg-brand-ink text-white shadow-[0_8px_24px_rgba(18,32,47,0.14)]"
-                      : "text-brand-ink/60 hover:bg-white/70 hover:text-brand-ink",
+                      ? "bg-brand-ink text-white shadow-[0_6px_20px_rgba(18,32,47,0.18),0_2px_6px_rgba(18,32,47,0.08)]"
+                      : "text-brand-ink/58 hover:bg-white/70 hover:text-brand-ink",
                   )}
                 >
                   {/* Left accent bar for active */}
