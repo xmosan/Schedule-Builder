@@ -147,7 +147,7 @@ export function SchedulerNav({
               Schedule Builder
             </span>
             <span className="mt-0.5 block text-[13px] font-semibold tracking-[-0.02em] text-brand-ink">
-              Planning workspace
+              Your planning space
             </span>
           </span>
         </Link>

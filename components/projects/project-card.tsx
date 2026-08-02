@@ -4,10 +4,10 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowRightIcon,
   CalendarIcon,
   CheckCircleIcon,
   ClockIcon,
-  TargetIcon,
 } from "@/components/projects/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -301,7 +301,7 @@ export function ProjectCard({
               <div className="flex flex-wrap gap-2">
                 <span
                   className={cn(
-                    "rounded-full border px-3 py-1 text-xs font-semibold",
+                    "rounded-full border px-3 py-1 text-xs font-medium",
                     priorityStyles[project.priority],
                   )}
                 >
@@ -315,7 +315,7 @@ export function ProjectCard({
                 >
                   {project.category}
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-ink/8 bg-white/78 px-3 py-1 text-xs font-semibold text-brand-ink/62">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-ink/8 bg-white/75 px-3 py-1 text-xs font-semibold text-brand-ink/62">
                   <CalendarIcon className="h-3.5 w-3.5" />
                   {hasDeadline ? project.deadline : "No deadline"}
                 </span>
@@ -336,7 +336,7 @@ export function ProjectCard({
           <div className="rounded-[24px] border border-brand-teal/12 bg-gradient-to-br from-brand-teal/[0.08] to-white/70 p-4">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-brand-teal/10 p-2 text-brand-teal">
-                <TargetIcon className="h-4 w-4" />
+                <ArrowRightIcon className="h-4 w-4" />
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-teal">

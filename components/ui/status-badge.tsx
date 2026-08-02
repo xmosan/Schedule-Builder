@@ -30,7 +30,7 @@ const statusStyles: Record<StatusVariant | SourceVariant, string> = {
   imported:
     "border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
   applied:
-    "border-brand-teal/25 bg-brand-teal/12 text-brand-teal",
+    "border-brand-moss/20 bg-brand-moss/10 text-brand-moss",
   undone:
     "border-brand-ink/10 bg-brand-ink/[0.04] text-brand-ink/50",
   draft:
@@ -62,7 +62,7 @@ const statusStyles: Record<StatusVariant | SourceVariant, string> = {
 const dotColors: Record<StatusVariant | SourceVariant, string> = {
   synced: "bg-brand-teal",
   imported: "bg-brand-ocean",
-  applied: "bg-brand-teal",
+  applied: "bg-brand-moss",
   undone: "bg-brand-ink/35",
   draft: "bg-brand-amber",
   "needs-attention": "bg-brand-coral",

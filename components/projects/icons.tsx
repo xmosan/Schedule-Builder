@@ -24,12 +24,21 @@ function BaseIcon({ className, children, ...props }: IconProps) {
 
 // ── Nav icons (each unique per page) ──────────────────────────────────────
 
-/** Assistant — sparkle/chat hybrid */
+/** Assistant — clean speech bubble (planning companion) */
 export function AssistantIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      <path d="m9.5 9 1.5 1.5L13.5 8" strokeWidth="1.6" />
+    </BaseIcon>
+  );
+}
+
+/** Send — diagonal arrow for composer */
+export function SendIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M22 2 11 13" />
+      <path d="M22 2 15 22 11 13 2 9l20-7z" />
     </BaseIcon>
   );
 }

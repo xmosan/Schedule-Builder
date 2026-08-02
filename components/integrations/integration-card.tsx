@@ -68,9 +68,9 @@ export function IntegrationCard({
         </div>
 
         <div className="mt-5 flex-1">
-          <div className="rounded-[18px] border border-brand-teal/10 bg-brand-teal/[0.04] p-4">
-            <p className="text-sm leading-6 text-brand-ink/70">
-              <span className="font-semibold text-brand-teal">Why it helps:</span>{" "}
+          <div className="border-l-2 border-brand-teal/35 pl-4 py-1">
+            <p className="text-sm leading-6 text-brand-ink/65">
+              <span className="font-semibold text-brand-teal">Why it helps:{" "}</span>
               {integration.whyItHelps}
             </p>
           </div>

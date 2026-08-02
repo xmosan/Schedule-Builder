@@ -25,7 +25,7 @@ const variantStyles: Record<BadgeVariant, string> = {
   source: "border border-brand-ocean/18 bg-brand-ocean/10 text-brand-ocean",
   applied: "border border-brand-teal/25 bg-brand-teal/12 text-brand-teal",
   undone:
-    "border border-brand-ink/10 bg-brand-ink/[0.04] text-brand-ink/50 line-through decoration-brand-ink/25",
+    "border border-brand-ink/10 bg-brand-ink/[0.04] text-brand-ink/52",
   info: "border border-brand-ocean/20 bg-brand-ocean/10 text-brand-ocean",
 };
 

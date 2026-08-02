@@ -1601,6 +1601,7 @@ export function AssistantPage() {
   const [isClearChatDialogOpen, setIsClearChatDialogOpen] = useState(false);
   const [isScheduleContextOpen, setIsScheduleContextOpen] = useState(false);
   const [isClearChatLoading, setIsClearChatLoading] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const closeScheduleContext = useCallback(
     () => setIsScheduleContextOpen(false),
     [],
@@ -3245,15 +3246,15 @@ export function AssistantPage() {
       contentClassName="gap-2.5"
       className="bg-transparent"
     >
-      <header className="flex shrink-0 items-start justify-between gap-3 px-1 py-1 sm:items-center sm:px-2">
+      <header className="flex shrink-0 items-center justify-between gap-3 px-1 py-1 sm:px-2">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-[-0.035em] text-brand-ink sm:text-2xl">
+          <h1 className="text-xl font-semibold tracking-[-0.038em] text-brand-ink sm:text-2xl">
             Planning Assistant
           </h1>
-          <p className="mt-0.5 text-xs leading-5 text-brand-ink/56 sm:text-sm">
-            Tell me what you need to accomplish. I’ll build a plan for you to review.
+          <p className="mt-0.5 text-xs leading-5 text-brand-ink/52 sm:text-sm">
+            Tell me what you need to accomplish.
             <span className="ml-1.5 font-semibold text-brand-teal">
-              The Assistant plans. You approve.
+              You set the rules. I&apos;ll handle the routine.
             </span>
           </p>
         </div>
@@ -3262,13 +3263,13 @@ export function AssistantPage() {
           <div
             aria-live="polite"
             aria-atomic="true"
-            className="hidden min-h-8 items-center gap-2 rounded-full bg-white/72 px-3 py-1.5 text-xs font-semibold text-brand-ink/58 shadow-sm sm:inline-flex"
+            className="hidden min-h-8 items-center gap-2 rounded-full bg-white/75 px-3 py-1.5 text-xs font-semibold text-brand-ink/60 shadow-sm ring-1 ring-brand-ink/5 sm:inline-flex"
             role="status"
           >
             <span
               aria-hidden="true"
               className={cn(
-                "h-2 w-2 rounded-full",
+                "h-1.5 w-1.5 rounded-full",
                 contextWarning ? "bg-brand-coral" : "bg-brand-teal",
                 (isSubmitting || isApplying) && "animate-pulse",
               )}
@@ -3279,48 +3280,69 @@ export function AssistantPage() {
           </div>
 
           {status !== "signed_out" ? (
-            <details className="group relative">
-              <summary
+            <div className="relative">
+              <button
                 aria-haspopup="menu"
                 aria-label="Conversation options"
-                className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-full border border-brand-ink/10 bg-white text-base font-bold tracking-[0.12em] text-brand-ink/52 hover:border-brand-teal/25 hover:text-brand-ink [&::-webkit-details-marker]:hidden"
+                aria-expanded={isMenuOpen}
+                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-brand-ink/10 bg-white text-sm font-bold tracking-[0.12em] text-brand-ink/52 transition hover:border-brand-teal/25 hover:bg-brand-teal/5 hover:text-brand-ink"
+                type="button"
+                onClick={() => setIsMenuOpen((v) => !v)}
               >
                 ···
-              </summary>
-              <div
-                className="absolute right-0 z-30 mt-2 w-52 rounded-[18px] border border-brand-ink/10 bg-white p-1.5 shadow-[0_18px_44px_rgba(18,32,47,0.16)]"
-                role="menu"
-              >
-                <button
-                  className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05]"
-                  role="menuitem"
-                  type="button"
-                  onClick={() => setIsScheduleContextOpen(true)}
-                >
-                  View schedule context
-                </button>
-                <button
-                  className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05] disabled:opacity-50"
-                  disabled={isRefreshingContext}
-                  role="menuitem"
-                  type="button"
-                  onClick={() => void refreshPlanningContext()}
-                >
-                  {isRefreshingContext ? "Refreshing…" : "Refresh schedule context"}
-                </button>
-                {hasMessages ? <div className="my-1 border-t border-brand-ink/7" /> : null}
-                {hasMessages ? (
-                <button
-                  className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-coral hover:bg-brand-coral/[0.07]"
-                  role="menuitem"
-                  type="button"
-                  onClick={() => setIsClearChatDialogOpen(true)}
-                >
-                  Clear conversation
-                </button>
-                ) : null}
-              </div>
-            </details>
+              </button>
+              {isMenuOpen ? (
+                <>
+                  <div
+                    className="fixed inset-0 z-20"
+                    aria-hidden="true"
+                    onClick={() => setIsMenuOpen(false)}
+                  />
+                  <div
+                    className="absolute right-0 z-30 mt-2 w-56 rounded-[18px] border border-brand-ink/10 bg-white p-1.5 shadow-[0_18px_44px_rgba(18,32,47,0.16)]"
+                    role="menu"
+                  >
+                    <button
+                      className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05]"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setIsScheduleContextOpen(true);
+                        setIsMenuOpen(false);
+                      }}
+                    >
+                      View schedule context
+                    </button>
+                    <button
+                      className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-ink hover:bg-brand-ink/[0.05] disabled:opacity-50"
+                      disabled={isRefreshingContext}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        void refreshPlanningContext();
+                        setIsMenuOpen(false);
+                      }}
+                    >
+                      {isRefreshingContext ? "Refreshing…" : "Refresh schedule context"}
+                    </button>
+                    {hasMessages ? <div className="my-1 border-t border-brand-ink/7" /> : null}
+                    {hasMessages ? (
+                      <button
+                        className="flex min-h-10 w-full items-center rounded-[13px] px-3 text-left text-sm font-semibold text-brand-coral hover:bg-brand-coral/[0.07]"
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          setIsClearChatDialogOpen(true);
+                          setIsMenuOpen(false);
+                        }}
+                      >
+                        Clear conversation
+                      </button>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+            </div>
           ) : null}
         </div>
 
@@ -3332,33 +3354,33 @@ export function AssistantPage() {
       <div className="flex min-h-0 flex-1 justify-center">
         <section
           aria-label="Assistant conversation"
-          className="flex min-h-0 w-full max-w-[980px] flex-col overflow-hidden rounded-[26px] bg-white/62 shadow-[0_20px_52px_rgba(18,32,47,0.075)] backdrop-blur-sm"
+          className="assistant-surface flex min-h-0 w-full max-w-[980px] flex-col overflow-hidden"
         >
           <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
               {isTrueEmptyState ? (
                 <div className="flex min-h-[42vh] flex-col items-center justify-center py-6 text-center">
-                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-teal text-white shadow-[0_14px_32px_rgba(15,118,110,0.18)]">
+                  <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-[22px] bg-brand-teal text-white shadow-[0_14px_36px_rgba(15,118,110,0.22)]">
                     <AssistantIcon
-                      className={cn("h-6 w-6", status === "loading" && "animate-pulse")}
+                      className={cn("h-7 w-7", status === "loading" && "animate-pulse")}
                     />
                   </div>
-                  <h2 className="text-xl font-semibold text-brand-ink sm:text-2xl">
+                  <h2 className="text-xl font-semibold tracking-[-0.03em] text-brand-ink sm:text-2xl">
                     {status === "loading"
                       ? "Loading your planning context…"
                       : "What do you need to get done?"}
                   </h2>
-                  <p className="mb-7 mt-2 max-w-md text-sm leading-6 text-brand-ink/58">
+                  <p className="mb-7 mt-2 max-w-md text-sm leading-6 text-brand-ink/55">
                     {status === "loading"
                       ? "Checking projects, time blocks, work constraints, and calendar sources."
-                      : "Describe a task, deadline, meeting, workout, or paste a full plan. You can review every proposed change."}
+                      : "Describe a task, a deadline, or paste a full plan. Every proposed change goes through you first."}
                   </p>
                   {status !== "loading" ? (
                     <div aria-label="Try asking" className="flex max-w-lg flex-wrap justify-center gap-2">
                       {examplePrompts.map((example) => (
                       <button
                         key={example}
-                        className="min-h-10 rounded-full border border-brand-ink/9 bg-white/88 px-4 py-2 text-sm font-semibold text-brand-ink/66 hover:-translate-y-0.5 hover:border-brand-teal/28 hover:text-brand-ink"
+                        className="min-h-10 rounded-full border border-brand-ink/10 bg-white/90 px-4 py-2 text-sm font-semibold text-brand-ink/62 shadow-sm transition hover:-translate-y-0.5 hover:border-brand-teal/25 hover:bg-white hover:text-brand-ink"
                         type="button"
                         onClick={() => setPrompt(example)}
                       >
@@ -3415,7 +3437,15 @@ export function AssistantPage() {
 
               {assistantNotices.length > 0 ? (
                 <div aria-live="polite" className="mx-auto grid w-full max-w-md gap-2">
-                  {assistantNotices.map((notice) => (
+                  {assistantNotices
+                    .filter((notice) => {
+                      // Suppress notices that duplicate what the header status pill already shows
+                      if (!notice.message) return true;
+                      const normalized = notice.message.toLowerCase().trim();
+                      const statusNormalized = (workflowStatus ?? "").toLowerCase().trim();
+                      return normalized !== statusNormalized;
+                    })
+                    .map((notice) => (
                     <div
                       key={notice.id}
                       className={cn(
@@ -3441,7 +3471,7 @@ export function AssistantPage() {
             </div>
           </div>
 
-          <div className="sticky bottom-0 z-10 shrink-0 border-t border-brand-ink/7 bg-white/92 px-3 pb-3 pt-3 backdrop-blur-md sm:px-5 sm:pb-4">
+          <div className="sticky bottom-0 z-10 shrink-0 border-t border-brand-ink/6 bg-white/94 px-3 pb-3 pt-3 backdrop-blur-md sm:px-5 sm:pb-4">
             {status === "signed_out" ? (
               <div className="py-2 text-center">
                 <p className="text-sm font-semibold text-brand-ink">
@@ -3459,12 +3489,12 @@ export function AssistantPage() {
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="mx-auto max-w-3xl">
-                <div className="flex flex-col gap-2 rounded-[22px] border border-brand-ink/10 bg-white p-2 shadow-[0_12px_34px_rgba(18,32,47,0.08)] focus-within:border-brand-teal/35 focus-within:shadow-[0_14px_38px_rgba(15,118,110,0.1)] sm:flex-row sm:items-end sm:rounded-[24px] sm:p-2.5">
+                <div className="flex flex-col gap-2 rounded-[22px] border border-brand-ink/10 bg-white p-2 shadow-[0_12px_34px_rgba(18,32,47,0.08)] transition-shadow focus-within:border-brand-teal/40 focus-within:shadow-[0_14px_40px_rgba(15,118,110,0.12)] sm:flex-row sm:items-end sm:rounded-[24px] sm:p-2.5">
                   <div className="relative flex-1">
                     <textarea
                       ref={textareaRef}
                       aria-label="Planning request"
-                      className="max-h-[180px] min-h-[48px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/38 focus:outline-none sm:px-4 sm:text-base"
+                      className="max-h-[180px] min-h-[48px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-sm leading-6 text-brand-ink placeholder:text-brand-ink/36 focus:outline-none sm:px-4 sm:text-base"
                       disabled={isBusy}
                       maxLength={12000}
                       placeholder="Describe what you need to do, or paste a task list, email, syllabus section, or plan…"
@@ -3480,15 +3510,15 @@ export function AssistantPage() {
                     />
                   </div>
                   <Button
-                    className="h-11 w-full shrink-0 rounded-[16px] px-6 text-sm font-semibold sm:h-12 sm:w-auto sm:rounded-[18px]"
+                    className="h-11 w-full shrink-0 rounded-[16px] px-5 text-sm font-semibold sm:h-12 sm:w-auto sm:rounded-[18px]"
                     disabled={isBusy || !prompt.trim()}
                     type="submit"
                   >
                     Send
                   </Button>
                 </div>
-                <p className="mt-2 px-2 text-[11px] text-brand-ink/42">
-                  Assignments, tasks, workouts, meetings, or full plans · Enter to send · Shift+Enter for a new line
+                <p className="mt-1.5 px-2 text-[11px] text-brand-ink/38">
+                  Tasks, goals, deadlines, or full plans · Enter to send · Shift+Enter for a new line
                 </p>
               </form>
             )}

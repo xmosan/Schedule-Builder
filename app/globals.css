@@ -114,11 +114,27 @@ textarea {
   /* ── Page header ────────────────────────────────────────────────────── */
 
   .page-header {
-    @apply flex flex-col gap-4 rounded-[24px] border border-white/80 bg-white/80 px-5 py-5 shadow-card backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:py-6;
+    @apply flex flex-col gap-4 rounded-[28px] border border-white/80 bg-white/80 px-5 py-5 shadow-card backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:py-6;
   }
 
   .page-header-compact {
-    @apply flex items-center gap-4 rounded-[20px] border border-white/75 bg-white/75 px-4 py-3 shadow-card backdrop-blur-sm sm:px-6;
+    @apply flex items-center gap-4 rounded-[22px] border border-white/80 bg-white/75 px-4 py-3 shadow-card backdrop-blur-sm sm:px-6;
+  }
+
+  /* ── Section headers ────────────────────────────────────────────────── */
+
+  .section-header {
+    @apply text-lg font-semibold tracking-[-0.028em] text-brand-ink sm:text-xl;
+  }
+
+  .section-subheader {
+    @apply mt-0.5 text-sm leading-6 text-brand-ink/56;
+  }
+
+  /* ── Assistant surface ──────────────────────────────────────────────── */
+
+  .assistant-surface {
+    @apply rounded-[26px] bg-white/60 shadow-[0_20px_52px_rgba(18,32,47,0.07)] backdrop-blur-sm;
   }
 
   .page-eyebrow {
@@ -146,7 +162,7 @@ textarea {
   /* ── Eyebrow chip ───────────────────────────────────────────────────── */
 
   .eyebrow-chip {
-    @apply inline-flex items-center gap-2 rounded-full border border-brand-teal/20 bg-brand-teal/10 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-teal sm:px-4 sm:text-xs sm:tracking-[0.20em];
+    @apply inline-flex items-center gap-2 rounded-full border border-brand-teal/20 bg-brand-teal/10 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-teal sm:px-4 sm:text-xs;
   }
 
   /* ── Form fields ────────────────────────────────────────────────────── */
@@ -198,11 +214,11 @@ textarea {
   }
 
   .status-applied {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-teal/25 bg-brand-teal/10 px-2.5 py-1 text-[11px] font-semibold text-brand-teal;
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-moss/20 bg-brand-moss/10 px-2.5 py-1 text-[11px] font-semibold text-brand-moss;
   }
 
   .status-undone {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-ink/10 bg-brand-ink/[0.04] px-2.5 py-1 text-[11px] font-semibold text-brand-ink/50 decoration-brand-ink/25 line-through;
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-ink/10 bg-brand-ink/[0.04] px-2.5 py-1 text-[11px] font-semibold text-brand-ink/52;
   }
 
   .status-draft {
