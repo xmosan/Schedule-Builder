@@ -24,14 +24,14 @@ function BaseIcon({ className, children, ...props }: IconProps) {
 
 // ── Nav icons (each unique per page) ──────────────────────────────────────
 
-/** Assistant — chat bubble with thinking dots (planning companion) */
+/** Assistant — speech bubble with a small planning orbit (planning companion) */
 export function AssistantIcon(props: IconProps) {
   return (
     <BaseIcon {...props} strokeWidth="1.7">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      <circle cx="9" cy="11" r="1.1" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="11" r="1.1" fill="currentColor" stroke="none" />
-      <circle cx="15" cy="11" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="11.5" r="3.25" strokeWidth="1.35" />
+      <circle cx="12" cy="11.5" r="1.15" fill="currentColor" stroke="none" />
+      <path d="M8.4 16.25h7.2" strokeWidth="1.35" />
     </BaseIcon>
   );
 }

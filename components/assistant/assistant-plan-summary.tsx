@@ -173,14 +173,14 @@ export function AssistantPlanSummary({
           : "before:bg-brand-teal/60",
       )}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="assistant-receipt-header flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-base font-semibold tracking-[-0.02em] text-brand-ink sm:text-lg">
             {title}
           </h3>
           {isUndone ? (
-            <p aria-live="polite" className="mt-1 text-sm text-brand-teal">
-              {automationReceipt.summary}
+            <p aria-live="polite" className="mt-1 text-sm text-brand-moss">
+              This plan was applied and later undone.
             </p>
           ) : hasVerifiedAppliedRecords ? (
             <p aria-live="polite" className="mt-1 text-sm text-brand-teal">
@@ -208,10 +208,14 @@ export function AssistantPlanSummary({
         {pending.length > 0 ? (
           <span
             aria-live="polite"
-            className="inline-flex items-center gap-1.5 rounded-full bg-brand-teal/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.10em] text-brand-teal/80"
+            className="assistant-state-chip assistant-state-chip-pending"
           >
             {statusSummary}
           </span>
+        ) : isUndone ? (
+          <span className="assistant-state-chip assistant-state-chip-undone">Plan undone</span>
+        ) : hasVerifiedAppliedRecords ? (
+          <span className="assistant-state-chip assistant-state-chip-applied">Applied</span>
         ) : null}
       </div>
 

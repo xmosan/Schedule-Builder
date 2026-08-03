@@ -79,13 +79,13 @@ export function SchedulerNav({
 
   if (variant === "top") {
     return (
-      <header className="fixed inset-x-2 bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-50 flex shrink-0 items-center rounded-[22px] border border-white/82 bg-white/95 p-1.5 shadow-nav backdrop-blur-xl lg:static lg:min-h-[58px] lg:gap-4 lg:rounded-[20px] lg:bg-white/80 lg:px-3 lg:py-2 lg:shadow-card">
+      <header className="fixed inset-x-2 bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-50 flex shrink-0 items-center rounded-[22px] border border-white/82 bg-white/95 p-1.5 shadow-nav backdrop-blur-xl lg:static lg:min-h-[58px] lg:gap-4 lg:rounded-[20px] lg:border-brand-ink/8 lg:bg-[#fffdf9]/80 lg:px-3 lg:py-2 lg:shadow-card">
         <Link
           href="/assistant"
           aria-label="Schedule Builder"
           className="hidden shrink-0 items-center gap-2.5 rounded-[14px] px-2 py-1.5 text-brand-ink transition hover:bg-brand-ink/5 lg:flex"
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-[11px] bg-brand-teal text-white shadow-[0_4px_12px_rgba(15,118,110,0.25)]">
+          <span className="flex h-8 w-8 items-center justify-center rounded-[11px] bg-gradient-to-br from-brand-teal to-brand-ocean text-white shadow-[0_4px_12px_rgba(15,118,110,0.25)]">
             <AssistantIcon aria-hidden="true" className="h-4 w-4" />
           </span>
           <span className="text-sm font-semibold tracking-[-0.02em]">
@@ -113,7 +113,7 @@ export function SchedulerNav({
                 className={cn(
                   "flex min-h-[52px] min-w-0 flex-col items-center justify-center gap-1 rounded-[16px] px-0.5 text-center text-[7.5px] font-bold leading-tight transition-all duration-150 sm:text-[9px] lg:inline-flex lg:min-h-9 lg:flex-row lg:rounded-[12px] lg:px-2.5 lg:text-[12px] lg:font-semibold lg:leading-normal lg:whitespace-nowrap xl:px-3 xl:text-[13px]",
                   active
-                    ? "bg-brand-ink text-white shadow-sm lg:bg-transparent lg:text-brand-teal lg:shadow-none"
+                    ? "bg-brand-ink text-white shadow-sm lg:bg-brand-teal/10 lg:text-brand-teal lg:shadow-none"
                     : "text-brand-ink/55 hover:bg-brand-ink/5 hover:text-brand-ink",
                 )}
               >
@@ -206,5 +206,4 @@ export function SchedulerNav({
     </>
   );
 }
-
 

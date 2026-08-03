@@ -567,6 +567,14 @@ function runWorkspaceSourceCases() {
     new URL("../components/assistant/assistant-page.tsx", import.meta.url),
     "utf8",
   );
+  const assistantVisuals = readFileSync(
+    new URL("../components/assistant/assistant-visuals.tsx", import.meta.url),
+    "utf8",
+  );
+  const assistantIcon = readFileSync(
+    new URL("../components/projects/icons.tsx", import.meta.url),
+    "utf8",
+  );
   const planRoute = readFileSync(
     new URL("../app/api/assistant/plan/route.ts", import.meta.url),
     "utf8",
@@ -597,6 +605,19 @@ function runWorkspaceSourceCases() {
   );
 
   assert.equal(countMatches(assistantPage, /overflow-y-auto/g), 2);
+  assert.match(assistantPage, /AssistantBrandMark/);
+  assert.match(assistantPage, /AssistantStatusPill/);
+  assert.match(assistantPage, /assistant-rail/);
+  assert.match(assistantPage, /assistant-empty-state/);
+  assert.match(assistantPage, /assistant-composer-shell/);
+  assert.doesNotMatch(
+    assistantPage,
+    /sr-only[\s\S]{0,100}workflowStatus/,
+    "Workflow status is represented by one visible status pill, not a duplicate sr-only status label",
+  );
+  assert.match(assistantVisuals, /role="status"/);
+  assert.equal(countMatches(assistantVisuals, /role="status"/g), 1);
+  assert.match(assistantIcon, /planning orbit/);
   assert.match(assistantPage, /View schedule context/);
   assert.match(assistantPage, /resolveAssistantWorkflowStatus/);
   assert.match(
